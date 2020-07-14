@@ -40,14 +40,13 @@
 
 interface nsIBrowserDOMWindow;
 
-[scriptable, uuid(445fa0fc-2151-4cb4-83d3-34c3e39453de)]
+[scriptable, uuid(77a20f5a-68ad-41d3-97ac-6ff721512908)]
 interface nsIDOMChromeWindow : nsISupports
 {
   const unsigned short STATE_MAXIMIZED = 1;
   const unsigned short STATE_MINIMIZED = 2;
   const unsigned short STATE_NORMAL = 3;
 
-           attribute DOMString                   title;
   readonly attribute unsigned short              windowState;
 
   /**

@@ -42,6 +42,7 @@
 #include "nsCOMArray.h"
 #include "nsIContent.h"
 #include "nsCOMPtr.h"
+#include "nsCycleCollectionParticipant.h"
 
 class nsXBLInsertionPoint
 {
@@ -59,14 +60,18 @@ public:
 
   nsrefcnt Release();
 
-  already_AddRefed<nsIContent> GetInsertionParent();
+  NS_DECL_CYCLE_COLLECTION_NATIVE_CLASS(nsXBLInsertionPoint)
+
+  nsIContent* GetInsertionParent();
+  void ClearInsertionParent() { mParentElement = nsnull; }
+
   PRInt32 GetInsertionIndex() { return mIndex; }
 
   void SetDefaultContent(nsIContent* aDefaultContent) { mDefaultContent = aDefaultContent; }
-  already_AddRefed<nsIContent> GetDefaultContent();
+  nsIContent* GetDefaultContent();
 
   void SetDefaultContentTemplate(nsIContent* aDefaultContent) { mDefaultContentTemplate = aDefaultContent; }
-  already_AddRefed<nsIContent> GetDefaultContentTemplate();
+  nsIContent* GetDefaultContentTemplate();
 
   void AddChild(nsIContent* aChildElement) { mElements.AppendObject(aChildElement); }
   void InsertChildAt(PRInt32 aIndex, nsIContent* aChildElement) { mElements.InsertObjectAt(aChildElement, aIndex); }
@@ -74,9 +79,13 @@ public:
   
   PRInt32 ChildCount() { return mElements.Count(); }
 
-  already_AddRefed<nsIContent> ChildAt(PRUint32 aIndex);
+  nsIContent* ChildAt(PRUint32 aIndex);
 
   PRBool Matches(nsIContent* aContent, PRUint32 aIndex);
+
+  // Unbind all the default content in this insertion point.  Used
+  // when the insertion parent is going away.
+  void UnbindDefaultContent();
 
 protected:
   nsAutoRefCnt mRefCnt;

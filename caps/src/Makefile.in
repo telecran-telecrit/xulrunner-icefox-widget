@@ -50,8 +50,6 @@ MODULE_NAME	= nsSecurityManagerModule
 GRE_MODULE	= 1
 LIBXUL_LIBRARY = 1
 
-PACKAGE_FILE = caps.pkg
-
 REQUIRES	= xpcom \
 		  string \
 		  pref \
@@ -66,11 +64,14 @@ REQUIRES	= xpcom \
 		  docshell \
 		  windowwatcher \
 		  content \
+		  layout \
 		  $(NULL)
 
 CPPSRCS		= \
 		nsPrincipal.cpp \
 		nsSystemPrincipal.cpp \
+		nsNullPrincipal.cpp \
+		nsNullPrincipalURI.cpp \
 		nsJSPrincipals.cpp \
 		nsScriptSecurityManager.cpp \
 		nsSecurityManagerFactory.cpp \

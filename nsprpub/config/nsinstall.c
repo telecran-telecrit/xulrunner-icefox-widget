@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -70,7 +70,7 @@
  * Does getcwd() take NULL as the first argument and malloc
  * the result buffer?
  */
-#if !defined(DARWIN) && !defined(NEXTSTEP) && !defined(VMS)
+#if !defined(DARWIN) && !defined(NEXTSTEP)
 #define GETCWD_CAN_MALLOC
 #endif
 
@@ -98,7 +98,7 @@ my_getcwd (char *buf, size_t size)
 }
 #endif /* NEXTSTEP */
 
-#ifdef LINUX
+#if defined(LINUX) || defined(__GNU__) || defined(__GLIBC__) 
 #include <getopt.h>
 #endif
 
@@ -135,8 +135,8 @@ mkdirs(char *path, mode_t mode)
     
     while (*path == '/' && path[1] == '/')
 	path++;
-    while ((cp = strrchr(path, '/')) && cp[1] == '\0')
-	*cp = '\0';
+    for (cp = strrchr(path, '/'); cp && cp != path && cp[-1] == '/'; cp--)
+	;
     if (cp && cp != path) {
 	*cp = '\0';
 	if ((stat(path, &sb) < 0 || !S_ISDIR(sb.st_mode)) &&
@@ -368,11 +368,6 @@ main(int argc, char **argv)
 
 	    if (ftruncate(tofd, sb.st_size) < 0)
 		fail("cannot truncate %s", toname);
-	    /*
-	    ** On OpenVMS we can't chmod() until the file is closed, and we
-	    ** have to utime() last since fchown/chmod alter the timestamps.
-	    */
-#ifndef VMS
 	    if (dotimes) {
 		utb.actime = sb.st_atime;
 		utb.modtime = sb.st_mtime;
@@ -385,7 +380,6 @@ main(int argc, char **argv)
 	    if (chmod(toname, mode) < 0)
 #endif
 		fail("cannot change mode of %s", toname);
-#endif
 	    if ((owner || group) && fchown(tofd, uid, gid) < 0)
 		fail("cannot change owner of %s", toname);
 
@@ -393,16 +387,6 @@ main(int argc, char **argv)
 	    if (close(tofd) < 0)
 		fail("cannot write to %s", toname);
 	    close(fromfd);
-#ifdef VMS
-	    if (chmod(toname, mode) < 0)
-		fail("cannot change mode of %s", toname);
-	    if (dotimes) {
-		utb.actime = sb.st_atime;
-		utb.modtime = sb.st_mtime;
-		if (utime(toname, &utb) < 0)
-		    fail("cannot set times of %s", toname);
-	    }
-#endif
 	}
 
 	free(toname);

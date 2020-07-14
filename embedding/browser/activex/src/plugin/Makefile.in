@@ -50,7 +50,6 @@ LIBRARY_NAME    = npmozax
 RESFILE         = MozActiveX.res
 DEFFILE         = npmozax.def
 GRE_MODULE	= 1
-MOZILLA_INTERNAL_API = 1
 
 REQUIRES = \
     xpcom \
@@ -198,6 +197,7 @@ DEFINES += -DXPC_IDISPATCH_SUPPORT
 endif
 
 EXTRA_DSO_LDOPTS = \
+    $(DIST)/lib/$(LIB_PREFIX)xpcomglue_s.$(LIB_SUFFIX) \
     $(MOZ_COMPONENT_LIBS) \
     $(NSPR_LIBS) \
     $(NULL)
@@ -219,7 +219,7 @@ endif
 # XPConnect links to XPCOM and the shared activex lib
 ifdef XPC_IDISPATCH_SUPPORT
 EXTRA_DSO_LDOPTS += \
-    $(DIST)/lib/$(LIB_PREFIX)ax_common_s.$(LIB_SUFFIX) \
+    ../common/$(LIB_PREFIX)ax_common_s.$(LIB_SUFFIX) \
     $(MOZ_JS_LIBS) \
     $(XPCOM_LIBS) \
     $(NULL)
@@ -258,13 +258,6 @@ install-prefs: activex.js
 	$(INSTALL) $< $(DIST)/bin/defaults/pref
 
 ifdef MOZ_USE_ACTIVEX_PLUGIN
-PACKAGE_FILE = axplugin.pkg
-PACKAGE_VARS += \
-	MOZ_ACTIVEX_PLUGIN_LIVECONNECT \
-	MOZ_ACTIVEX_PLUGIN_XPCONNECT \
-	XPC_IDISPATCH_SUPPORT \
-	$(NULL)
-
 libs:: install-plugin install-prefs
 
 ifdef MOZ_ACTIVEX_PLUGIN_LIVECONNECT

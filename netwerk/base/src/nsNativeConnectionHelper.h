@@ -50,7 +50,14 @@ public:
      *
      * Return PR_TRUE if the connection should be re-attempted.
      */
-    static PRBool OnConnectionFailed(const char* hostName);
+    static PRBool OnConnectionFailed(const PRUnichar* hostName);
+
+    /**
+     * IsAutoDialEnabled
+     *
+     * Return PR_TRUE if autodial is enabled in the operating system.
+     */   
+    static PRBool IsAutodialEnabled();
 };
 
 #endif // !nsNativeConnectionHelper_h__

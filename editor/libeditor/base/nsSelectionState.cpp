@@ -46,7 +46,7 @@
 
 /***************************************************************************
  * class for recording selection info.  stores selection as collection of
- * { {startnode, startoffset} , {endnode, endoffset} } tuples.  Cant store
+ * { {startnode, startoffset} , {endnode, endoffset} } tuples.  Can't store
  * ranges since dom gravity will possibly change the ranges.
  */
 nsSelectionState::nsSelectionState() : mArray(){}
@@ -54,6 +54,22 @@ nsSelectionState::nsSelectionState() : mArray(){}
 nsSelectionState::~nsSelectionState() 
 {
   MakeEmpty();
+}
+
+void
+nsSelectionState::DoTraverse(nsCycleCollectionTraversalCallback &cb)
+{
+  nsRangeStore *item;
+  for (PRInt32 i = 0, iEnd = mArray.Count(); i < iEnd; ++i)
+  {
+    nsRangeStore *item = static_cast<nsRangeStore*>(mArray.ElementAt(i));
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb,
+                                       "selection state mArray[i]->startNode");
+    cb.NoteXPCOMChild(item->startNode);
+    NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb,
+                                       "selection state mArray[i]->endNode");
+    cb.NoteXPCOMChild(item->endNode);
+  }
 }
 
 nsresult  

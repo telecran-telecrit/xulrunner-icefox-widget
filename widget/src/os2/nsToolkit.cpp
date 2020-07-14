@@ -39,6 +39,7 @@
 
 #include "nsToolkit.h"
 #include "nsSwitchToUIThread.h"
+#include "nsWidgetAtoms.h"
 
 // Window procedure for the internal window
 static MRESULT EXPENTRY nsToolkitWindowProc(HWND, ULONG, MPARAM, MPARAM);
@@ -61,7 +62,7 @@ struct ThreadInitInfo {
     nsToolkit *toolkit;
 };
 
-void PR_CALLBACK RunPump(void* arg)
+void RunPump(void* arg)
 {
     ThreadInitInfo *info = (ThreadInitInfo*)arg;
     ::PR_EnterMonitor(info->monitor);
@@ -192,6 +193,9 @@ NS_METHOD nsToolkit::Init(PRThread *aThread)
         // create a thread where the message pump will run
         CreateUIThread();
     }
+
+    nsWidgetAtoms::RegisterAtoms();
+
     return NS_OK;
 }
 

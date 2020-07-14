@@ -47,24 +47,25 @@
 #include "nsIJSRuntimeService.h"
 #include "nsIServiceManager.h"
 #include "nsMemory.h"
+#include "nsStringBuffer.h"
 
-JS_STATIC_DLL_CALLBACK(void *)
+static void *
 nsGetPrincipalArray(JSContext *cx, JSPrincipals *prin)
 {
     return nsnull;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 nsGlobalPrivilegesEnabled(JSContext *cx, JSPrincipals *jsprin)
 {
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 nsJSPrincipalsSubsume(JSPrincipals *jsprin, JSPrincipals *other)
 {
-    nsJSPrincipals *nsjsprin = NS_STATIC_CAST(nsJSPrincipals *, jsprin);
-    nsJSPrincipals *nsother  = NS_STATIC_CAST(nsJSPrincipals *, other);
+    nsJSPrincipals *nsjsprin = static_cast<nsJSPrincipals *>(jsprin);
+    nsJSPrincipals *nsother  = static_cast<nsJSPrincipals *>(other);
 
     JSBool result;
     nsresult rv = nsjsprin->nsIPrincipalPtr->Subsumes(nsother->nsIPrincipalPtr,
@@ -72,10 +73,10 @@ nsJSPrincipalsSubsume(JSPrincipals *jsprin, JSPrincipals *other)
     return NS_SUCCEEDED(rv) && result;
 }
 
-JS_STATIC_DLL_CALLBACK(void)
+static void
 nsDestroyJSPrincipals(JSContext *cx, struct JSPrincipals *jsprin)
 {
-    nsJSPrincipals *nsjsprin = NS_STATIC_CAST(nsJSPrincipals *, jsprin);
+    nsJSPrincipals *nsjsprin = static_cast<nsJSPrincipals *>(jsprin);
 
     // We need to destroy the nsIPrincipal. We'll do this by adding
     // to the refcount and calling release
@@ -93,20 +94,19 @@ nsDestroyJSPrincipals(JSContext *cx, struct JSPrincipals *jsprin)
 #else
     nsjsprin->refcount++;
 #endif
-    if (nsjsprin->nsIPrincipalPtr)
-        nsjsprin->nsIPrincipalPtr->Release();
+    nsjsprin->nsIPrincipalPtr->Release();
     // The nsIPrincipal that we release owns the JSPrincipal struct,
     // so we don't need to worry about "codebase"
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 nsTranscodeJSPrincipals(JSXDRState *xdr, JSPrincipals **jsprinp)
 {
     nsresult rv;
 
     if (xdr->mode == JSXDR_ENCODE) {
         nsIObjectOutputStream *stream =
-            NS_REINTERPRET_CAST(nsIObjectOutputStream*, xdr->userdata);
+            reinterpret_cast<nsIObjectOutputStream*>(xdr->userdata);
 
         // Flush xdr'ed data to the underlying object output stream.
         uint32 size;
@@ -121,7 +121,7 @@ nsTranscodeJSPrincipals(JSXDRState *xdr, JSPrincipals **jsprinp)
                 // Require that GetJSPrincipals has been called already by the
                 // code that compiled the script that owns the principals.
                 nsJSPrincipals *nsjsprin =
-                    NS_STATIC_CAST(nsJSPrincipals*, *jsprinp);
+                    static_cast<nsJSPrincipals*>(*jsprinp);
 
                 rv = stream->WriteObject(nsjsprin->nsIPrincipalPtr, PR_TRUE);
             }
@@ -129,7 +129,7 @@ nsTranscodeJSPrincipals(JSXDRState *xdr, JSPrincipals **jsprinp)
     } else {
         NS_ASSERTION(JS_XDRMemDataLeft(xdr) == 0, "XDR out of sync?!");
         nsIObjectInputStream *stream =
-            NS_REINTERPRET_CAST(nsIObjectInputStream*, xdr->userdata);
+            reinterpret_cast<nsIObjectInputStream*>(xdr->userdata);
 
         nsCOMPtr<nsIPrincipal> prin;
         rv = stream->ReadObject(PR_TRUE, getter_AddRefs(prin));
@@ -179,10 +179,13 @@ nsJSPrincipals::Startup()
     rtsvc->GetRuntime(&rt);
     NS_ASSERTION(rt != nsnull, "no JSRuntime?!");
 
-    JSPrincipalsTranscoder oldpx;
-    oldpx = ::JS_SetPrincipalsTranscoder(rt, nsTranscodeJSPrincipals);
-    NS_ASSERTION(oldpx == nsnull, "oops, JS_SetPrincipalsTranscoder wars!");
+    JSSecurityCallbacks *callbacks = JS_GetRuntimeSecurityCallbacks(rt);
+    NS_ASSERTION(callbacks, "Need a callbacks struct by now!");
 
+    NS_ASSERTION(!callbacks->principalsTranscoder,
+                 "oops, JS_SetPrincipalsTranscoder wars!");
+
+    callbacks->principalsTranscoder = nsTranscodeJSPrincipals;
     return NS_OK;
 }
 
@@ -198,7 +201,7 @@ nsJSPrincipals::nsJSPrincipals()
 }
 
 nsresult
-nsJSPrincipals::Init(nsIPrincipal *aPrincipal, const char *aCodebase)
+nsJSPrincipals::Init(nsIPrincipal *aPrincipal, const nsCString& aCodebase)
 {
     if (nsIPrincipalPtr) {
         NS_ERROR("Init called twice!");
@@ -206,15 +209,30 @@ nsJSPrincipals::Init(nsIPrincipal *aPrincipal, const char *aCodebase)
     }
 
     nsIPrincipalPtr = aPrincipal;
-    codebase = PL_strdup(aCodebase);
-    if (!codebase)
-        return NS_ERROR_OUT_OF_MEMORY;
+    nsStringBuffer* buf = nsStringBuffer::FromString(aCodebase);
+    char* data;
+    if (buf) {
+        buf->AddRef();
+        data = static_cast<char*>(buf->Data());
+    } else {
+        PRUint32 len = aCodebase.Length();
+        buf = nsStringBuffer::Alloc(len + 1); // addrefs
+        if (!buf) {
+            return NS_ERROR_OUT_OF_MEMORY;
+        }
+        data = static_cast<char*>(buf->Data());
+        memcpy(data, aCodebase.get(), len);
+        data[len] = '\0';
+    }
+    
+    codebase = data;
 
     return NS_OK;
 }
 
 nsJSPrincipals::~nsJSPrincipals()
 {
-    if (codebase)
-        PL_strfree(codebase);
+    if (codebase) {
+        nsStringBuffer::FromData(codebase)->Release();
+    }
 }

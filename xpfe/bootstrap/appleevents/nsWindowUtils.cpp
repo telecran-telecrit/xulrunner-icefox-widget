@@ -36,7 +36,7 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-#include <MacWindows.h>
+#include "nsWindowUtils.h"
 
 #include "nsCommandLineServiceMac.h"
 #include "nsCOMPtr.h"
@@ -45,6 +45,7 @@
 #include "nsIContent.h"
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeItem.h"
+#include "nsIDocShellTreeOwner.h"
 #include "nsIDocument.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMWindow.h"
@@ -60,7 +61,6 @@
 #include "nsIXULWindow.h"
 #include "nsString.h"
 #include "nsNetUtil.h"
-#include "nsWindowUtils.h"
 #include "nsMacUtils.h"
 #include "nsXPIDLString.h"
 #include "nsIXULWindow.h"
@@ -70,10 +70,6 @@
 #include "nsAEUtils.h"
 
 using namespace nsWindowUtils;
-
-// CIDs
-static NS_DEFINE_CID(kWindowMediatorCID, NS_WINDOWMEDIATOR_CID);
-
 
 /*----------------------------------------------------------------------------
 	GetXULWindowFromWindowPtr 
@@ -91,7 +87,7 @@ static void GetXULWindowFromWindowPtr(WindowPtr inWindowPtr, nsIXULWindow **outX
 	if (!inWindowPtr)
 		ThrowOSErr(paramErr);
 	
-	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(kWindowMediatorCID));
+	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
 	ThrowErrIfNil(windowMediator, paramErr);
 
 	nsCOMPtr<nsISimpleEnumerator> windowEnumerator;
@@ -216,7 +212,7 @@ static TWindowKind GetXULWindowKind(nsIXULWindow *inXULWindow)
 ----------------------------------------------------------------------------*/
 long nsWindowUtils::CountWindowsOfKind(TWindowKind windowKind)
 {
-	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(kWindowMediatorCID));
+	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
 	ThrowErrIfNil(windowMediator, paramErr);
 
 	nsCOMPtr<nsISimpleEnumerator> windowEnumerator;
@@ -253,7 +249,7 @@ long nsWindowUtils::CountWindowsOfKind(TWindowKind windowKind)
 WindowPtr nsWindowUtils::GetNamedOrFrontmostWindow(TWindowKind windowKind, const char* windowName)
 {
 	// Search for window with the desired kind and name.
-	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(kWindowMediatorCID));
+	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
 	ThrowErrIfNil(windowMediator, paramErr);
 	
 	nsCOMPtr<nsISimpleEnumerator> windowEnumerator;
@@ -317,7 +313,7 @@ WindowPtr nsWindowUtils::GetNamedOrFrontmostWindow(TWindowKind windowKind, const
 
 WindowPtr nsWindowUtils::GetIndexedWindowOfKind(TWindowKind windowKind, TAEListIndex index)
 {
-	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(kWindowMediatorCID));
+	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
 	ThrowErrIfNil(windowMediator, paramErr);
 	
 	nsCOMPtr<nsISimpleEnumerator> windowEnumerator;
@@ -364,7 +360,7 @@ WindowPtr nsWindowUtils::GetIndexedWindowOfKind(TWindowKind windowKind, TAEListI
 
 TAEListIndex nsWindowUtils::GetWindowIndex(TWindowKind windowKind, WindowPtr theWindow)
 {
-	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(kWindowMediatorCID));
+	nsCOMPtr<nsIWindowMediator> windowMediator(do_GetService(NS_WINDOWMEDIATOR_CONTRACTID));
 	ThrowErrIfNil(windowMediator, paramErr);
 
 	nsCOMPtr<nsISimpleEnumerator> windowEnumerator;
@@ -410,9 +406,34 @@ TAEListIndex nsWindowUtils::GetWindowIndex(TWindowKind windowKind, WindowPtr the
 //---------------------------------------------------------
 void nsWindowUtils::GetCleanedWindowName(WindowPtr wind, char* outName, long maxLen)
 {
-	Str255 uncleanName;
-	GetWTitle(wind, uncleanName);
-	CopyPascalToCString(uncleanName, outName, maxLen);
+  outName[0] = '\0';
+
+  nsCOMPtr<nsIXULWindow> xulWindow;
+  GetXULWindowFromWindowPtr(wind, getter_AddRefs(xulWindow));
+  ThrowErrIfNil(xulWindow, paramErr);
+
+  nsCOMPtr<nsIDocShellTreeItem> contentShell;
+  xulWindow->GetPrimaryContentShell(getter_AddRefs(contentShell));
+  ThrowErrIfNil(contentShell, paramErr);
+
+  nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
+  contentShell->GetTreeOwner(getter_AddRefs(treeOwner));
+
+  nsCOMPtr<nsIBaseWindow> baseWindow(do_QueryInterface(treeOwner));
+  ThrowErrIfNil(baseWindow, paramErr);
+
+  nsXPIDLString title;
+  baseWindow->GetTitle(getter_Copies(title));
+  ThrowErrIfNil(title, paramErr);
+
+  // Convert window title to MacRoman, which is what AppleEvents expects
+  const char* cTitle = NS_ConvertUTF16toUTF8(title).get();
+  CFStringRef windowTitleCFString = ::CFStringCreateWithCString(kCFAllocatorDefault, (char *)cTitle, kCFStringEncodingUTF8);
+  if (windowTitleCFString) {
+    ::CFStringGetCString(windowTitleCFString, outName, maxLen, kCFStringEncodingMacRoman);
+    outName[maxLen - 1] = '\0'; // in case it didn't get null terminated
+    ::CFRelease(windowTitleCFString);
+  }
 }
 
 //---------------------------------------------------------

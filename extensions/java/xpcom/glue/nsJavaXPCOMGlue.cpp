@@ -37,6 +37,7 @@
 #include "jni.h"
 #include "nsXPCOMPrivate.h" // for XPCOM_DLL defines.
 #include "nsXPCOMGlue.h"
+#include "nsDebug.h"
 #include <stdlib.h>
 
 #if defined(XP_WIN) || defined(XP_OS2)

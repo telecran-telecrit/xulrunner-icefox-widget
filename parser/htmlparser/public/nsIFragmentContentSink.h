@@ -43,8 +43,12 @@ class nsIDOMDocumentFragment;
 class nsIDocument;
 
 #define NS_I_FRAGMENT_CONTENT_SINK_IID \
-  { 0x2cec7263, 0x9dd0, 0x4413, \
-    { 0xb6, 0x68, 0x6f, 0xf0, 0xa1, 0x40, 0xc1, 0xbe } }
+  { 0x1ecdb30d, 0x1f10, 0x45d2, \
+    { 0xa4, 0xf4, 0xec, 0xbc, 0x03, 0x52, 0x9a, 0x7e } }
+
+#define NS_I_PARANOID_FRAGMENT_CONTENT_SINK_IID \
+  { 0x86b5390d, 0xd80e, 0x4a86, \
+    { 0x83, 0xec, 0xda, 0x44, 0xac, 0x5b, 0x8c, 0x5f } }
 
 /**
  * The fragment sink allows a client to parse a fragment of sink, possibly
@@ -54,14 +58,17 @@ class nsIDocument;
  */
 class nsIFragmentContentSink : public nsISupports {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_I_FRAGMENT_CONTENT_SINK_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_I_FRAGMENT_CONTENT_SINK_IID)
   /**
    * This method is used to obtain the fragment created by
    * a fragment content sink. The value returned will be null
    * if the content sink hasn't yet received parser notifications.
    *
+   * If aWillOwnFragment is PR_TRUE then the sink should drop its
+   * ownership of the fragment.
    */
-  NS_IMETHOD GetFragment(nsIDOMDocumentFragment** aFragment) = 0;
+  NS_IMETHOD GetFragment(PRBool aWillOwnFragment,
+                         nsIDOMDocumentFragment** aFragment) = 0;
 
   /**
    * This method is used to set the target document for this fragment
@@ -95,6 +102,31 @@ public:
   NS_IMETHOD IgnoreFirstContainer() = 0;
 };
 
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIFragmentContentSink,
+                              NS_I_FRAGMENT_CONTENT_SINK_IID)
+
+/**
+ * This interface is implemented by paranoid content sinks, and allows consumers
+ * to add tags and attributes to the default white-list set.
+ */
+class nsIParanoidFragmentContentSink : public nsISupports {
+public:
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_I_PARANOID_FRAGMENT_CONTENT_SINK_IID)
+
+  /**
+   * Allow the content sink to accept style elements and attributes.
+   */
+  virtual void AllowStyles() = 0;
+
+  /**
+   * Allow the content sink to accept comments.
+   */
+  virtual void AllowComments() = 0;
+};
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIParanoidFragmentContentSink,
+                              NS_I_PARANOID_FRAGMENT_CONTENT_SINK_IID)
+
 /**
  * Base version takes string nested in context, content surrounded by
  * WillBuildContent()/DidBuildContent() calls. The 2nd version just loads
@@ -105,11 +137,15 @@ public:
 #define NS_HTMLFRAGMENTSINK2_CONTRACTID "@mozilla.org/layout/htmlfragmentsink;2"
 #define NS_HTMLPARANOIDFRAGMENTSINK_CONTRACTID \
 "@mozilla.org/htmlparanoidfragmentsink;1"
+#define NS_HTMLPARANOIDFRAGMENTSINK2_CONTRACTID \
+"@mozilla.org/htmlparanoidfragmentsink;2"
 
 #define NS_XMLFRAGMENTSINK_CONTRACTID "@mozilla.org/layout/xmlfragmentsink;1"
 #define NS_XMLFRAGMENTSINK2_CONTRACTID "@mozilla.org/layout/xmlfragmentsink;2"
 #define NS_XHTMLPARANOIDFRAGMENTSINK_CONTRACTID \
 "@mozilla.org/xhtmlparanoidfragmentsink;1"
+#define NS_XHTMLPARANOIDFRAGMENTSINK2_CONTRACTID \
+"@mozilla.org/xhtmlparanoidfragmentsink;2"
 
 
 // the HTML versions are in nsHTMLParts.h
@@ -122,6 +158,8 @@ NS_NewXMLFragmentContentSink2(nsIFragmentContentSink** aInstancePtrResult);
 // in nsContentSink.h
 nsresult
 NS_NewXHTMLParanoidFragmentSink(nsIFragmentContentSink** aInstancePtrResult);
+nsresult
+NS_NewXHTMLParanoidFragmentSink2(nsIFragmentContentSink** aInstancePtrResult);
 void
 NS_XHTMLParanoidFragmentSinkShutdown();
 #endif

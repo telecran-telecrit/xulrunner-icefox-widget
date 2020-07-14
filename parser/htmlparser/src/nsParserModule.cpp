@@ -45,7 +45,6 @@
 #include "nsParserCIID.h"
 #include "nsParser.h"
 #include "CNavDTD.h"
-#include "COtherDTD.h"
 #include "nsHTMLEntities.h"
 #include "nsHTMLTokenizer.h"
 //#include "nsTextTokenizer.h"
@@ -73,7 +72,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsExpatDriver)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsParser)
 NS_GENERIC_FACTORY_CONSTRUCTOR(CNavDTD)
-NS_GENERIC_FACTORY_CONSTRUCTOR(CTransitionalDTD)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsParserService)
 
 #ifdef MOZ_VIEW_SOURCE
@@ -81,7 +79,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(CViewSourceHTML)
 #endif
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSAXAttributes)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsSAXLocator)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSAXXMLReader)
 
 static const nsModuleComponentInfo gComponents[] = {
@@ -93,8 +90,6 @@ static const nsModuleComponentInfo gComponents[] = {
 
   { "Parser", NS_PARSER_CID, NULL, nsParserConstructor },
   { "Navigator HTML DTD", NS_CNAVDTD_CID, NULL, CNavDTDConstructor },
-  { "Transitional DTD", NS_CTRANSITIONAL_DTD_CID, NULL,
-    CTransitionalDTDConstructor },
 #ifdef MOZ_VIEW_SOURCE
   { "ViewSource DTD", NS_VIEWSOURCE_DTD_CID, NULL, CViewSourceHTMLConstructor },
 #endif
@@ -103,17 +98,12 @@ static const nsModuleComponentInfo gComponents[] = {
     NS_PARSERSERVICE_CONTRACTID,
     nsParserServiceConstructor
   },
+
   {
     NS_SAXATTRIBUTES_CLASSNAME,
     NS_SAXATTRIBUTES_CID,
     NS_SAXATTRIBUTES_CONTRACTID,
     nsSAXAttributesConstructor
-  },
-  {
-    NS_SAXLOCATOR_CLASSNAME,
-    NS_SAXLOCATOR_CID,
-    NS_SAXLOCATOR_CONTRACTID,
-    nsSAXLocatorConstructor
   },
   
   {
@@ -126,7 +116,7 @@ static const nsModuleComponentInfo gComponents[] = {
 
 static PRBool gInitialized = PR_FALSE;
 
-PR_STATIC_CALLBACK(nsresult)
+static nsresult
 Initialize(nsIModule* aSelf)
 {
   if (!gInitialized) {
@@ -145,10 +135,14 @@ Initialize(nsIModule* aSelf)
     gInitialized = PR_TRUE;
   }
 
+#ifdef DEBUG
+  nsHTMLTags::TestTagTable();
+#endif
+
   return nsParser::Init();
 }
 
-PR_STATIC_CALLBACK(void)
+static void
 Shutdown(nsIModule* aSelf)
 {
   if (gInitialized) {

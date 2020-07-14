@@ -55,24 +55,18 @@ static const char table[] =
 static void
 MakeRandomString(char *buf, PRInt32 bufLen)
 {
+    // turn PR_Now() into milliseconds since epoch
+    // and salt rand with that.
+    double fpTime;
+    LL_L2D(fpTime, PR_Now());
+    srand((uint)(fpTime * 1e-6 + 0.5));   // use 1e-6, granularity of PR_Now() on the mac is seconds
+
     PRInt32 i;
     for (i=0;i<bufLen;i++) {
         *buf++ = table[rand()%TABLE_SIZE];
     }
     *buf = 0;
 }
-
-struct seederHack {
-    seederHack() {
-        // turn PR_Now() into microseconds since epoch and salt rand with that.
-        double fpTime;
-        LL_L2D(fpTime, PR_Now());
-        srand((uint)(fpTime)); // use 1e-6, PR_Now() on Mac is seconds
-    }
-};
-
-static seederHack hackhackhack;
-
 // XXX
 
 nsDownloader::~nsDownloader()
@@ -81,7 +75,10 @@ nsDownloader::~nsDownloader()
         // release the sink first since it may still hold an open file
         // descriptor to mLocation.  this needs to happen before the
         // file can be removed otherwise the Remove call will fail.
-        mSink = 0;
+        if (mSink) {
+            mSink->Close();
+            mSink = nsnull;
+        }
 
         nsresult rv = mLocation->Remove(PR_FALSE);
         if (NS_FAILED(rv))
@@ -157,6 +154,10 @@ nsDownloader::OnStopRequest(nsIRequest  *request,
                 caching->GetCacheToken(getter_AddRefs(mCacheToken));
             }
         }
+    }
+    else if (mSink) {
+        mSink->Close();
+        mSink = nsnull;
     }
 
     mObserver->OnDownloadComplete(this, request, ctxt, status, mLocation);

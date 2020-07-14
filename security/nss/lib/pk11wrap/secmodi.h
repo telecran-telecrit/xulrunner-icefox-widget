@@ -41,7 +41,6 @@
 #define _SECMODI_H_ 1
 #include "pkcs11.h"
 #include "nssilock.h"
-#include "mcom_db.h"
 #include "secoidt.h"
 #include "secdert.h"
 #include "certt.h"
@@ -59,7 +58,8 @@ void nss_DumpModuleLog(void);
 extern int secmod_PrivateModuleCount;
 
 extern void SECMOD_Init(void);
-SECStatus secmod_ModuleInit(SECMODModule *mod, PRBool* alreadyLoaded);
+SECStatus secmod_ModuleInit(SECMODModule *mod, SECMODModule **oldModule,
+			    PRBool* alreadyLoaded);
 
 /* list managment */
 extern SECStatus SECMOD_AddModuleToList(SECMODModule *newModule);
@@ -74,21 +74,49 @@ extern void SECMOD_ReleaseWriteLock(SECMODListLock *);
 
 /* Operate on modules by name */
 extern SECMODModule *SECMOD_FindModuleByID(SECMODModuleID);
+extern SECMODModule *secmod_FindModuleByFuncPtr(void *funcPtr);
 
 /* database/memory management */
 extern SECMODModuleList *SECMOD_NewModuleListElement(void);
 extern SECMODModuleList *SECMOD_DestroyModuleListElement(SECMODModuleList *);
 extern void SECMOD_DestroyModuleList(SECMODModuleList *);
 extern SECStatus SECMOD_AddModule(SECMODModule *newModule);
-SECStatus SECMOD_DeleteModuleEx(const char * name, SECMODModule *mod, int *type, PRBool permdb);
 
 extern unsigned long SECMOD_InternaltoPubMechFlags(unsigned long internalFlags);
 extern unsigned long SECMOD_InternaltoPubCipherFlags(unsigned long internalFlags);
 
 /* Library functions */
-SECStatus SECMOD_LoadPKCS11Module(SECMODModule *);
+SECStatus secmod_LoadPKCS11Module(SECMODModule *, SECMODModule **oldModule);
 SECStatus SECMOD_UnloadModule(SECMODModule *);
 void SECMOD_SetInternalModule(SECMODModule *);
+PRBool secmod_IsInternalKeySlot(SECMODModule *);
+
+/* tools for checking if we are loading the same database twice */
+typedef struct SECMODConfigListStr SECMODConfigList;
+/* collect all the databases in a given spec */
+SECMODConfigList *secmod_GetConfigList(PRBool isFIPS, char *spec, int *count);
+/* see is a spec matches a database on the list */
+PRBool secmod_MatchConfigList(char *spec, 
+			      SECMODConfigList *conflist, int count);
+/* free our list of databases */
+void secmod_FreeConfigList(SECMODConfigList *conflist, int count);
+
+/* parsing parameters */
+/* returned char * must be freed by caller with PORT_Free */
+/* children and ids are null terminated arrays which must be freed with
+ * secmod_FreeChildren */
+char *secmod_ParseModuleSpecForTokens(PRBool convert,
+				      PRBool isFIPS,
+				      char *moduleSpec,
+				      char ***children, 
+				      CK_SLOT_ID **ids);
+void secmod_FreeChildren(char **children, CK_SLOT_ID *ids);
+char *secmod_MkAppendTokensList(PRArenaPool *arena, char *origModuleSpec, 
+				char *newModuleSpec, CK_SLOT_ID newID,
+				char **children, CK_SLOT_ID *ids);
+char *secmod_DoubleEscape(const char *string, char quote1, char quote2);
+
+
 
 void SECMOD_SlotDestroyModule(SECMODModule *module, PRBool fromSlot);
 CK_RV pk11_notify(CK_SESSION_HANDLE session, CK_NOTIFICATION event,
@@ -105,12 +133,22 @@ SECStatus PK11_UpdateSlotAttribute(PK11SlotInfo *slot,
 #define PK11_SETATTRS(x,id,v,l) (x)->type = (id); \
 		(x)->pValue=(v); (x)->ulValueLen = (l);
 SECStatus PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
-                               CK_ATTRIBUTE *theTemplate, int count,
+                               const CK_ATTRIBUTE *theTemplate, int count,
                                 PRBool token, CK_OBJECT_HANDLE *objectID);
 
 SECStatus pbe_PK11AlgidToParam(SECAlgorithmID *algid,SECItem *mech);
 SECStatus PBE_PK11ParamToAlgid(SECOidTag algTag, SECItem *param, 
 				PRArenaPool *arena, SECAlgorithmID *algId);
+
+PK11SymKey *pk11_TokenKeyGenWithFlagsAndKeyType(PK11SlotInfo *slot,
+	CK_MECHANISM_TYPE type, SECItem *param, CK_KEY_TYPE keyType, 
+	int keySize, SECItem *keyId, CK_FLAGS opFlags, 
+	PK11AttrFlags attrFlags, void *wincx);
+
+CK_MECHANISM_TYPE pk11_GetPBECryptoMechanism(SECAlgorithmID *algid,
+                   SECItem **param, SECItem *pwd, PRBool faulty3DES);
+
+
 
 extern void pk11sdr_Init(void);
 extern void pk11sdr_Shutdown(void);
@@ -155,6 +193,13 @@ CK_OBJECT_HANDLE pk11_FindPrivateKeyFromCertID(PK11SlotInfo *slot,
 							SECItem *keyID);
 SECKEYPrivateKey *PK11_MakePrivKey(PK11SlotInfo *slot, KeyType keyType, 
 			PRBool isTemp, CK_OBJECT_HANDLE privID, void *wincx);
+CERTCertificate *PK11_MakeCertFromHandle(PK11SlotInfo *slot,
+			CK_OBJECT_HANDLE certID, CK_ATTRIBUTE *privateLabel);
+
+SECItem *pk11_GenerateNewParamWithKeyLen(CK_MECHANISM_TYPE type, int keyLen);
+SECItem *pk11_ParamFromIVWithLen(CK_MECHANISM_TYPE type, 
+				 SECItem *iv, int keyLen);
+
 SEC_END_PROTOS
 
 #endif

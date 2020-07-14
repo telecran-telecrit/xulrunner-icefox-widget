@@ -41,7 +41,7 @@
 
 #include "nsDOMUIEvent.h"
 #include "nsIPrivateTextEvent.h"
-#include "nsIPrivateTextRange.h"
+#include "nsPrivateTextRange.h"
 
 class nsDOMTextEvent : public nsDOMUIEvent,
                        public nsIPrivateTextEvent
@@ -56,12 +56,12 @@ public:
 
   // nsIPrivateTextEvent interface
   NS_IMETHOD GetText(nsString& aText);
-  NS_IMETHOD GetInputRange(nsIPrivateTextRangeList** aInputRange);
-  NS_IMETHOD GetEventReply(nsTextEventReply** aReply);
+  NS_IMETHOD_(already_AddRefed<nsIPrivateTextRangeList>) GetInputRange();
+  NS_IMETHOD_(nsTextEventReply*) GetEventReply();
   
 protected:
   nsString mText;
-  nsCOMPtr<nsIPrivateTextRangeList> mTextRange;
+  nsRefPtr<nsPrivateTextRangeList> mTextRange;
 };
 
 #endif // nsDOMTextEvent_h__

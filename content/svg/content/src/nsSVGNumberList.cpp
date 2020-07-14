@@ -53,8 +53,7 @@
 
 class nsSVGNumberList : public nsIDOMSVGNumberList,
                         public nsSVGValue,
-                        public nsISVGValueObserver,
-                        public nsSupportsWeakReference
+                        public nsISVGValueObserver
 {  
 protected:
   friend nsresult NS_NewSVGNumberList(nsIDOMSVGNumberList** result);
@@ -134,8 +133,7 @@ nsSVGNumberList::SetValueString(const nsAString& aValue)
 
   nsresult rv = NS_OK;
 
-  char* str;
-  str = ToNewCString(aValue);
+  char* str = ToNewCString(aValue);
 
   char* rest = str;
   char* token;
@@ -143,10 +141,10 @@ nsSVGNumberList::SetValueString(const nsAString& aValue)
 
   while ((token = nsCRT::strtok(rest, delimiters, &rest))) {
     char *left;
-    double value = PR_strtod(token, &left);
-    if (token!=left) {
+    float val = float(PR_strtod(token, &left));
+    if (token!=left && NS_FloatIsFinite(val)) {
       nsCOMPtr<nsIDOMSVGNumber> number;
-      NS_NewSVGNumber(getter_AddRefs(number), float(value));
+      NS_NewSVGNumber(getter_AddRefs(number), val);
       if (!number) {
         rv = NS_ERROR_FAILURE;
         break;
@@ -183,7 +181,7 @@ nsSVGNumberList::GetValueString(nsAString& aValue)
 
     if (++i >= count) break;
 
-    aValue.Append(NS_LITERAL_STRING(" "));
+    aValue.AppendLiteral(" ");
   }
   
   return NS_OK;
@@ -223,7 +221,7 @@ NS_IMETHODIMP nsSVGNumberList::Initialize(nsIDOMSVGNumber *newItem,
 /* nsIDOMSVGNumber getItem (in unsigned long index); */
 NS_IMETHODIMP nsSVGNumberList::GetItem(PRUint32 index, nsIDOMSVGNumber **_retval)
 {
-  if ((PRInt32)index >= mNumbers.Count()) {
+  if (index >= static_cast<PRUint32>(mNumbers.Count())) {
     *_retval = nsnull;
     return NS_ERROR_DOM_INDEX_SIZE_ERR;
   }
@@ -278,7 +276,7 @@ nsSVGNumberList::ReplaceItem(nsIDOMSVGNumber *newItem,
 /* nsIDOMSVGNumberList removeItem (in unsigned long index); */
 NS_IMETHODIMP nsSVGNumberList::RemoveItem(PRUint32 index, nsIDOMSVGNumber **_retval)
 {
-  if ((PRInt32)index >= mNumbers.Count()) {
+  if (index >= static_cast<PRUint32>(mNumbers.Count())) {
     *_retval = nsnull;
     return NS_ERROR_DOM_INDEX_SIZE_ERR;
   }

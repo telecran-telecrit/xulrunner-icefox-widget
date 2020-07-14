@@ -43,32 +43,70 @@
 
 // ARGB -- raw buffer.. wont be changed.. good for storing data.
 
-class gfxImageSurface : public gfxASurface {
-    THEBES_DECL_ISUPPORTS_INHERITED
-
+/**
+ * A raw image buffer. The format can be set in the constructor. Its main
+ * purpose is for storing read-only images and using it as a source surface,
+ * but it can also be drawn to.
+ */
+class THEBES_API gfxImageSurface : public gfxASurface {
 public:
-    typedef enum {
-        ImageFormatARGB32,
-        ImageFormatRGB24,
-        ImageFormatA8,
-        ImageFormatA1
-    } gfxImageFormat;
+    /**
+     * Construct an image surface around an existing buffer of image data.
+     * @param aData A buffer containing the image data
+     * @param aSize The size of the buffer
+     * @param aStride The stride of the buffer
+     * @param format Format of the data
+     *
+     * @see gfxImageFormat
+     */
+    gfxImageSurface(unsigned char *aData, const gfxIntSize& aSize,
+                    long aStride, gfxImageFormat aFormat);
 
-    gfxImageSurface(gfxImageFormat format, long width, long height);
+    /**
+     * Construct an image surface.
+     * @param aSize The size of the buffer
+     * @param format Format of the data
+     *
+     * @see gfxImageFormat
+     */
+    gfxImageSurface(const gfxIntSize& size, gfxImageFormat format);
+    gfxImageSurface(cairo_surface_t *csurf);
+
     virtual ~gfxImageSurface();
 
     // ImageSurface methods
-    int Format() const { return mFormat; }
-    long Width() const { return mWidth; }
-    long Height() const { return mHeight; }
-    long Stride() const;
-    unsigned char* Data() { return mData; } // delete this data under us and die.
+    gfxImageFormat Format() const { return mFormat; }
+
+    const gfxIntSize& GetSize() const { return mSize; }
+    PRInt32 Width() const { return mSize.width; }
+    PRInt32 Height() const { return mSize.height; }
+
+    /**
+     * Distance in bytes between the start of a line and the start of the
+     * next line.
+     */
+    PRInt32 Stride() const { return mStride; }
+    /**
+     * Returns a pointer for the image data. Users of this function can
+     * write to it, but must not attempt to free the buffer.
+     */
+    unsigned char* Data() const { return mData; } // delete this data under us and die.
+    /**
+     * Returns the total size of the image data.
+     */
+    PRInt32 GetDataSize() const { return mStride*mSize.height; }
+
+    /* Fast copy from another image surface; returns TRUE if successful, FALSE otherwise */
+    PRBool CopyFrom (gfxImageSurface *other);
 
 private:
+    long ComputeStride() const;
+
+    gfxIntSize mSize;
+    PRBool mOwnsData;
     unsigned char *mData;
-    int mFormat;
-    long mWidth;
-    long mHeight;
+    gfxImageFormat mFormat;
+    long mStride;
 };
 
 #endif /* GFX_IMAGESURFACE_H */

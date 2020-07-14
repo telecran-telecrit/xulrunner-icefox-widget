@@ -38,6 +38,7 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <limits.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/time.h>
@@ -46,6 +47,8 @@
 #include "secrng.h"
 #include "secerr.h"
 #include "prerror.h"
+#include "prthread.h"
+#include "prprf.h"
 
 size_t RNG_FileUpdate(const char *fileName, size_t limit);
 
@@ -184,7 +187,8 @@ static SECStatus RNG_kstat(PRUint32* fed)
 #endif
 
 #if defined(SCO) || defined(UNIXWARE) || defined(BSDI) || defined(FREEBSD) \
-    || defined(NETBSD) || defined(NTO) || defined(DARWIN) || defined(OPENBSD)
+    || defined(NETBSD) || defined(DARWIN) || defined(OPENBSD) \
+    || defined(NTO) || defined(__riscos__)
 #include <sys/times.h>
 
 #define getdtablesize() sysconf(_SC_OPEN_MAX)
@@ -280,7 +284,7 @@ GiveSystemInfo(void)
 }
 #endif
 #endif /* Sun */
-
+
 #if defined(__hpux)
 #include <sys/unistd.h>
 
@@ -321,7 +325,7 @@ GiveSystemInfo(void)
     RNG_RandomUpdate(&si, sizeof(si));
 }
 #endif /* HPUX */
-
+
 #if defined(OSF1)
 #include <sys/types.h>
 #include <sys/sysinfo.h>
@@ -364,7 +368,7 @@ GetHighResClock(void *buf, size_t maxbytes)
 }
 
 #endif /* Alpha */
-
+
 #if defined(_IBMR2)
 static size_t
 GetHighResClock(void *buf, size_t maxbytes)
@@ -378,7 +382,7 @@ GiveSystemInfo(void)
     /* XXX haven't found any yet! */
 }
 #endif /* IBM R2 */
-
+
 #if defined(LINUX)
 #include <sys/sysinfo.h>
 
@@ -433,7 +437,6 @@ GiveSystemInfo(void)
 
 #endif /* NCR */
 
-
 #if defined(sgi)
 #include <fcntl.h>
 #undef PRIVATE
@@ -553,7 +556,7 @@ static size_t GetHighResClock(void *buf, size_t maxbuf)
     return CopyLowBits(buf, maxbuf, &s0, cntr_size);
 }
 #endif
-
+
 #if defined(sony)
 #include <sys/systeminfo.h>
 
@@ -626,44 +629,6 @@ GiveSystemInfo(void)
 }
 #endif /* sinix */
 
-#if defined(VMS)
-#include <c_asm.h>
-
-static void
-GiveSystemInfo(void)
-{
-    long si;
- 
-    /* 
-     * This is copied from the SCO/UNIXWARE etc section. And like the comment
-     * there says, what's the point? This isn't random, it generates the same
-     * stuff every time its run!
-     */
-    si = sysconf(_SC_CHILD_MAX);
-    RNG_RandomUpdate(&si, sizeof(si));
- 
-    si = sysconf(_SC_STREAM_MAX);
-    RNG_RandomUpdate(&si, sizeof(si));
- 
-    si = sysconf(_SC_OPEN_MAX);
-    RNG_RandomUpdate(&si, sizeof(si));
-}
- 
-/*
- * Use the "get the cycle counter" instruction on the alpha.
- * The low 32 bits completely turn over in less than a minute.
- * The high 32 bits are some non-counter gunk that changes sometimes.
- */
-static size_t
-GetHighResClock(void *buf, size_t maxbytes)
-{
-    unsigned long t;
- 
-    t = asm("rpcc %v0");
-    return CopyLowBits(buf, maxbytes, &t, sizeof(t));
-}
- 
-#endif /* VMS */
 
 #ifdef BEOS
 #include <be/kernel/OS.h>
@@ -729,7 +694,7 @@ GiveSystemInfo(void)
     }
 }
 #endif /* nec_ews */
-
+
 size_t RNG_GetNoise(void *buf, size_t maxbytes)
 {
     struct timeval tv;
@@ -775,6 +740,13 @@ safe_popen(char *cmd)
     if (pipe(p) < 0)
 	return 0;
 
+    fp = fdopen(p[0], "r");
+    if (fp == 0) {
+	close(p[0]);
+	close(p[1]);
+	return 0;
+    }
+
     /* Setup signals so that SIGCHLD is ignored as we want to do waitpid */
     newact.sa_handler = SIG_DFL;
     newact.sa_flags = 0;
@@ -783,8 +755,10 @@ safe_popen(char *cmd)
 
     pid = fork();
     switch (pid) {
+      int ndesc;
+
       case -1:
-	close(p[0]);
+	fclose(fp); /* this closes p[0], the fd associated with fp */
 	close(p[1]);
 	sigaction (SIGCHLD, &oldact, NULL);
 	return 0;
@@ -793,11 +767,15 @@ safe_popen(char *cmd)
 	/* dup write-side of pipe to stderr and stdout */
 	if (p[1] != 1) dup2(p[1], 1);
 	if (p[1] != 2) dup2(p[1], 2);
-	close(0);
-        {
-            int ndesc = getdtablesize();
-            for (fd = PR_MIN(65536, ndesc); --fd > 2; close(fd));
-        }
+
+	/* 
+	 * close the other file descriptors, except stdin which we
+	 * try reassociating with /dev/null, first (bug 174993)
+	 */
+	if (!freopen("/dev/null", "r", stdin))
+	    close(0);
+	ndesc = getdtablesize();
+	for (fd = PR_MIN(65536, ndesc); --fd > 2; close(fd));
 
 	/* clean up environment in the child process */
 	putenv("PATH=/bin:/usr/bin:/sbin:/usr/sbin:/etc:/usr/etc");
@@ -826,12 +804,6 @@ safe_popen(char *cmd)
 
       default:
 	close(p[1]);
-	fp = fdopen(p[0], "r");
-	if (fp == 0) {
-	    close(p[0]);
-	    sigaction (SIGCHLD, &oldact, NULL);
-	    return 0;
-	}
 	break;
     }
 
@@ -844,30 +816,31 @@ static int
 safe_pclose(FILE *fp)
 {
     pid_t pid;
-    int count, status;
+    int status = -1, rv;
 
     if ((pid = safe_popen_pid) == 0)
 	return -1;
     safe_popen_pid = 0;
 
+    fclose(fp);
+
+    /* yield the processor so the child gets some time to exit normally */
+    PR_Sleep(PR_INTERVAL_NO_WAIT);
+
     /* if the child hasn't exited, kill it -- we're done with its output */
-    count = 0;
-    while (waitpid(pid, &status, WNOHANG) == 0) {
-    	if (kill(pid, SIGKILL) < 0 && errno == ESRCH)
-	    break;
-	if (++count == 1000)
-	    break;
+    while ((rv = waitpid(pid, &status, WNOHANG)) == -1 && errno == EINTR)
+	;
+    if (rv == 0) {
+	kill(pid, SIGKILL);
+	while ((rv = waitpid(pid, &status, 0)) == -1 && errno == EINTR)
+	    ;
     }
 
     /* Reset SIGCHLD signal hander before returning */
     sigaction(SIGCHLD, &oldact, NULL);
 
-    fclose(fp);
     return status;
 }
-
-
-#if !defined(VMS)
 
 #ifdef DARWIN
 #include <crt_externs.h>
@@ -910,15 +883,6 @@ void RNG_SystemInfoForRNG(void)
     };
 #endif
 
-#ifdef DO_PS
-For now it is considered that it is too expensive to run the ps command
-for the small amount of entropy it provides.
-#if defined(__sun) && (!defined(__svr4) && !defined(SVR4)) || defined(bsdi) || defined(LINUX)
-    static char ps_cmd[] = "ps aux";
-#else
-    static char ps_cmd[] = "ps -el";
-#endif
-#endif /* DO_PS */
 #if defined(BSDI)
     static char netstat_ni_cmd[] = "netstat -nis";
 #else
@@ -957,7 +921,13 @@ for the small amount of entropy it provides.
     /* If the user points us to a random file, pass it through the rng */
     randfile = getenv("NSRANDFILE");
     if ( ( randfile != NULL ) && ( randfile[0] != '\0') ) {
-	RNG_FileForRNG(randfile);
+	char *randCountString = getenv("NSRANDCOUNT");
+	int randCount = randCountString ? atoi(randCountString) : 0;
+	if (randCount != 0) {
+	    RNG_FileUpdate(randfile, randCount);
+	} else {
+	    RNG_FileForRNG(randfile);
+	}
     }
 
     /* pass other files through */
@@ -969,9 +939,14 @@ for the small amount of entropy it provides.
  * in a pthreads environment.  Therefore, we call safe_popen last and on
  * BSD/OS we do not call safe_popen when we succeeded in getting data
  * from /dev/urandom.
+ *
+ * Bug 174993: On platforms providing /dev/urandom, don't fork netstat
+ * either, if data has been gathered successfully.
  */
 
-#ifdef BSDI
+#if defined(BSDI) || defined(FREEBSD) || defined(NETBSD) \
+    || defined(OPENBSD) || defined(DARWIN) || defined(LINUX) \
+    || defined(HPUX)
     if (bytes)
         return;
 #endif
@@ -999,15 +974,6 @@ for the small amount of entropy it provides.
     }
 #endif
 
-#ifdef DO_PS
-    fp = safe_popen(ps_cmd);
-    if (fp != NULL) {
-	while ((bytes = fread(buf, 1, sizeof(buf), fp)) > 0)
-	    RNG_RandomUpdate(buf, bytes);
-	safe_pclose(fp);
-    }
-#endif
-
 #ifdef DO_NETSTAT
     fp = safe_popen(netstat_ni_cmd);
     if (fp != NULL) {
@@ -1018,65 +984,6 @@ for the small amount of entropy it provides.
 #endif
 
 }
-#else
-void RNG_SystemInfoForRNG(void)
-{
-    FILE *fp;
-    char buf[BUFSIZ];
-    size_t bytes;
-    int extra;
-    char **cp;
-    extern char **environ;
-    char *randfile;
- 
-    GiveSystemInfo();
- 
-    bytes = RNG_GetNoise(buf, sizeof(buf));
-    RNG_RandomUpdate(buf, bytes);
- 
-    /*
-     * Pass the C environment and the addresses of the pointers to the
-     * hash function. This makes the random number function depend on the
-     * execution environment of the user and on the platform the program
-     * is running on.
-     */
-    cp = environ;
-    while (*cp) {
-	RNG_RandomUpdate(*cp, strlen(*cp));
-	cp++;
-    }
-    RNG_RandomUpdate(environ, (char*)cp - (char*)environ);
- 
-    /* Give in system information */
-    if (gethostname(buf, sizeof(buf)) > 0) {
-	RNG_RandomUpdate(buf, strlen(buf));
-    }
-    GiveSystemInfo();
- 
-    /* If the user points us to a random file, pass it through the rng */
-    randfile = getenv("NSRANDFILE");
-    if ( ( randfile != NULL ) && ( randfile[0] != '\0') ) {
-	RNG_FileForRNG(randfile);
-    }
-
-    /*
-    ** We need to generate at least 1024 bytes of seed data. Since we don't
-    ** do the file stuff for VMS, and because the environ list is so short
-    ** on VMS, we need to make sure we generate enough. So do another 1000
-    ** bytes to be sure.
-    */
-    extra = 1000;
-    while (extra > 0) {
-        cp = environ;
-        while (*cp) {
-	    int n = strlen(*cp);
-	    RNG_RandomUpdate(*cp, n);
-	    extra -= n;
-	    cp++;
-        }
-    }
-}
-#endif
 
 #define TOTAL_FILE_LIMIT 1000000	/* one million */
 
@@ -1128,6 +1035,125 @@ void RNG_FileForRNG(const char *fileName)
     RNG_FileUpdate(fileName, TOTAL_FILE_LIMIT);
 }
 
+void ReadSingleFile(const char *fileName)
+{
+    FILE *        file;
+    unsigned char buffer[BUFSIZ];
+    
+    file = fopen((char *)fileName, "rb");
+    if (file != NULL) {
+	while (fread(buffer, 1, sizeof(buffer), file) > 0)
+	    ;
+	fclose(file);
+    } 
+}
+
+#define _POSIX_PTHREAD_SEMANTICS
+#include <dirent.h>
+
+PRBool
+ReadFileOK(char *dir, char *file)
+{
+    struct stat   stat_buf;
+    char filename[PATH_MAX];
+    int count = snprintf(filename, sizeof filename, "%s/%s",dir, file);
+
+    if (count <= 0) {
+	return PR_FALSE; /* name too long, can't read it anyway */
+    }
+    
+    if (stat(filename, &stat_buf) < 0)
+	return PR_FALSE; /* can't stat, probably can't read it then as well */
+    return S_ISREG(stat_buf.st_mode) ? PR_TRUE : PR_FALSE;
+}
+
+/*
+ * read one file out of either /etc or the user's home directory.
+ * fileToRead tells which file to read.
+ *
+ * return 1 if it's time to reset the fileToRead (no more files to read).
+ */
+int ReadOneFile(int fileToRead)
+{
+    char *dir = "/etc";
+    DIR *fd = opendir(dir);
+    int resetCount = 0;
+#ifdef SOLARIS
+     /* grumble, Solaris does not define struct dirent to be the full length */
+    typedef union {
+	unsigned char space[sizeof(struct dirent) + MAXNAMELEN];
+	struct dirent dir;
+    } dirent_hack;
+    dirent_hack entry, firstEntry;
+
+#define entry_dir entry.dir
+#else
+    struct dirent entry, firstEntry;
+#define entry_dir entry
+#endif
+
+    int i, error = -1;
+
+    if (fd == NULL) {
+	dir = getenv("HOME");
+	if (dir) {
+	    fd = opendir(dir);
+	}
+    }
+    if (fd == NULL) {
+	return 1;
+    }
+
+    for (i=0; i <= fileToRead; i++) {
+	struct dirent *result = NULL;
+	do {
+	    error = readdir_r(fd, &entry_dir, &result);
+	} while (error == 0 && result != NULL  &&
+					!ReadFileOK(dir,&result->d_name[0]));
+	if (error != 0 || result == NULL)  {
+	    resetCount = 1; /* read to the end, start again at the beginning */
+	    if (i != 0) {
+		/* ran out of entries in the directory, use the first one */
+	 	entry = firstEntry;
+	 	error = 0;
+	 	break;
+	    }
+	    /* if i== 0, there were no readable entries in the directory */
+	    break;
+	}
+	if (i==0) {
+	    /* save the first entry in case we run out of entries */
+	    firstEntry = entry;
+	}
+    }
+
+    if (error == 0) {
+	char filename[PATH_MAX];
+	int count = snprintf(filename, sizeof filename, 
+				"%s/%s",dir, &entry_dir.d_name[0]);
+	if (count >= 1) {
+	    ReadSingleFile(filename);
+	}
+    } 
+
+    closedir(fd);
+    return resetCount;
+}
+
+/*
+ * do something to try to introduce more noise into the 'GetNoise' call
+ */
+static void rng_systemJitter(void)
+{
+   static int fileToRead = 1;
+
+   if (ReadOneFile(fileToRead)) {
+	fileToRead = 1;
+   } else {
+	fileToRead++;
+   }
+}
+
 size_t RNG_SystemRNG(void *dest, size_t maxLen)
 {
     FILE *file;
@@ -1137,8 +1163,7 @@ size_t RNG_SystemRNG(void *dest, size_t maxLen)
 
     file = fopen("/dev/urandom", "r");
     if (file == NULL) {
-	PORT_SetError(PR_NOT_IMPLEMENTED_ERROR);
-	return fileBytes;
+	return rng_systemFromNoise(dest, maxLen);
     }
     while (maxLen > fileBytes) {
 	bytes = maxLen - fileBytes;

@@ -39,8 +39,14 @@
 #define nsIImage_h___
 
 #include "nsISupports.h"
-#include "nsIRenderingContext.h"
+#include "nsMargin.h"
 #include "nsRect.h"
+
+class gfxASurface;
+class gfxPattern;
+class gfxMatrix;
+class gfxRect;
+class gfxContext;
 
 class nsIDeviceContext;
 
@@ -67,22 +73,18 @@ typedef enum {
 #define  nsImageUpdateFlags_kColorMapChanged 0x1
 #define  nsImageUpdateFlags_kBitsChanged     0x2
 
-// The following platforms store image data rows bottom-up.
-#if defined(XP_WIN) || defined(XP_OS2) || defined(XP_MACOSX)
-#define MOZ_PLATFORM_IMAGES_BOTTOM_TO_TOP
-#endif
-
 // IID for the nsIImage interface
-#define NS_IIMAGE_IID          \
-  { 0xce91c93f, 0x532d, 0x470d, \
-      { 0xbf, 0xa3, 0xc9, 0x6e, 0x56, 0x01, 0x52, 0xa4 } }
+// c942f66c-97d0-470e-99de-a1efb4586afd
+#define NS_IIMAGE_IID \
+  { 0xc942f66c, 0x97d0, 0x470e, \
+    { 0x99, 0xde, 0xa1, 0xef, 0xb4, 0x58, 0x6a, 0xfd } }
 
 // Interface to Images
 class nsIImage : public nsISupports
 {
 
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IIMAGE_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IIMAGE_IID)
 
   /**
    * Build and initialize the nsIImage
@@ -159,11 +161,12 @@ public:
 
   /**
    * Update the nsIImage color table
-   * @update - dwc 2/1/99
+   * @update - dougt 9/9/08
    * @param aFlags Used to pass in parameters for the update
    * @param aUpdateRect The rectangle to update
+   * @return success code. failure means stop decoding
    */
-  virtual void ImageUpdated(nsIDeviceContext *aContext, PRUint8 aFlags, nsIntRect *aUpdateRect) = 0;
+  virtual nsresult ImageUpdated(nsIDeviceContext *aContext, PRUint8 aFlags, nsIntRect *aUpdateRect) = 0;
   
   /**
    * Get whether this image's region is completely filled with data.
@@ -188,55 +191,32 @@ public:
   virtual nsColorMap * GetColorMap() = 0;
 
   /**
-   * BitBlit the nsIImage to a device, the source can be scaled to the dest
-   * @update - dwc 2/1/99
-   * @param aSurface  the surface to blit to
-   * @param aX The destination horizontal location
-   * @param aY The destination vertical location
-   * @param aWidth The destination width of the pixelmap
-   * @param aHeight The destination height of the pixelmap
-   * @return if TRUE, no errors
+   * BitBlit the nsIImage to a device, the source and dest can be scaled.
+   * @param aContext the destination
+   * @param aUserSpaceToImageSpace the transform that maps user-space
+   * coordinates to coordinates in (tiled, post-padding) image pixels
+   * @param aFill the area to fill with tiled images
+   * @param aPadding the padding to be added to this image before tiling,
+   * in image pixels
+   * @param aSubimage the subimage in padded+tiled image space that we're
+   * extracting the contents from. Pixels outside this rectangle must not
+   * be sampled.
+   * 
+   * So this is supposed to
+   * -- add aPadding transparent pixels around the image
+   * -- use that image to tile the plane
+   * -- replace everything outside the aSubimage region with the nearest
+   * border pixel of that region (like EXTEND_PAD)
+   * -- fill aFill with the image, using aImageSpaceToDeviceSpace as the
+   * image-space-to-device-space transform
    */
-  NS_IMETHOD Draw(nsIRenderingContext &aContext, nsIDrawingSurface* aSurface, PRInt32 aX, PRInt32 aY, PRInt32 aWidth, PRInt32 aHeight) = 0;
+  virtual void Draw(gfxContext*        aContext,
+                    const gfxMatrix&   aUserSpaceToImageSpace,
+                    const gfxRect&     aFill,
+                    const nsIntMargin& aPadding,
+                    const nsIntRect&   aSubimage) = 0;
 
-  /**
-   * BitBlit the nsIImage to a device, the source and dest can be scaled
-   * @update - dwc 2/1/99
-   * @param aSurface  the surface to blit to
-   * @param aSX The source width of the pixelmap
-   * @param aSY The source vertical location
-   * @param aSWidth The source width of the pixelmap
-   * @param aSHeight The source height of the pixelmap
-   * @param aDX The destination horizontal location
-   * @param aDY The destination vertical location
-   * @param aDWidth The destination width of the pixelmap
-   * @param aDHeight The destination height of the pixelmap
-   * @return if TRUE, no errors
-   */
-  NS_IMETHOD Draw(nsIRenderingContext &aContext, nsIDrawingSurface* aSurface,
-                  PRInt32 aSX, PRInt32 aSY, PRInt32 aSWidth, PRInt32 aSHeight,
-                  PRInt32 aDX, PRInt32 aDY, PRInt32 aDWidth, PRInt32 aDHeight) = 0;
-
-
-  NS_IMETHOD DrawTile(nsIRenderingContext &aContext,
-                      nsIDrawingSurface* aSurface,
-                      PRInt32 aSXOffset, PRInt32 aSYOffset,
-                      PRInt32 aPadX, PRInt32 aPadY,
-                      const nsRect &aTileRect) = 0;
-
-  /**
-   * BitBlit the entire (no cropping) nsIImage to another nsImage, the source and dest can be scaled
-   * @update - saari 03/08/01
-   * @param aDstImage  the nsImage to blit to
-   * @param aDX The destination horizontal location
-   * @param aDY The destination vertical location
-   * @param aDWidth The destination width of the pixelmap
-   * @param aDHeight The destination height of the pixelmap
-   * @return if TRUE, no errors
-   */
-  NS_IMETHOD DrawToImage(nsIImage* aDstImage, PRInt32 aDX, PRInt32 aDY, PRInt32 aDWidth, PRInt32 aDHeight) = 0;
-
-  /**
+  /** 
    * Get the alpha depth for the image mask
    * @update - lordpixel 2001/05/16
    * @return  the alpha mask depth for the image, ie, 0, 1 or 8
@@ -254,7 +234,11 @@ public:
   /**
    * LockImagePixels
    * Lock the image pixels so that we can access them directly,
-   * with safely. May be a noop on some platforms.
+   * with safety. May be a noop on some platforms.
+   *
+   * If you want to be able to call GetSurface(), wrap the call in
+   * LockImagePixels()/UnlockImagePixels(). This also allows you to write to
+   * the surface returned by GetSurface().
    *
    * aMaskPixels = PR_TRUE for the mask, PR_FALSE for the image
    *
@@ -277,6 +261,45 @@ public:
    * @return error result
    */
   NS_IMETHOD UnlockImagePixels(PRBool aMaskPixels) = 0;
+
+  /**
+   * GetSurface
+   * Return the Thebes gfxASurface in aSurface, if there is one. Should be
+   * wrapped by LockImagePixels()/UnlockImagePixels().
+   *
+   * aSurface will be AddRef'd (as with most getters), so
+   * getter_AddRefs should be used.
+   */
+  NS_IMETHOD GetSurface(gfxASurface **aSurface) = 0;
+
+  /**
+   * GetSurface
+   * Return the Thebes gfxPattern in aPattern. It is always possible to get a
+   * gfxPattern (unlike the gfxASurface from GetSurface()).
+   *
+   * aPattern will be AddRef'd (as with most getters), so
+   * getter_AddRefs should be used.
+   */
+  NS_IMETHOD GetPattern(gfxPattern **aPattern) = 0;
+
+  /**
+   * SetHasNoAlpha
+   *
+   * Hint to the image that all the pixels are fully opaque, even if
+   * the original format requested a 1-bit or 8-bit alpha mask
+   */
+  virtual void SetHasNoAlpha() = 0;
+
+  /**
+   * Extract a rectangular region of the nsIImage and return it as a new
+   * nsIImage.
+   * @param aSubimage  the region to extract
+   * @param aResult    the extracted image
+   */
+  NS_IMETHOD Extract(const nsIntRect& aSubimage,
+                     nsIImage** aResult NS_OUTPARAM) = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIImage, NS_IIMAGE_IID)
 
 #endif

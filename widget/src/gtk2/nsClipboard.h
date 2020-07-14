@@ -40,6 +40,8 @@
 #define __nsClipboard_h_
 
 #include "nsIClipboard.h"
+#include "nsClipboardPrivacyHandler.h"
+#include "nsAutoPtr.h"
 #include <gtk/gtkselection.h>
 
 class nsClipboard : public nsIClipboard
@@ -55,7 +57,7 @@ public:
     // Make sure we are initialized, called from the factory
     // constructor
     nsresult  Init                (void);
-    // Someone reqeusted the selection from the hidden widget
+    // Someone requested the selection from the hidden widget
     void      SelectionGetEvent   (GtkWidget         *aWidget,
                                    GtkSelectionData  *aSelectionData,
                                    guint              aTime);
@@ -84,6 +86,7 @@ private:
     nsCOMPtr<nsIClipboardOwner>  mGlobalOwner;
     nsCOMPtr<nsITransferable>    mSelectionTransferable;
     nsCOMPtr<nsITransferable>    mGlobalTransferable;
+    nsRefPtr<nsClipboardPrivacyHandler> mPrivacyHandler;
 
 };
 

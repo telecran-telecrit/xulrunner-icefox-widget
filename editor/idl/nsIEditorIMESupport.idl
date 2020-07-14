@@ -20,6 +20,7 @@
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
+ *   Masayuki Nakano <masayuki@d-toybox.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -41,17 +42,13 @@
 %{C++
 class nsIPrivateTextRangeList;
 struct nsTextEventReply;
-struct nsReconversionEventReply;
-struct nsQueryCaretRectEventReply;
 %}
 
 [ptr] native nsIPrivateTextRangeListPtr(nsIPrivateTextRangeList);
 [ptr] native nsTextEventReplyPtr(nsTextEventReply);
-[ptr] native nsReconversionEventReplyPtr(nsReconversionEventReply);
-[ptr] native nsQueryCaretRectEventReplyPtr(nsQueryCaretRectEventReply);
 
 
-[scriptable, uuid(205b3e49-aa58-499e-880b-aacab9dede01)]
+[scriptable, uuid(57032dcb-e8c7-4eb6-8ec6-a0f8e300809d)]
 
 interface nsIEditorIMESupport : nsISupports
 {
@@ -89,28 +86,14 @@ interface nsIEditorIMESupport : nsISupports
   void forceCompositionEnd();
 
   /**
-   * getReconversionString()  Get the reconvertion string
+   * Get preferred IME status of current widget.
    */
 
-  [noscript] void getReconversionString(in nsReconversionEventReplyPtr aReply);
+  [noscript] void getPreferredIMEState(out unsigned long aState);
 
   /**
-   * Notify for IME when the editor got focus.
+   * whether this editor has active IME transaction
    */
-
-  void notifyIMEOnFocus();
-
-  /**
-   * Notify for IME when the editor lost focus.
-   */
-
-  void notifyIMEOnBlur();
-
-  /**
-   * getQueryCaretRect()  Get the query caret rect
-   */
-
-  [noscript] void getQueryCaretRect(in nsQueryCaretRectEventReplyPtr aReply);
-
+  readonly attribute boolean composing;
 };
 

@@ -69,9 +69,8 @@ class nsIFormSubmission;
 #define NS_FORM_OBJECT         21
 
 #define NS_IFORMCONTROL_IID   \
-{ 0xfcf27549, 0xbd77, 0x455a, \
-  {0x8c, 0x3e, 0xbb, 0x20, 0xc5, 0xaf, 0x7b, 0x86} }
-
+{ 0x52dc1f0d, 0x1683, 0x4dd7, \
+ { 0xae, 0x0a, 0xc4, 0x76, 0x10, 0x64, 0x2f, 0xa8 } }
 
 /**
  * Interface which all form controls (e.g. buttons, checkboxes, text,
@@ -82,7 +81,7 @@ class nsIFormControl : public nsISupports
 {
 public:
 
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IFORMCONTROL_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IFORMCONTROL_IID)
 
   /**
    * Get the form for this form control.
@@ -92,12 +91,23 @@ public:
 
   /**
    * Set the form for this form control.
-   * @param aForm the form
+   * @param aForm the form.  This must not be null.
+   *
+   * @note that when setting the form the control is not added to the
+   * form.  It adds itself when it gets bound to the tree thereafter,
+   * so that it can be properly sorted with the other controls in the
+   * form.
+   */
+  virtual void SetForm(nsIDOMHTMLFormElement* aForm) = 0;
+
+  /**
+   * Tell the control to forget about its form.
+   *
    * @param aRemoveFromForm set false if you do not want this element removed
    *        from the form.  (Used by nsFormControlList::Clear())
+   * @param aNotify If true, send nsIDocumentObserver notifications as needed.
    */
-  NS_IMETHOD SetForm(nsIDOMHTMLFormElement* aForm,
-                     PRBool aRemoveFromForm = PR_TRUE) = 0;
+  virtual void ClearForm(PRBool aRemoveFromForm, PRBool aNotify) = 0;
 
   /**
    * Get the type of this control as an int (see NS_FORM_* above)
@@ -141,6 +151,15 @@ public:
   virtual PRBool RestoreState(nsPresState* aState) = 0;
 
   virtual PRBool AllowDrop() = 0;
+
+  /**
+   * Returns true if this is a control which submits the form when
+   * activated by the user.
+   * @return Whether this is a submit control.
+   */
+  virtual PRBool IsSubmitControl() const = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIFormControl, NS_IFORMCONTROL_IID)
 
 #endif /* nsIFormControl_h___ */

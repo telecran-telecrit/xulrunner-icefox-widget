@@ -35,7 +35,7 @@
  * ***** END LICENSE BLOCK ***** */
 
 #ifdef DEBUG
-static const char CKDBM_CVS_ID[] = "@(#) $RCSfile: ckdbm.h,v $ $Revision: 1.2.28.1 $ $Date: 2006/03/02 22:45:13 $";
+static const char CKDBM_CVS_ID[] = "@(#) $RCSfile: ckdbm.h,v $ $Revision: 1.3 $ $Date: 2006/03/02 22:48:54 $";
 #endif /* DEBUG */
 
 #ifndef CKDBM_H

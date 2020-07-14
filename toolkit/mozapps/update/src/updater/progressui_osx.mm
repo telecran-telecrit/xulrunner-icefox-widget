@@ -20,7 +20,7 @@
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
- *  Josh Aas <josh@mozillafoundation.org>
+ *  Josh Aas <josh@mozilla.com>
  *  Darin Fisher <darin@meer.net>
  *
  * Alternatively, the contents of this file may be used under the terms of
@@ -49,7 +49,7 @@
 static float sProgressVal;  // between 0 and 100
 static BOOL sQuit = FALSE;
 static StringTable sLabels;
-static const char *sProgramPath;
+static const char *sUpdatePath;
 
 @interface UpdaterUI : NSObject
 {
@@ -112,7 +112,7 @@ static const char *sProgramPath;
 int
 InitProgressUI(int *pargc, char ***pargv)
 {
-  sProgramPath = (*pargv)[0];
+  sUpdatePath = (*pargv)[1];
   
   return 0;
 }
@@ -129,7 +129,7 @@ ShowProgressUI()
     return 0;
 
   char path[PATH_MAX];
-  snprintf(path, sizeof(path), "%s.ini", sProgramPath);
+  snprintf(path, sizeof(path), "%s/updater.ini", sUpdatePath);
   if (ReadStrings(path, &sLabels) != OK)
     return -1;
   

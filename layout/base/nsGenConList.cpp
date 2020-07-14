@@ -36,6 +36,8 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/* base class for nsCounterList and nsQuoteList */
+
 #include "nsGenConList.h"
 #include "nsLayoutUtils.h"
 
@@ -67,14 +69,14 @@ nsGenConList::DestroyNodesFor(nsIFrame* aFrame)
   while (mFirstNode->mPseudoFrame == aFrame) {
     destroyed = PR_TRUE;
     node = Next(mFirstNode);
-    if (node == mFirstNode) { // Last link
+    PRBool isLastNode = node == mFirstNode; // before they're dangling
+    Remove(mFirstNode);
+    delete mFirstNode;
+    if (isLastNode) {
       mFirstNode = nsnull;
-      delete node;
       return PR_TRUE;
     }
     else {
-      Remove(mFirstNode);
-      delete mFirstNode;
       mFirstNode = node;
     }
   }
@@ -93,14 +95,26 @@ nsGenConList::DestroyNodesFor(nsIFrame* aFrame)
   return destroyed;
 }
 
-// return -1 for ::before, +1 for ::after, and 0 otherwise.
-inline PRBool PseudoCompareType(nsIFrame *aFrame)
+/**
+ * Compute the type of the pseudo and the content for the pseudo that
+ * we'll use for comparison purposes.
+ * @param aContent the content to use is stored here; it's the element
+ * that generated the ::before or ::after content, or (if not for generated
+ * content), the frame's own element
+ * @return -1 for ::before, +1 for ::after, and 0 otherwise.
+ */
+inline PRInt32 PseudoCompareType(nsIFrame* aFrame, nsIContent** aContent)
 {
   nsIAtom *pseudo = aFrame->GetStyleContext()->GetPseudoType();
-  if (pseudo == nsCSSPseudoElements::before)
+  if (pseudo == nsCSSPseudoElements::before) {
+    *aContent = aFrame->GetContent()->GetParent();
     return -1;
-  if (pseudo == nsCSSPseudoElements::after)
+  }
+  if (pseudo == nsCSSPseudoElements::after) {
+    *aContent = aFrame->GetContent()->GetParent();
     return 1;
+  }
+  *aContent = aFrame->GetContent();
   return 0;
 }
 
@@ -113,10 +127,10 @@ nsGenConList::NodeAfter(const nsGenConNode* aNode1, const nsGenConNode* aNode2)
     NS_ASSERTION(aNode2->mContentIndex != aNode1->mContentIndex, "identical");
     return aNode1->mContentIndex > aNode2->mContentIndex;
   }
-  PRInt32 pseudoType1 = PseudoCompareType(frame1);
-  PRInt32 pseudoType2 = PseudoCompareType(frame2);
-  nsIContent *content1 = frame1->GetContent();
-  nsIContent *content2 = frame2->GetContent();
+  nsIContent *content1;
+  nsIContent *content2;
+  PRInt32 pseudoType1 = PseudoCompareType(frame1, &content1);
+  PRInt32 pseudoType2 = PseudoCompareType(frame2, &content2);
   if (pseudoType1 == 0 || pseudoType2 == 0) {
     if (content1 == content2) {
       NS_ASSERTION(pseudoType1 != pseudoType2, "identical");
@@ -132,6 +146,7 @@ nsGenConList::NodeAfter(const nsGenConNode* aNode1, const nsGenConNode* aNode2)
       return pseudoType1 == 1;
     }
   }
+  // XXX Switch to the frame version of DoCompareTreePosition?
   PRInt32 cmp = nsLayoutUtils::DoCompareTreePosition(content1, content2,
                                                      pseudoType1, -pseudoType2);
   NS_ASSERTION(cmp != 0, "same content, different frames");
@@ -150,6 +165,7 @@ nsGenConList::Insert(nsGenConNode* aNode)
       // Binary search.
 
       // the range of indices at which |aNode| could end up.
+      // (We already know it can't be at index mSize.)
       PRUint32 first = 0, last = mSize - 1;
 
       // A cursor to avoid walking more than the length of the list.
@@ -187,4 +203,9 @@ nsGenConList::Insert(nsGenConNode* aNode)
     mFirstNode = aNode;
   }
   ++mSize;
+
+  NS_ASSERTION(aNode == mFirstNode || NodeAfter(aNode, Prev(aNode)),
+               "sorting error");
+  NS_ASSERTION(IsLast(aNode) || NodeAfter(Next(aNode), aNode),
+               "sorting error");
 }

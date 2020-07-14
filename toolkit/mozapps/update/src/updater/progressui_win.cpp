@@ -43,25 +43,45 @@
 #include <process.h>
 #include <io.h>
 #include "resource.h"
+#include "progressui.h"
+#include "readstrings.h"
+#include "errors.h"
 
 #define TIMER_ID 1
 #define TIMER_INTERVAL 100
 
+#define RESIZE_WINDOW(hwnd, extrax, extray) \
+  { \
+    RECT windowSize; \
+    GetWindowRect(hwnd, &windowSize); \
+    SetWindowPos(hwnd, 0, 0, 0, windowSize.right - windowSize.left + extrax, \
+                 windowSize.bottom - windowSize.top + extray, \
+                 SWP_NOMOVE | SWP_NOZORDER); \
+  }
+
+#define MOVE_WINDOW(hwnd, dx, dy) \
+  { \
+    WINDOWPLACEMENT windowPos; \
+    windowPos.length = sizeof(windowPos); \
+    GetWindowPlacement(hwnd, &windowPos); \
+    SetWindowPos(hwnd, 0, windowPos.rcNormalPosition.left + dx, windowPos.rcNormalPosition.top + dy, 0, 0, \
+                 SWP_NOSIZE | SWP_NOZORDER); \
+  }
+
 static float sProgress;  // between 0 and 100
 static BOOL  sQuit = FALSE;
-static HFONT sSystemFont = 0;
 
 static BOOL
-GetStringsFile(char filename[MAX_PATH])
+GetStringsFile(WCHAR filename[MAX_PATH])
 {
-  if (!GetModuleFileName(NULL, filename, MAX_PATH))
+  if (!GetModuleFileNameW(NULL, filename, MAX_PATH))
+    return FALSE;
+ 
+  WCHAR *dot = wcsrchr(filename, '.');
+  if (!dot || wcsicmp(dot + 1, L"exe"))
     return FALSE;
 
-  char *dot = strrchr(filename, '.');
-  if (!dot || stricmp(dot + 1, "exe"))
-    return FALSE;
-
-  strcpy(dot + 1, "ini");
+  wcscpy(dot + 1, L"ini");
   return TRUE;
 }
 
@@ -70,6 +90,52 @@ UpdateDialog(HWND hDlg)
 {
   int pos = int(sProgress + 0.5f);
   SendDlgItemMessage(hDlg, IDC_PROGRESS, PBM_SETPOS, pos, 0L);
+}
+
+static void
+ResizeDialogToFit(HWND hDlg)
+{
+  WCHAR text[MAX_TEXT_LEN];
+  RECT infoSize, textSize;
+  HFONT hInfoFont, hOldFont;
+
+  HWND hWndInfo = GetDlgItem(hDlg, IDC_INFO);
+  HWND hWndPro  = GetDlgItem(hDlg, IDC_PROGRESS);
+
+  // Get the text that is displayed - this is what we're going to make fit.
+  if (!GetWindowText(hWndInfo, text, sizeof(text)))
+    return;
+
+  // We need the current size and font to calculate the adjustment.
+  GetClientRect(hWndInfo, &infoSize);
+  HDC hDCInfo = GetDC(hWndInfo);
+  hInfoFont = (HFONT)SendMessage(hWndInfo, WM_GETFONT, 0, 0);
+  if (hInfoFont)
+    hOldFont = (HFONT)SelectObject(hDCInfo, hInfoFont);
+
+  // Measure the space needed for the text - DT_CALCRECT means nothing is drawn.
+  if (DrawText(hDCInfo, text, -1, &textSize,
+               DT_CALCRECT | DT_NOCLIP | DT_SINGLELINE)) {
+    SIZE extra;
+    extra.cx = (textSize.right - textSize.left) - (infoSize.right - infoSize.left);
+    extra.cy = (textSize.bottom - textSize.top) - (infoSize.bottom - infoSize.top);
+    if (extra.cx < 0)
+      extra.cx = 0;
+    if (extra.cy < 0)
+      extra.cy = 0;
+
+    if ((extra.cx > 0) || (extra.cy > 0)) {
+      RESIZE_WINDOW(hDlg, extra.cx, extra.cy);
+      RESIZE_WINDOW(hWndInfo, extra.cx, extra.cy);
+      RESIZE_WINDOW(hWndPro, extra.cx, 0);
+      MOVE_WINDOW(hWndPro, 0, extra.cy);
+    }
+  }
+
+  if (hOldFont)
+    SelectObject(hDCInfo, hOldFont);
+
+  ReleaseDC(hWndInfo, hDCInfo);
 }
 
 // The code in this function is from MSDN:
@@ -107,38 +173,26 @@ CenterDialog(HWND hDlg)
 }
 
 static void
-SetItemText(HWND hwnd, const char *key, const char *ini)
-{
-  char text[512];
-  if (!GetPrivateProfileString("Strings", key, NULL, text, sizeof(text), ini))
-    return;
-  SetWindowText(hwnd, text);
-}
-
-static void
 InitDialog(HWND hDlg)
 {
-  char filename[MAX_PATH];
+  WCHAR filename[MAX_PATH];
   if (!GetStringsFile(filename))
     return;
 
-  SetItemText(hDlg, "Title", filename);
-  SetItemText(GetDlgItem(hDlg, IDC_INFO), "Info", filename);
+  StringTable uiStrings;
+  if (ReadStrings(filename, &uiStrings) != OK)
+    return;
 
-  // On Win9x, we need to send WM_SETFONT for l10n builds.  Yes, we shouldn't
-  // use the system font.  For example, if the text has Japanese characters on
-  // Win98-en, then the text may not be displayed correctly.  We should perhaps
-  // support loading a font named in updater.ini; however, even then there are
-  // cases where it might not work properly.
-  if (!sSystemFont) {
-    NONCLIENTMETRICS ncm;
-    memset(&ncm, 0, sizeof(ncm));
-    ncm.cbSize = sizeof(ncm);
-    SystemParametersInfo(SPI_GETNONCLIENTMETRICS, 0, &ncm, 0);
-    sSystemFont = CreateFontIndirect(&ncm.lfMessageFont);
-  }
-  if (sSystemFont)
-    SendDlgItemMessage(hDlg, IDC_INFO, WM_SETFONT, (WPARAM)sSystemFont, 0L);
+  WCHAR szwTitle[MAX_TEXT_LEN];
+  WCHAR szwInfo[MAX_TEXT_LEN];
+
+  MultiByteToWideChar(CP_UTF8, 0, uiStrings.title, strlen(uiStrings.title) + 1,
+                      szwTitle, sizeof(szwTitle)/sizeof(szwTitle[0]));
+  MultiByteToWideChar(CP_UTF8, 0, uiStrings.info, strlen(uiStrings.info) + 1,
+                      szwInfo, sizeof(szwInfo)/sizeof(szwInfo[0]));
+
+  SetWindowTextW(hDlg, szwTitle);
+  SetWindowTextW(GetDlgItem(hDlg, IDC_INFO), szwInfo);
 
   // Set dialog icon
   HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_DIALOG));
@@ -146,6 +200,9 @@ InitDialog(HWND hDlg)
     SendMessage(hDlg, WM_SETICON, ICON_BIG, (LPARAM) hIcon);
 
   SendDlgItemMessage(hDlg, IDC_PROGRESS, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
+
+  // Resize dialog to fit all the text.
+  ResizeDialogToFit(hDlg);
 
   CenterDialog(hDlg);  // make dialog appear in the center of the screen
 
@@ -165,10 +222,6 @@ DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
   case WM_TIMER:
     if (sQuit) {
       EndDialog(hDlg, 0);
-      if (sSystemFont) {
-        DeleteObject(sSystemFont);
-        sSystemFont = 0;
-      }
     } else {
       UpdateDialog(hDlg);
     }
@@ -181,7 +234,7 @@ DialogProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 }
 
 int
-InitProgressUI(int *argc, char ***argv)
+InitProgressUI(int *argc, NS_tchar ***argv)
 {
   return 0;
 }
@@ -198,10 +251,10 @@ ShowProgressUI()
     return 0;
 
   // If we do not have updater.ini, then we should not bother showing UI.
-  char filename[MAX_PATH];
+  WCHAR filename[MAX_PATH];
   if (!GetStringsFile(filename))
     return -1;
-  if (_access(filename, 04))
+  if (_waccess(filename, 04))
     return -1;
 
   INITCOMMONCONTROLSEX icc = {

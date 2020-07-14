@@ -57,9 +57,6 @@
 #include "secerr.h"
 #include "sslerr.h"
 
-#ifndef NSS_3_4_CODE
-#define NSS_3_4_CODE
-#endif /* NSS_3_4_CODE */
 #include "pki3hack.h"
 #include "dev3hack.h"
 
@@ -253,21 +250,26 @@ pk11_isID0(PK11SlotInfo *slot, CK_OBJECT_HANDLE certID)
 
 /*
  * Create an NSSCertificate from a slot/certID pair, return it as a
- * CERTCertificate.
+ * CERTCertificate.  Optionally, output the nickname string.
  */
-static CERTCertificate
-*pk11_fastCert(PK11SlotInfo *slot, CK_OBJECT_HANDLE certID, 
-			CK_ATTRIBUTE *privateLabel, char **nickptr)
+static CERTCertificate *
+pk11_fastCert(PK11SlotInfo *slot, CK_OBJECT_HANDLE certID, 
+	      CK_ATTRIBUTE *privateLabel, char **nickptr)
 {
     NSSCertificate *c;
-    nssCryptokiObject *co;
+    nssCryptokiObject *co = NULL;
     nssPKIObject *pkio;
     NSSToken *token;
     NSSTrustDomain *td = STAN_GetDefaultTrustDomain();
+    PRStatus status;
 
     /* Get the cryptoki object from the handle */
     token = PK11Slot_GetNSSToken(slot);
-    co = nssCryptokiObject_Create(token, token->defaultSession, certID);
+    if (token->defaultSession) {
+	co = nssCryptokiObject_Create(token, token->defaultSession, certID);
+    } else {
+	PORT_SetError(SEC_ERROR_NO_TOKEN);
+    }
     if (!co) {
 	return NULL;
     }
@@ -286,19 +288,30 @@ static CERTCertificate
 	return NULL;
     }
 
-    nssTrustDomain_AddCertsToCache(td, &c, 1);
-
-    /* Build the old-fashioned nickname */
+    /* Build and output a nickname, if desired. 
+     * This must be done before calling nssTrustDomain_AddCertsToCache
+     * because that function may destroy c, pkio and co!
+     */
     if ((nickptr) && (co->label)) {
 	CK_ATTRIBUTE label, id;
+
 	label.type = CKA_LABEL;
 	label.pValue = co->label;
 	label.ulValueLen = PORT_Strlen(co->label);
+
 	id.type = CKA_ID;
 	id.pValue = c->id.data;
 	id.ulValueLen = c->id.size;
+
 	*nickptr = pk11_buildNickname(slot, &label, privateLabel, &id);
     }
+
+    /* This function may destroy the cert in "c" and all its subordinate
+     * structures, and replace the value in "c" with the address of a 
+     * different NSSCertificate that it found in the cache.
+     * Presumably, the nickname which we just output above remains valid. :)
+     */
+    status = nssTrustDomain_AddCertsToCache(td, &c, 1);
     return STAN_GetCERTCertificateOrRelease(c);
 }
 
@@ -317,11 +330,12 @@ PK11_MakeCertFromHandle(PK11SlotInfo *slot,CK_OBJECT_HANDLE certID,
     PRBool swapNickname = PR_FALSE;
 
     cert = pk11_fastCert(slot,certID,privateLabel, &nickname);
-    if (cert == NULL) goto loser;
+    if (cert == NULL) 
+    	goto loser;
 	
     if (nickname) {
 	if (cert->nickname != NULL) {
-		cert->dbnickname = cert->nickname;
+	    cert->dbnickname = cert->nickname;
 	} 
 	cert->nickname = PORT_ArenaStrdup(cert->arena,nickname);
 	PORT_Free(nickname);
@@ -340,11 +354,10 @@ PK11_MakeCertFromHandle(PK11SlotInfo *slot,CK_OBJECT_HANDLE certID,
     }
 
     trust = (CERTCertTrust*)PORT_ArenaAlloc(cert->arena, sizeof(CERTCertTrust));
-    if (trust == NULL) goto loser;
+    if (trust == NULL) 
+    	goto loser;
     PORT_Memset(trust,0, sizeof(CERTCertTrust));
     cert->trust = trust;
-
-    
 
     if(! pk11_HandleTrustObject(slot, cert, trust) ) {
 	unsigned int type;
@@ -357,8 +370,7 @@ PK11_MakeCertFromHandle(PK11SlotInfo *slot,CK_OBJECT_HANDLE certID,
 	     * valid CA's which are self-signed here. They must have an object
 	     * ID of '0'.  */ 
 	    if (pk11_isID0(slot,certID) && 
-		SECITEM_CompareItem(&cert->derSubject,&cert->derIssuer)
-							   == SECEqual) {
+		cert->isRoot) {
 		trustflags |= CERTDB_TRUSTED_CA;
 		/* is the slot a fortezza card? allow the user or
 		 * admin to turn on objectSigning, but don't turn
@@ -386,12 +398,13 @@ PK11_MakeCertFromHandle(PK11SlotInfo *slot,CK_OBJECT_HANDLE certID,
 	trust->emailFlags |= CERTDB_USER;
 	/*    trust->objectSigningFlags |= CERTDB_USER; */
     }
-
     return cert;
 
 loser:
-    if (nickname) PORT_Free(nickname);
-    if (cert) CERT_DestroyCertificate(cert);
+    if (nickname) 
+    	PORT_Free(nickname);
+    if (cert) 
+    	CERT_DestroyCertificate(cert);
     return NULL;
 }
 
@@ -524,7 +537,7 @@ transfer_token_certs_to_collection(nssList *certList, NSSToken *token,
 }
 
 CERTCertificate *
-PK11_FindCertFromNickname(char *nickname, void *wincx) 
+PK11_FindCertFromNickname(const char *nickname, void *wincx) 
 {
     PRStatus status;
     CERTCertificate *rvCert = NULL;
@@ -540,6 +553,10 @@ PK11_FindCertFromNickname(char *nickname, void *wincx)
     char *tokenName;
 
     nickCopy = PORT_Strdup(nickname);
+    if (!nickCopy) {
+        /* error code is set */
+        return NULL;
+    }
     if ((delimit = PORT_Strchr(nickCopy,':')) != NULL) {
 	tokenName = nickCopy;
 	nickname = delimit + 1;
@@ -547,7 +564,9 @@ PK11_FindCertFromNickname(char *nickname, void *wincx)
 	/* find token by name */
 	token = NSSTrustDomain_FindTokenByName(defaultTD, (NSSUTF8 *)tokenName);
 	if (token) {
-		slot = PK11_ReferenceSlot(token->pk11slot);
+	    slot = PK11_ReferenceSlot(token->pk11slot);
+	} else {
+	    PORT_SetError(SEC_ERROR_NO_TOKEN);
 	}
 	*delimit = ':';
     } else {
@@ -635,7 +654,7 @@ loser:
 }
 
 CERTCertList *
-PK11_FindCertsFromNickname(char *nickname, void *wincx) 
+PK11_FindCertsFromNickname(const char *nickname, void *wincx) 
 {
     char *nickCopy;
     char *delimit = NULL;
@@ -651,6 +670,10 @@ PK11_FindCertsFromNickname(char *nickname, void *wincx)
     SECStatus rv;
 
     nickCopy = PORT_Strdup(nickname);
+    if (!nickCopy) {
+        /* error code is set */
+        return NULL;
+    }
     if ((delimit = PORT_Strchr(nickCopy,':')) != NULL) {
 	tokenName = nickCopy;
 	nickname = delimit + 1;
@@ -660,6 +683,7 @@ PK11_FindCertsFromNickname(char *nickname, void *wincx)
 	if (token) {
 	    slot = PK11_ReferenceSlot(token->pk11slot);
 	} else {
+	    PORT_SetError(SEC_ERROR_NO_TOKEN);
 	    slot = NULL;
 	}
 	*delimit = ':';
@@ -738,15 +762,19 @@ PK11_FindCertsFromNickname(char *nickname, void *wincx)
 	PRTime now = PR_Now();
 	certList = CERT_NewCertList();
 	for (i=0, c = *foundCerts; c; c = foundCerts[++i]) {
-	    CERTCertificate *certCert = STAN_GetCERTCertificateOrRelease(c);
-	    /* c may be invalid after this, don't reference it */
-	    if (certCert) {
-	        /* CERT_AddCertToListSorted adopts certCert  */
-		CERT_AddCertToListSorted(certList, certCert,
-			CERT_SortCBValidity, &now);
+	    if (certList) {
+	 	CERTCertificate *certCert = STAN_GetCERTCertificateOrRelease(c);
+		/* c may be invalid after this, don't reference it */
+		if (certCert) {
+		    /* CERT_AddCertToListSorted adopts certCert  */
+		    CERT_AddCertToListSorted(certList, certCert,
+				CERT_SortCBValidity, &now);
+		}
+	    } else {
+		nssCertificate_Destroy(c);
 	    }
 	}
-	if (CERT_LIST_HEAD(certList) == NULL) {
+	if (certList && CERT_LIST_HEAD(certList) == NULL) {
 	    CERT_DestroyCertList(certList);
 	    certList = NULL;
 	}
@@ -762,7 +790,8 @@ PK11_FindCertsFromNickname(char *nickname, void *wincx)
  * pkcs11 to extract the public key (we currently do not), this will break.
  */
 SECItem *
-PK11_GetPubIndexKeyID(CERTCertificate *cert) {
+PK11_GetPubIndexKeyID(CERTCertificate *cert) 
+{
     SECKEYPublicKey *pubk;
     SECItem *newItem = NULL;
 
@@ -795,7 +824,8 @@ PK11_GetPubIndexKeyID(CERTCertificate *cert) {
  * generate a CKA_ID from a certificate.
  */
 SECItem *
-pk11_mkcertKeyID(CERTCertificate *cert) {
+pk11_mkcertKeyID(CERTCertificate *cert) 
+{
     SECItem *pubKeyData = PK11_GetPubIndexKeyID(cert) ;
     SECItem *certCKA_ID;
 
@@ -811,7 +841,8 @@ pk11_mkcertKeyID(CERTCertificate *cert) {
  */
 SECStatus
 PK11_ImportCert(PK11SlotInfo *slot, CERTCertificate *cert, 
-		CK_OBJECT_HANDLE key, char *nickname, PRBool includeTrust) 
+		CK_OBJECT_HANDLE key, const char *nickname, 
+                PRBool includeTrust) 
 {
     PRStatus status;
     NSSCertificate *c;
@@ -823,6 +854,10 @@ PK11_ImportCert(PK11SlotInfo *slot, CERTCertificate *cert,
     nssCertificateStoreTrace unlockTrace = {NULL, NULL, PR_FALSE, PR_FALSE};
 
     if (keyID == NULL) {
+	goto loser; /* error code should be set already */
+    }
+    if (!token) {
+    	PORT_SetError(SEC_ERROR_NO_TOKEN);
 	goto loser;
     }
 
@@ -835,18 +870,9 @@ PK11_ImportCert(PK11SlotInfo *slot, CERTCertificate *cert,
 	c = cert->nssCertificate;
     } else {
 	c = STAN_GetNSSCertificate(cert);
-    }
-
-    if (c->object.cryptoContext) {
-	/* Delete the temp instance */
-	NSSCryptoContext *cc = c->object.cryptoContext;
-	nssCertificateStore_Lock(cc->certStore, &lockTrace);
-	nssCertificateStore_RemoveCertLOCKED(cc->certStore, c);
-	nssCertificateStore_Unlock(cc->certStore, &lockTrace, &unlockTrace);
-        nssCertificateStore_Check(&lockTrace, &unlockTrace);
-	c->object.cryptoContext = NULL;
-	cert->istemp = PR_FALSE;
-	cert->isperm = PR_TRUE;
+	if (c == NULL) {
+	    goto loser;
+	}
     }
 
     /* set the id for the cert */
@@ -893,6 +919,18 @@ PK11_ImportCert(PK11SlotInfo *slot, CERTCertificate *cert,
 	}
 	goto loser;
     }
+
+    if (c->object.cryptoContext) {
+	/* Delete the temp instance */
+	NSSCryptoContext *cc = c->object.cryptoContext;
+	nssCertificateStore_Lock(cc->certStore, &lockTrace);
+	nssCertificateStore_RemoveCertLOCKED(cc->certStore, c);
+	nssCertificateStore_Unlock(cc->certStore, &lockTrace, &unlockTrace);
+	c->object.cryptoContext = NULL;
+	cert->istemp = PR_FALSE;
+	cert->isperm = PR_TRUE;
+    }
+
     /* add the new instance to the cert, force an update of the
      * CERTCertificate, and finish
      */
@@ -902,14 +940,18 @@ PK11_ImportCert(PK11SlotInfo *slot, CERTCertificate *cert,
     SECITEM_FreeItem(keyID,PR_TRUE);
     return SECSuccess;
 loser:
+    CERT_MapStanError();
     SECITEM_FreeItem(keyID,PR_TRUE);
-    PORT_SetError(SEC_ERROR_ADDING_CERT);
+    if (PORT_GetError() != SEC_ERROR_TOKEN_NOT_LOGGED_IN) {
+	PORT_SetError(SEC_ERROR_ADDING_CERT);
+    }
     return SECFailure;
 }
 
 SECStatus
 PK11_ImportDERCert(PK11SlotInfo *slot, SECItem *derCert,
-		CK_OBJECT_HANDLE key, char *nickname, PRBool includeTrust) {
+		CK_OBJECT_HANDLE key, char *nickname, PRBool includeTrust) 
+{
     CERTCertificate *cert;
     SECStatus rv;
 
@@ -950,7 +992,8 @@ pk11_getcerthandle(PK11SlotInfo *slot, CERTCertificate *cert,
  */
 SECKEYPrivateKey *
 PK11_FindPrivateKeyFromCert(PK11SlotInfo *slot, CERTCertificate *cert,
-								 void *wincx) {
+								 void *wincx) 
+{
     int err;
     CK_OBJECT_CLASS certClass = CKO_CERTIFICATE;
     CK_ATTRIBUTE theTemplate[] = {
@@ -1012,7 +1055,8 @@ PK11_FindPrivateKeyFromCert(PK11SlotInfo *slot, CERTCertificate *cert,
  */
 PK11SlotInfo *
 PK11_KeyForCertExists(CERTCertificate *cert, CK_OBJECT_HANDLE *keyPtr, 
-								void *wincx) {
+								void *wincx) 
+{
     PK11SlotList *list;
     PK11SlotListElement *le;
     SECItem *keyID;
@@ -1067,7 +1111,8 @@ PK11_KeyForCertExists(CERTCertificate *cert, CK_OBJECT_HANDLE *keyPtr,
  */
 PK11SlotInfo *
 PK11_KeyForDERCertExists(SECItem *derCert, CK_OBJECT_HANDLE *keyPtr, 
-								void *wincx) {
+								void *wincx) 
+{
     CERTCertificate *cert;
     PK11SlotInfo *slot = NULL;
 
@@ -1083,7 +1128,9 @@ PK11_KeyForDERCertExists(SECItem *derCert, CK_OBJECT_HANDLE *keyPtr,
 }
 
 PK11SlotInfo *
-PK11_ImportCertForKey(CERTCertificate *cert, char *nickname,void *wincx) {
+PK11_ImportCertForKey(CERTCertificate *cert, const char *nickname,
+                      void *wincx) 
+{
     PK11SlotInfo *slot = NULL;
     CK_OBJECT_HANDLE key;
 
@@ -1102,7 +1149,8 @@ PK11_ImportCertForKey(CERTCertificate *cert, char *nickname,void *wincx) {
 }
 
 PK11SlotInfo *
-PK11_ImportDERCertForKey(SECItem *derCert, char *nickname,void *wincx) {
+PK11_ImportDERCertForKey(SECItem *derCert, char *nickname,void *wincx) 
+{
     CERTCertificate *cert;
     PK11SlotInfo *slot = NULL;
 
@@ -1117,7 +1165,8 @@ PK11_ImportDERCertForKey(SECItem *derCert, char *nickname,void *wincx) {
 
 static CK_OBJECT_HANDLE
 pk11_FindCertObjectByTemplate(PK11SlotInfo **slotPtr, 
-		CK_ATTRIBUTE *searchTemplate, int count, void *wincx) {
+		CK_ATTRIBUTE *searchTemplate, int count, void *wincx) 
+{
     PK11SlotList *list;
     PK11SlotListElement *le;
     CK_OBJECT_HANDLE certHandle = CK_INVALID_HANDLE;
@@ -1169,6 +1218,14 @@ PK11_FindCertByIssuerAndSNOnToken(PK11SlotInfo *slot,
     SECItem *derSerial;
     PRStatus status;
 
+    if (!issuerSN || !issuerSN->derIssuer.data || !issuerSN->derIssuer.len ||
+        !issuerSN->serialNumber.data || !issuerSN->serialNumber.len || 
+	issuerSN->derIssuer.len    > CERT_MAX_DN_BYTES ||
+	issuerSN->serialNumber.len > CERT_MAX_SERIAL_NUMBER_BYTES ) {
+    	PORT_SetError(SEC_ERROR_INVALID_ARGS);
+	return NULL;
+    }
+
     /* Paranoia */
     if (token == NULL) {
 	PORT_SetError(SEC_ERROR_NO_TOKEN);
@@ -1182,7 +1239,7 @@ PK11_FindCertByIssuerAndSNOnToken(PK11SlotInfo *slot,
      */
     derSerial = SEC_ASN1EncodeItem(NULL, NULL,
                                    &issuerSN->serialNumber,
-                                   SEC_IntegerTemplate);
+                                   SEC_ASN1_GET(SEC_IntegerTemplate));
     if (!derSerial) {
 	return NULL;
     }
@@ -1350,7 +1407,8 @@ pk11_FindCertObjectByRecipient(PK11SlotInfo *slot,
 static CERTCertificate *
 pk11_AllFindCertObjectByRecipient(PK11SlotInfo **slotPtr, 
 	SEC_PKCS7RecipientInfo **recipientArray,SEC_PKCS7RecipientInfo **rip,
-							void *wincx) {
+							void *wincx) 
+{
     PK11SlotList *list;
     PK11SlotListElement *le;
     CERTCertificate * cert = NULL;
@@ -1504,6 +1562,14 @@ PK11_FindCertByIssuerAndSN(PK11SlotInfo **slotPtr, CERTIssuerAndSN *issuerSN,
     NSSCryptoContext *cc;
     SECItem *derSerial;
 
+    if (!issuerSN || !issuerSN->derIssuer.data || !issuerSN->derIssuer.len ||
+        !issuerSN->serialNumber.data || !issuerSN->serialNumber.len || 
+	issuerSN->derIssuer.len    > CERT_MAX_DN_BYTES ||
+	issuerSN->serialNumber.len > CERT_MAX_SERIAL_NUMBER_BYTES ) {
+    	PORT_SetError(SEC_ERROR_INVALID_ARGS);
+	return NULL;
+    }
+
     if (slotPtr) *slotPtr = NULL;
 
     /* PKCS#11 needs to use DER-encoded serial numbers.  Create a
@@ -1512,7 +1578,7 @@ PK11_FindCertByIssuerAndSN(PK11SlotInfo **slotPtr, CERTIssuerAndSN *issuerSN,
      */
     derSerial = SEC_ASN1EncodeItem(NULL, NULL,
                                    &issuerSN->serialNumber,
-                                   SEC_IntegerTemplate);
+                                   SEC_ASN1_GET(SEC_IntegerTemplate));
     if (!derSerial) {
 	return NULL;
     }
@@ -1671,6 +1737,11 @@ PK11_NumberCertsForCertSubject(CERTCertificate *cert)
 	PK11SlotListElement *le;
 	int count = 0;
 
+	if (!list) {
+            /* error code is set */
+            return 0;
+	}
+
 	/* loop through all the fortezza tokens */
 	for (le = list->head; le; le = le->next) {
 	    count += PK11_NumberObjectsFor(le->slot,theTemplate,templateSize);
@@ -1697,6 +1768,10 @@ PK11_TraverseCertsForSubject(CERTCertificate *cert,
 							PR_FALSE,PR_TRUE,NULL);
 	PK11SlotListElement *le;
 
+	if (!list) {
+            /* error code is set */
+            return SECFailure;
+	}
 	/* loop through all the tokens */
 	for (le = list->head; le; le = le->next) {
 	    PK11_TraverseCertsForSubjectInSlot(cert,le->slot,callback,arg);
@@ -1870,10 +1945,10 @@ PK11_TraverseCertsInSlot(PK11SlotInfo *slot,
 	nssPKIObjectCollection_Destroy(collection);
 	return SECFailure;
     }
-    (void *)nssTrustDomain_GetCertsFromCache(td, certList);
+    (void)nssTrustDomain_GetCertsFromCache(td, certList);
     transfer_token_certs_to_collection(certList, tok, collection);
-    instances = nssToken_FindCertificates(tok, NULL,
-                                          tokenOnly, 0, &nssrv);
+    instances = nssToken_FindObjects(tok, NULL, CKO_CERTIFICATE,
+                                     tokenOnly, 0, &nssrv);
     nssPKIObjectCollection_AddInstances(collection, instances, 0);
     nss_ZFreeIf(instances);
     nssList_Destroy(certList);
@@ -1947,46 +2022,6 @@ PK11_FindCertFromDERCertItem(PK11SlotInfo *slot, SECItem *inDerCert,
     }
     return c ? STAN_GetCERTCertificateOrRelease(c) : NULL;
 } 
-
-/* mcgreer 3.4 -- nobody uses this, ignoring */
-/*
- * return the certificate associated with a derCert 
- */
-CERTCertificate *
-PK11_FindCertFromDERSubjectAndNickname(PK11SlotInfo *slot, 
-					CERTCertificate *cert, 
-					char *nickname, void *wincx)
-{
-    CK_OBJECT_CLASS certClass = CKO_CERTIFICATE;
-    CK_ATTRIBUTE theTemplate[] = {
-	{ CKA_SUBJECT, NULL, 0 },
-	{ CKA_LABEL, NULL, 0 },
-	{ CKA_CLASS, NULL, 0 }
-    };
-    /* if you change the array, change the variable below as well */
-    int tsize = sizeof(theTemplate)/sizeof(theTemplate[0]);
-    CK_OBJECT_HANDLE certh;
-    CK_ATTRIBUTE *attrs = theTemplate;
-    SECStatus rv;
-
-    PK11_SETATTRS(attrs, CKA_SUBJECT, cert->derSubject.data, 
-						cert->derSubject.len); attrs++;
-    PK11_SETATTRS(attrs, CKA_LABEL, nickname, PORT_Strlen(nickname));
-    PK11_SETATTRS(attrs, CKA_CLASS, &certClass, sizeof(certClass));
-
-    /*
-     * issue the find
-     */
-    rv = pk11_AuthenticateUnfriendly(slot, PR_TRUE, wincx);
-    if (rv != SECSuccess) return NULL;
-
-    certh = pk11_getcerthandle(slot,cert,theTemplate,tsize);
-    if (certh == CK_INVALID_HANDLE) {
-	return NULL;
-    }
-
-    return PK11_MakeCertFromHandle(slot, certh, NULL);
-}
 
 /*
  * import a cert for a private key we have already generated. Set the label
@@ -2085,7 +2120,8 @@ KEAPQGCompare(CERTCertificate *server,CERTCertificate *cert) {
 }
 
 PRBool
-PK11_FortezzaHasKEA(CERTCertificate *cert) {
+PK11_FortezzaHasKEA(CERTCertificate *cert) 
+{
    /* look at the subject and see if it is a KEA for MISSI key */
    SECOidData *oid;
 
@@ -2095,7 +2131,9 @@ PK11_FortezzaHasKEA(CERTCertificate *cert) {
    }
 
    oid = SECOID_FindOID(&cert->subjectPublicKeyInfo.algorithm.algorithm);
-
+   if (!oid) {
+       return PR_FALSE;
+   }
 
    return (PRBool)((oid->offset == SEC_OID_MISSI_KEA_DSS_OLD) || 
 		(oid->offset == SEC_OID_MISSI_KEA_DSS) ||
@@ -2136,6 +2174,11 @@ PK11_FindBestKEAMatch(CERTCertificate *server, void *wincx)
     PK11SlotListElement *le;
     CERTCertificate *returnedCert = NULL;
     SECStatus rv;
+
+    if (!keaList) {
+        /* error code is set */
+        return NULL;
+    }
 
     /* loop through all the fortezza tokens */
     for (le = keaList->head; le; le = le->next) {
@@ -2209,39 +2252,10 @@ PK11_FindCertInSlot(PK11SlotInfo *slot, CERTCertificate *cert, void *wincx)
     return pk11_getcerthandle(slot,cert,theTemplate,tsize);
 }
 
-SECItem *
-PK11_GetKeyIDFromCert(CERTCertificate *cert, void *wincx)
-{
-    CK_OBJECT_HANDLE handle;
-    PK11SlotInfo *slot = NULL;
-    CK_ATTRIBUTE theTemplate[] = {
-	{ CKA_ID, NULL, 0 },
-    };
-    int tsize = sizeof(theTemplate)/sizeof(theTemplate[0]);
-    SECItem *item = NULL;
-    CK_RV crv;
+/* Looking for PK11_GetKeyIDFromCert?  
+ * Use PK11_GetLowLevelKeyIDForCert instead.
+ */
 
-    handle = PK11_FindObjectForCert(cert,wincx,&slot);
-    if (handle == CK_INVALID_HANDLE) {
-	goto loser;
-    }
-
-    crv = PK11_GetAttributes(NULL,slot,handle,theTemplate,tsize);
-    if (crv != CKR_OK) {
-	PORT_SetError( PK11_MapError(crv) );
-	goto loser;
-    }
-
-    item = PORT_ZNew(SECItem);
-    if (item) {
-        item->data = (unsigned char*) theTemplate[0].pValue;
-        item->len = theTemplate[0].ulValueLen;
-    }
-
-loser:
-    PK11_FreeSlot(slot);
-    return item;
-}
 
 struct listCertsStr {
     PK11CertListType type;
@@ -2409,6 +2423,9 @@ listCertsCallback(CERTCertificate* cert, void*arg)
     nssCryptokiObject **instances;
     NSSCertificate *c = STAN_GetNSSCertificate(cert);
 
+    if (c == NULL) {
+        return SECFailure;
+    }
     instances = nssPKIObject_GetInstances(&c->object);
     if (!instances) {
         return SECFailure;
@@ -2457,3 +2474,53 @@ PK11_ListCertsInSlot(PK11SlotInfo *slot)
     return certs;
 }
 
+PK11SlotList *
+PK11_GetAllSlotsForCert(CERTCertificate *cert, void *arg)
+{
+    nssCryptokiObject **ip;
+    PK11SlotList *slotList;
+    NSSCertificate *c;
+    nssCryptokiObject **instances;
+    PRBool found = PR_FALSE;
+
+    if (!cert) {
+	PORT_SetError(SEC_ERROR_INVALID_ARGS);
+	return NULL;
+    }
+
+    c = STAN_GetNSSCertificate(cert);
+    if (!c) {
+	CERT_MapStanError();
+	return NULL;
+    }
+
+    /* add multiple instances to the cert list */
+    instances = nssPKIObject_GetInstances(&c->object);
+    if (!instances) {
+	PORT_SetError(SEC_ERROR_NO_TOKEN);
+	return NULL;
+    }
+
+    slotList = PK11_NewSlotList();
+    if (!slotList) {
+	nssCryptokiObjectArray_Destroy(instances);
+	return NULL;
+    }
+
+    for (ip = instances; *ip; ip++) {
+	nssCryptokiObject *instance = *ip;
+	PK11SlotInfo *slot = instance->token->pk11slot;
+	if (slot) {
+	    PK11_AddSlotToList(slotList, slot);
+	    found = PR_TRUE;
+	}
+    }
+    if (!found) {
+	PK11_FreeSlotList(slotList);
+	PORT_SetError(SEC_ERROR_NO_TOKEN);
+	slotList = NULL;
+    }
+
+    nssCryptokiObjectArray_Destroy(instances);
+    return slotList;
+}

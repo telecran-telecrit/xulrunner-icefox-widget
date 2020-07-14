@@ -42,16 +42,7 @@ VPATH		= @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-DIRS		= unicharutil uconv locale strres lwbrk chardet build
-
-# Sun's Complex Text Layout support
-ifdef SUNCTL
-DIRS		+= ctl
-endif
-
-ifeq ($(OS_ARCH),WINNT)
-DIRS		+= compatibility
-endif
+DIRS		= unicharutil uconv locale strres lwbrk build
 
 include $(topsrcdir)/config/rules.mk
 

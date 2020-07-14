@@ -45,7 +45,7 @@ class nsSharedPageData;
 class nsPageContentFrame : public ViewportFrame {
 
 public:
-  friend nsresult NS_NewPageContentFrame(nsIPresShell* aPresShell, nsIFrame** aResult);
+  friend nsIFrame* NS_NewPageContentFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
   friend class nsPageFrame;
 
   // nsIFrame
@@ -54,22 +54,28 @@ public:
                      const nsHTMLReflowState& aMaxSize,
                      nsReflowStatus&      aStatus);
 
-  NS_IMETHOD  Paint(nsPresContext*      aPresContext,
-                    nsIRenderingContext& aRenderingContext,
-                    const nsRect&        aDirtyRect,
-                    nsFramePaintLayer    aWhichLayer,
-                    PRUint32             aFlags = 0);
-
   virtual PRBool IsContainingBlock() const;
-
-  virtual void  SetClipRect(nsRect* aClipRect) { mClipRect = *aClipRect; }
+  virtual PRBool IsFrameOfType(PRUint32 aFlags) const
+  {
+    return ViewportFrame::IsFrameOfType(aFlags &
+             ~(nsIFrame::eCanContainOverflowContainers));
+  }
 
   virtual void SetSharedPageData(nsSharedPageData* aPD) { mPD = aPD; }
 
   /**
+   *  Computes page size based on shared page data; SetSharedPageData must be
+   *  given valid data first.
+   */
+  virtual nsSize ComputeSize(nsIRenderingContext *aRenderingContext,
+                             nsSize aCBSize, nscoord aAvailableWidth,
+                             nsSize aMargin, nsSize aBorder, nsSize aPadding,
+                             PRBool aShrinkWrap);
+
+  /**
    * Get the "type" of the frame
    *
-   * @see nsLayoutAtoms::pageFrame
+   * @see nsGkAtoms::pageContentFrame
    */
   virtual nsIAtom* GetType() const;
   
@@ -79,9 +85,8 @@ public:
 #endif
 
 protected:
-  nsPageContentFrame();
+  nsPageContentFrame(nsStyleContext* aContext) : ViewportFrame(aContext) {}
 
-  nsRect                    mClipRect;
   nsSharedPageData*         mPD;
 };
 

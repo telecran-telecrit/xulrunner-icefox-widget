@@ -36,8 +36,31 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/* implementation of quotes for the CSS 'content' property */
+
 #include "nsQuoteList.h"
 #include "nsReadableUtils.h"
+
+PRBool
+nsQuoteNode::InitTextFrame(nsGenConList* aList, nsIFrame* aPseudoFrame,
+                           nsIFrame* aTextFrame)
+{
+  nsGenConNode::InitTextFrame(aList, aPseudoFrame, aTextFrame);
+
+  nsQuoteList* quoteList = static_cast<nsQuoteList*>(aList);
+  PRBool dirty = PR_FALSE;
+  quoteList->Insert(this);
+  if (quoteList->IsLast(this))
+    quoteList->Calc(this);
+  else
+    dirty = PR_TRUE;
+
+  // Don't set up text for 'no-open-quote' and 'no-close-quote'.
+  if (IsRealQuote()) {
+    aTextFrame->GetContent()->SetText(*Text(), PR_FALSE);
+  }
+  return dirty;
+}
 
 const nsString*
 nsQuoteNode::Text()
@@ -89,7 +112,7 @@ nsQuoteList::RecalcAll()
     PRInt32 oldDepth = node->mDepthBefore;
     Calc(node);
 
-    if (node->mDepthBefore != oldDepth && node->mText)
+    if (node->mDepthBefore != oldDepth && node->mText && node->IsRealQuote())
       node->mText->SetData(*node->Text());
 
     // Next node
@@ -107,7 +130,7 @@ nsQuoteList::PrintChain()
   }
   nsQuoteNode* node = FirstNode();
   do {
-    printf("  %p %d - ", NS_STATIC_CAST(void*, node), node->mDepthBefore);
+    printf("  %p %d - ", static_cast<void*>(node), node->mDepthBefore);
     switch(node->mType) {
         case (eStyleContentType_OpenQuote):
           printf("open");
@@ -128,7 +151,7 @@ nsQuoteList::PrintChain()
     if (node->mText) {
       nsAutoString data;
       node->mText->GetData(data);
-      printf(" \"%s\",", NS_ConvertUCS2toUTF8(data).get());
+      printf(" \"%s\",", NS_ConvertUTF16toUTF8(data).get());
     }
     printf("\n");
     node = Next(node);

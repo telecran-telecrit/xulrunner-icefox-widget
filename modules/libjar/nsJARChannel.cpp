@@ -21,6 +21,7 @@
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
+ *   Jeff Walden <jwalden+code@mit.edu>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -36,11 +37,17 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+#include "nsJAR.h"
 #include "nsJARChannel.h"
 #include "nsJARProtocolHandler.h"
 #include "nsMimeTypes.h"
 #include "nsNetUtil.h"
 #include "nsInt64.h"
+#include "nsEscape.h"
+#include "nsIPrefService.h"
+#include "nsIPrefBranch.h"
+#include "nsIViewSourceChannel.h"
+#include "nsChannelProperties.h"
 
 #include "nsIScriptSecurityManager.h"
 #include "nsIPrincipal.h"
@@ -48,6 +55,11 @@
 #include "nsIJAR.h"
 
 static NS_DEFINE_CID(kZipReaderCID, NS_ZIPREADER_CID);
+
+// the entry for a directory will either be empty (in the case of the
+// top-level directory) or will end with a slash
+#define ENTRY_IS_DIRECTORY(_entry) \
+  ((_entry).IsEmpty() || '/' == (_entry).Last())
 
 //-----------------------------------------------------------------------------
 
@@ -73,10 +85,13 @@ public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIINPUTSTREAM
 
-    nsJARInputThunk(nsIFile *jarFile, const nsACString &jarEntry,
+    nsJARInputThunk(nsIFile *jarFile,
+                    nsIURI* fullJarURI,
+                    const nsACString &jarEntry,
                     nsIZipReaderCache *jarCache)
         : mJarCache(jarCache)
         , mJarFile(jarFile)
+        , mFullJarURI(fullJarURI)
         , mJarEntry(jarEntry)
         , mContentLength(-1)
     {
@@ -106,6 +121,7 @@ private:
     nsCOMPtr<nsIZipReaderCache> mJarCache;
     nsCOMPtr<nsIZipReader>      mJarReader;
     nsCOMPtr<nsIFile>           mJarFile;
+    nsCOMPtr<nsIURI>            mFullJarURI;
     nsCOMPtr<nsIInputStream>    mJarStream;
     nsCString                   mJarEntry;
     PRInt32                     mContentLength;
@@ -127,16 +143,33 @@ nsJARInputThunk::EnsureJarStream()
         mJarReader = do_CreateInstance(kZipReaderCID, &rv);
         if (NS_FAILED(rv)) return rv;
 
-        rv = mJarReader->Init(mJarFile);
-        if (NS_FAILED(rv)) return rv;
-
-        rv = mJarReader->Open();
+        rv = mJarReader->Open(mJarFile);
     }
     if (NS_FAILED(rv)) return rv;
 
-    rv = mJarReader->GetInputStream(mJarEntry.get(),
-                                    getter_AddRefs(mJarStream));
-    if (NS_FAILED(rv)) return rv;
+    if (ENTRY_IS_DIRECTORY(mJarEntry)) {
+        // A directory stream also needs the Spec of the FullJarURI
+        // because is included in the stream data itself.
+
+        nsCAutoString jarDirSpec;
+        rv = mFullJarURI->GetAsciiSpec(jarDirSpec);
+        if (NS_FAILED(rv)) return rv;
+
+        rv = mJarReader->GetInputStreamWithSpec(jarDirSpec,
+                                                mJarEntry.get(),
+                                                getter_AddRefs(mJarStream));
+    }
+    else {
+        rv = mJarReader->GetInputStream(mJarEntry.get(),
+                                        getter_AddRefs(mJarStream));
+    }
+    if (NS_FAILED(rv)) {
+        // convert to the proper result if the entry wasn't found
+        // so that error pages work
+        if (rv == NS_ERROR_FILE_TARGET_DOES_NOT_EXIST)
+            rv = NS_ERROR_FILE_NOT_FOUND;
+        return rv;
+    }
 
     // ask the JarStream for the content length
     mJarStream->Available((PRUint32 *) &mContentLength);
@@ -187,12 +220,16 @@ nsJARInputThunk::IsNonBlocking(PRBool *nonBlocking)
 }
 
 //-----------------------------------------------------------------------------
+// nsJARChannel
+//-----------------------------------------------------------------------------
+
 
 nsJARChannel::nsJARChannel()
     : mContentLength(-1)
     , mLoadFlags(LOAD_NORMAL)
     , mStatus(NS_OK)
     , mIsPending(PR_FALSE)
+    , mIsUnsafe(PR_TRUE)
     , mJarInput(nsnull)
 {
 #if defined(PR_LOGGING)
@@ -214,21 +251,28 @@ nsJARChannel::~nsJARChannel()
     NS_RELEASE(handler); // NULL parameter
 }
 
-NS_IMPL_ISUPPORTS6(nsJARChannel,
-                   nsIRequest,
-                   nsIChannel,
-                   nsIStreamListener,
-                   nsIRequestObserver,
-                   nsIDownloadObserver,
-                   nsIJARChannel)
+NS_IMPL_ISUPPORTS_INHERITED6(nsJARChannel,
+                             nsHashPropertyBag,
+                             nsIRequest,
+                             nsIChannel,
+                             nsIStreamListener,
+                             nsIRequestObserver,
+                             nsIDownloadObserver,
+                             nsIJARChannel)
 
 nsresult 
 nsJARChannel::Init(nsIURI *uri)
 {
     nsresult rv;
+    rv = nsHashPropertyBag::Init();
+    if (NS_FAILED(rv))
+        return rv;
+
     mJarURI = do_QueryInterface(uri, &rv);
     if (NS_FAILED(rv))
         return rv;
+
+    mOriginalURI = mJarURI;
 
     // Prevent loading jar:javascript URIs (see bug 290982).
     nsCOMPtr<nsIURI> innerURI;
@@ -259,7 +303,7 @@ nsJARChannel::CreateJarInput(nsIZipReaderCache *jarCache)
     nsresult rv = mJarFile->Clone(getter_AddRefs(clonedFile));
     if (NS_FAILED(rv)) return rv;
 
-    mJarInput = new nsJARInputThunk(clonedFile, mJarEntry, jarCache);
+    mJarInput = new nsJARInputThunk(clonedFile, mJarURI, mJarEntry, jarCache);
     if (!mJarInput)
         return NS_ERROR_OUT_OF_MEMORY;
     NS_ADDREF(mJarInput);
@@ -280,6 +324,12 @@ nsJARChannel::EnsureJarInput(PRBool blocking)
     rv = mJarURI->GetJAREntry(mJarEntry);
     if (NS_FAILED(rv)) return rv;
 
+    // The name of the JAR entry must not contain URL-escaped characters:
+    // we're moving from URL domain to a filename domain here. nsStandardURL
+    // does basic escaping by default, which breaks reading zipped files which
+    // have e.g. spaces in their filenames.
+    NS_UnescapeURL(mJarEntry);
+
     // try to get a nsIFile directly from the url, which will often succeed.
     {
         nsCOMPtr<nsIFileURL> fileURL = do_QueryInterface(mJarBaseURI);
@@ -288,6 +338,8 @@ nsJARChannel::EnsureJarInput(PRBool blocking)
     }
 
     if (mJarFile) {
+        mIsUnsafe = PR_FALSE;
+
         // NOTE: we do not need to deal with mSecurityInfo here,
         // because we're loading from a local file
         rv = CreateJarInput(gJarHandler->JarCache());
@@ -302,7 +354,7 @@ nsJARChannel::EnsureJarInput(PRBool blocking)
         if (NS_SUCCEEDED(rv))
             rv = NS_OpenURI(mDownloader, nsnull, mJarBaseURI, nsnull,
                             mLoadGroup, mCallbacks,
-                            mLoadFlags & ~LOAD_DOCUMENT_URI);
+                            mLoadFlags & ~(LOAD_DOCUMENT_URI | LOAD_CALL_CONTENT_SNIFFERS));
     }
     return rv;
 
@@ -401,17 +453,15 @@ nsJARChannel::SetLoadGroup(nsILoadGroup *aLoadGroup)
 NS_IMETHODIMP
 nsJARChannel::GetOriginalURI(nsIURI **aURI)
 {
-    if (mOriginalURI)
-        *aURI = mOriginalURI;
-    else
-        *aURI = mJarURI;
-    NS_IF_ADDREF(*aURI);
+    *aURI = mOriginalURI;
+    NS_ADDREF(*aURI);
     return NS_OK;
 }
 
 NS_IMETHODIMP
 nsJARChannel::SetOriginalURI(nsIURI *aURI)
 {
+    NS_ENSURE_ARG_POINTER(aURI);
     mOriginalURI = aURI;
     return NS_OK;
 }
@@ -525,26 +575,31 @@ nsJARChannel::GetContentType(nsACString &result)
         //
         // generate content type and set it
         //
-        if (mJarEntry.IsEmpty()) {
-            LOG(("mJarEntry is empty!\n"));
-            return NS_ERROR_NOT_AVAILABLE;
-        }
-    
         const char *ext = nsnull, *fileName = mJarEntry.get();
         PRInt32 len = mJarEntry.Length();
-        for (PRInt32 i = len-1; i >= 0; i--) {
-            if (fileName[i] == '.') {
-                ext = &fileName[i + 1];
-                break;
+
+        // check if we're displaying a directory
+        // mJarEntry will be empty if we're trying to display
+        // the topmost directory in a zip, e.g. jar:foo.zip!/
+        if (ENTRY_IS_DIRECTORY(mJarEntry)) {
+            mContentType.AssignLiteral(APPLICATION_HTTP_INDEX_FORMAT);
+        }
+        else {
+            // not a directory, take a guess by its extension
+            for (PRInt32 i = len-1; i >= 0; i--) {
+                if (fileName[i] == '.') {
+                    ext = &fileName[i + 1];
+                    break;
+                }
             }
+            if (ext) {
+                nsIMIMEService *mimeServ = gJarHandler->MimeService();
+                if (mimeServ)
+                    mimeServ->GetTypeFromExtension(nsDependentCString(ext), mContentType);
+            }
+            if (mContentType.IsEmpty())
+                mContentType.AssignLiteral(UNKNOWN_CONTENT_TYPE);
         }
-        if (ext) {
-            nsIMIMEService *mimeServ = gJarHandler->MimeService();
-            if (mimeServ)
-                mimeServ->GetTypeFromExtension(nsDependentCString(ext), mContentType);
-        }
-        if (mContentType.IsEmpty())
-            mContentType.AssignLiteral(UNKNOWN_CONTENT_TYPE);
     }
     result = mContentType;
     return NS_OK;
@@ -604,6 +659,9 @@ nsJARChannel::Open(nsIInputStream **stream)
     NS_ENSURE_TRUE(!mJarInput, NS_ERROR_IN_PROGRESS);
     NS_ENSURE_TRUE(!mIsPending, NS_ERROR_IN_PROGRESS);
 
+    mJarFile = nsnull;
+    mIsUnsafe = PR_TRUE;
+
     nsresult rv = EnsureJarInput(PR_TRUE);
     if (NS_FAILED(rv)) return rv;
 
@@ -623,7 +681,11 @@ nsJARChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *ctx)
 {
     LOG(("nsJARChannel::AsyncOpen [this=%x]\n", this));
 
+    NS_ENSURE_ARG_POINTER(listener);
     NS_ENSURE_TRUE(!mIsPending, NS_ERROR_IN_PROGRESS);
+
+    mJarFile = nsnull;
+    mIsUnsafe = PR_TRUE;
 
     // Initialize mProgressSink
     NS_QueryNotificationCallbacks(mCallbacks, mLoadGroup, mProgressSink);
@@ -631,21 +693,40 @@ nsJARChannel::AsyncOpen(nsIStreamListener *listener, nsISupports *ctx)
     nsresult rv = EnsureJarInput(PR_FALSE);
     if (NS_FAILED(rv)) return rv;
 
+    // These variables must only be set if we're going to trigger an
+    // OnStartRequest, either from AsyncRead or OnDownloadComplete.
+    mListener = listener;
+    mListenerContext = ctx;
+    mIsPending = PR_TRUE;
     if (mJarInput) {
-        // create input stream pump
+        // create input stream pump and call AsyncRead as a block
         rv = NS_NewInputStreamPump(getter_AddRefs(mPump), mJarInput);
-        if (NS_FAILED(rv)) return rv;
+        if (NS_SUCCEEDED(rv))
+            rv = mPump->AsyncRead(this, nsnull);
 
-        rv = mPump->AsyncRead(this, nsnull);
-        if (NS_FAILED(rv)) return rv;
+        // If we failed to create the pump or initiate the AsyncRead,
+        // then we need to clear these variables.
+        if (NS_FAILED(rv)) {
+            mIsPending = PR_FALSE;
+            mListenerContext = nsnull;
+            mListener = nsnull;
+            return rv;
+        }
     }
 
     if (mLoadGroup)
         mLoadGroup->AddRequest(this, nsnull);
 
-    mListener = listener;
-    mListenerContext = ctx;
-    mIsPending = PR_TRUE;
+    return NS_OK;
+}
+
+//-----------------------------------------------------------------------------
+// nsIJARChannel
+//-----------------------------------------------------------------------------
+NS_IMETHODIMP
+nsJARChannel::GetIsUnsafe(PRBool *isUnsafe)
+{
+    *isUnsafe = mIsUnsafe;
     return NS_OK;
 }
 
@@ -660,15 +741,99 @@ nsJARChannel::OnDownloadComplete(nsIDownloader *downloader,
                                  nsresult       status,
                                  nsIFile       *file)
 {
-    // Grab the security info from our base channel
+    nsresult rv;
+
     nsCOMPtr<nsIChannel> channel(do_QueryInterface(request));
-    if (channel)
+    if (channel) {
+        PRUint32 loadFlags;
+        channel->GetLoadFlags(&loadFlags);
+        if (loadFlags & LOAD_REPLACE) {
+            mLoadFlags |= LOAD_REPLACE;
+
+            if (!mOriginalURI) {
+                SetOriginalURI(mJarURI);
+            }
+
+            nsCOMPtr<nsIURI> innerURI;
+            rv = channel->GetURI(getter_AddRefs(innerURI));
+            if (NS_SUCCEEDED(rv)) {
+                nsCOMPtr<nsIJARURI> newURI;
+                rv = mJarURI->CloneWithJARFile(innerURI,
+                                               getter_AddRefs(newURI));
+                if (NS_SUCCEEDED(rv)) {
+                    mJarURI = newURI;
+                }
+            }
+            if (NS_SUCCEEDED(status)) {
+                status = rv;
+            }
+        }
+    }
+
+    if (NS_SUCCEEDED(status) && channel) {
+        nsCAutoString header;
+        // Grab the security info from our base channel
         channel->GetSecurityInfo(getter_AddRefs(mSecurityInfo));
-    
+
+        nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(channel));
+        if (httpChannel) {
+            // We only want to run scripts if the server really intended to
+            // send us a JAR file.  Check the server-supplied content type for
+            // a JAR type.
+            httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("Content-Type"),
+                                           header);
+            nsCAutoString contentType;
+            nsCAutoString charset;
+            NS_ParseContentType(header, contentType, charset);
+            nsCAutoString channelContentType;
+            channel->GetContentType(channelContentType);
+            mIsUnsafe = !(contentType.Equals(channelContentType) &&
+                          (contentType.EqualsLiteral("application/java-archive") ||
+                           contentType.EqualsLiteral("application/x-jar")));
+            rv = httpChannel->GetResponseHeader(NS_LITERAL_CSTRING("Content-Disposition"),
+                                                header);
+            if (NS_SUCCEEDED(rv))
+                SetPropertyAsACString(NS_CHANNEL_PROP_CONTENT_DISPOSITION, header);
+        } else {
+            nsCOMPtr<nsIJARChannel> innerJARChannel(do_QueryInterface(channel));
+            if (innerJARChannel) {
+                PRBool unsafe;
+                innerJARChannel->GetIsUnsafe(&unsafe);
+                mIsUnsafe = unsafe;
+            }
+            // Soon-to-be common way to get Disposition: right now only nsIJARChannel
+            rv = NS_GetContentDisposition(request, header);
+            if (NS_SUCCEEDED(rv))
+                SetPropertyAsACString(NS_CHANNEL_PROP_CONTENT_DISPOSITION, header);
+        }
+    }
+
+    if (NS_SUCCEEDED(status) && mIsUnsafe) {
+        PRBool allowUnpack = PR_FALSE;
+
+        nsCOMPtr<nsIPrefBranch> prefs =
+            do_GetService(NS_PREFSERVICE_CONTRACTID);
+        if (prefs) {
+            prefs->GetBoolPref("network.jar.open-unsafe-types", &allowUnpack);
+        }
+
+        if (!allowUnpack) {
+            status = NS_ERROR_UNSAFE_CONTENT_TYPE;
+        }
+    }
+
+    if (NS_SUCCEEDED(status)) {
+        // Refuse to unpack view-source: jars even if open-unsafe-types is set.
+        nsCOMPtr<nsIViewSourceChannel> viewSource = do_QueryInterface(channel);
+        if (viewSource) {
+            status = NS_ERROR_UNSAFE_CONTENT_TYPE;
+        }
+    }
+
     if (NS_SUCCEEDED(status)) {
         mJarFile = file;
     
-        nsresult rv = CreateJarInput(nsnull);
+        rv = CreateJarInput(nsnull);
         if (NS_SUCCEEDED(rv)) {
             // create input stream pump
             rv = NS_NewInputStreamPump(getter_AddRefs(mPump), mJarInput);
@@ -679,6 +844,7 @@ nsJARChannel::OnDownloadComplete(nsIDownloader *downloader,
     }
 
     if (NS_FAILED(status)) {
+        mStatus = status;
         OnStartRequest(nsnull, nsnull);
         OnStopRequest(nsnull, nsnull, status);
     }

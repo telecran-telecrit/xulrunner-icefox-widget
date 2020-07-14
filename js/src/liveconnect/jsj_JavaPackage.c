@@ -75,16 +75,43 @@ static JSObject *
 define_JavaPackage(JSContext *cx, JSObject *parent_obj,
                    const char *obj_name, const char *path, int flags, int access)
 {
-    JSObject *package_obj;
+    JSObject *package_obj, *obj;
     JavaPackage_Private *package;
+    jsval v;
 
-    package_obj = JS_DefineObject(cx, parent_obj, obj_name, &JavaPackage_class, 0, JSPROP_PERMANENT | access);
+    /*
+     * Expose the same JSObject for Packages.java and java.
+     * "java" will be defined during the java package initialization stage.
+     * "Packages.java" will be lazily resolved by JavaPackage_resolve.
+     * Ditto for sun and netscape.
+     * See bugzilla bug: https://bugzilla.mozilla.org/show_bug.cgi?id=248409.
+     */
+    if (!strcmp(obj_name, path) &&
+        (obj = JS_GetParent(cx, parent_obj)) &&
+        JS_LookupProperty(cx, obj, obj_name, &v) &&
+        !JSVAL_IS_PRIMITIVE(v))
+    {
+        if (!JS_DefineProperty(cx, parent_obj, obj_name, v, NULL, NULL,
+                               JSPROP_PERMANENT | access)) {
+            return NULL;
+        }
+
+        package_obj = JSVAL_TO_OBJECT(v);
+        return package_obj;
+    }
+
+    package_obj = JS_DefineObject(cx, parent_obj, obj_name, &JavaPackage_class,
+                                  0, JSPROP_PERMANENT | access);
     
     if (!package_obj)
         return NULL;
     
     /* Attach private, native data to the JS object */
     package = (JavaPackage_Private *)JS_malloc(cx, sizeof(JavaPackage_Private));
+    if (!package) {
+        JS_DeleteProperty(cx, parent_obj, obj_name);
+        return NULL;
+    }
     JS_SetPrivate(cx, package_obj, (void *)package);
     if (path)
         package->path = JS_strdup(cx, path);
@@ -110,7 +137,7 @@ define_JavaPackage(JSContext *cx, JSObject *parent_obj,
  * it is illegal to write "java.lang.myProperty = 4".  We probably could relax
  * this restriction, but it's potentially confusing and not clearly useful.
  */
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 JavaPackage_setProperty(JSContext *cx, JSObject *obj, jsval slot, jsval *vp)
 {
     JavaPackage_Private *package = JS_GetPrivate(cx, obj);
@@ -129,7 +156,7 @@ static JSBool quiet_resolve_failure;
 /*
  * Resolve a component name to be either the name of a class or a package.
  */
-JS_STATIC_DLL_CALLBACK(JSBool)
+static  JSBool
 JavaPackage_resolve(JSContext *cx, JSObject *obj, jsval id)
 {
     JavaPackage_Private *package;
@@ -257,12 +284,12 @@ JavaPackage_resolve(JSContext *cx, JSObject *obj, jsval id)
     }
     
 out:
-    free(newPath);
+    JS_smprintf_free(newPath);
     jsj_ExitJava(jsj_env);
     return ok;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 JavaPackage_convert(JSContext *cx, JSObject *obj, JSType type, jsval *vp)
 {
     JSString *str;
@@ -293,7 +320,7 @@ JavaPackage_convert(JSContext *cx, JSObject *obj, JSType type, jsval *vp)
                 *cp = '.';
         str = JS_NewString(cx, name, strlen(name));
         if (!str) {
-            free(name);
+            JS_smprintf_free(name);
             /* It's not necessary to call JS_ReportOutOfMemory(), as
                JS_NewString() will do so on failure. */
             return JS_FALSE;
@@ -315,7 +342,7 @@ JavaPackage_convert(JSContext *cx, JSObject *obj, JSType type, jsval *vp)
 /*
  * Free the private native data associated with the JavaPackage object.
  */
-JS_STATIC_DLL_CALLBACK(void)
+static void
 JavaPackage_finalize(JSContext *cx, JSObject *obj)
 {
     JavaPackage_Private *package = JS_GetPrivate(cx, obj);
@@ -443,14 +470,8 @@ pre_define_java_packages(JSContext *cx, JSObject *global_obj,
 
         /* Walk the chain of JavaPackage objects to get to the parent of the
            rightmost sub-package in the fully-qualified package name. */
-        for (simple_name = STRTOK_1ST(package_name, ".", nextstr); simple_name /*1*/; simple_name = STRTOK_OTHER(".", nextstr)) {
+        for (simple_name = STRTOK_1ST(package_name, ".", nextstr); simple_name; simple_name = STRTOK_OTHER(".", nextstr)) {
             jsval v;
-
-            if (!simple_name) {
-                JS_ReportErrorNumber(cx, jsj_GetErrorMessage, NULL, 
-                                        JSJMSG_DOUBLE_SHIPPING, package_name);
-                goto error;
-            }
 
             /* Check to see if the sub-package already exists */
             quiet_resolve_failure = JS_TRUE;
@@ -511,7 +532,7 @@ error:
     return JS_FALSE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 JavaPackage_toString(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
                  jsval *rval)
 {

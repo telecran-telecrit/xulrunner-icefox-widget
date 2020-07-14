@@ -44,7 +44,7 @@ class nsGUIEvent;
 
 /**
  * Event listener interface.
- * Alternative to a callback for recieving events.
+ * Alternative to a callback for receiving events.
  */
 
 // {c83f6b80-d7ce-11d2-8360-c4c894c4917c}
@@ -53,16 +53,17 @@ class nsGUIEvent;
 
 class nsIEventListener : public nsISupports {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IEVENTLISTENER_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IEVENTLISTENER_IID)
   
  /**
   * Processes all events. 
-  * If a mouse listener is registered this method will not process mouse events. 
   * @param anEvent the event to process. See nsGUIEvent.h for event types.
   */
 
   virtual nsEventStatus ProcessEvent(const nsGUIEvent & anEvent) = 0;
 
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIEventListener, NS_IEVENTLISTENER_IID)
 
 #endif // nsIEventListener_h__

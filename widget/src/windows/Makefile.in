@@ -53,7 +53,6 @@ REQUIRES	= xpcom \
 			content \
 			content_xul \
 			gfx \
-			gfxwin \
 			necko \
 			pref \
 			plugin \
@@ -67,29 +66,49 @@ REQUIRES	= xpcom \
 			xuldoc \
 			view \
 			imglib2 \
+			uriloader \
+			webbrowserpersist \
 			unicharutil \
+			thebes \
+			cairo \
+			qcms \
 			$(NULL)
 
 CPPSRCS		= \
-	L_Ienumfe.cpp  \
 	nsWindow.cpp         \
 	nsAppShell.cpp       \
-	nsLookAndFeel.cpp    \
 	nsToolkit.cpp        \
-	nsDataObj.cpp  \
-	nsDataObjCollection.cpp  \
-	nsClipboard.cpp      \
 	nsFilePicker.cpp     \
+	nsScreenWin.cpp	\
+	nsScreenManagerWin.cpp \
+	nsLookAndFeel.cpp    \
+	nsUXThemeData.cpp \
+	nsNativeThemeWin.cpp \
+	nsWinGesture.cpp \
 	$(NULL)
+
+ifdef NS_PRINTING
+CPPSRCS		+= \
+	nsPrintOptionsWin.cpp \
+	nsPrintSettingsWin.cpp \
+	nsDeviceContextSpecWin.cpp \
+	$(NULL)
+endif
 
 ifneq ($(OS_ARCH), WINCE)
 CPPSRCS += \
+	nsKeyboardLayout.cpp \
+	IEnumFE.cpp  \
+	nsDataObj.cpp  \
+	nsDataObjCollection.cpp  \
 	nsNativeDragTarget.cpp  \
 	nsNativeDragSource.cpp  \
 	nsDragService.cpp  \
+	nsClipboard.cpp      \
 	nsImageClipboard.cpp \
 	nsBidiKeyboard.cpp   \
 	nsSound.cpp          \
+	nsIdleServiceWin.cpp    \
 	$(NULL)
 endif
 
@@ -103,22 +122,16 @@ endif # BUILD_STATIC_LIBS
 
 EXPORTS		= nsdefs.h
 
-LOCAL_INCLUDES	= -I. -I$(srcdir)/../xpwidgets -I$(srcdir)
+LOCAL_INCLUDES	= \
+		-I. \
+		-I$(srcdir)/../xpwidgets \
+		-I$(srcdir) \
+		$(NULL)
 
 FORCE_STATIC_LIB = 1
-
-GARBAGE		+= L_Ienumfe.cpp $(srcdir)/L_Ienumfe.cpp
-
-SRCS_IN_OBJDIR	= 1
 
 ifndef WINCE
 ENABLE_CXX_EXCEPTIONS = 1
 endif
 
 include $(topsrcdir)/config/rules.mk
-
-# Silly case-insensitive fs
-export:: IENUMFE.CPP
-	cp -a $< L_Ienumfe.cpp
-
-

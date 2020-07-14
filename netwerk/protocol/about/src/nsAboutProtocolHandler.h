@@ -39,16 +39,10 @@
 #define nsAboutProtocolHandler_h___
 
 #include "nsIProtocolHandler.h"
+#include "nsSimpleNestedURI.h"
 
 class nsCString;
-
-#define NS_ABOUTPROTOCOLHANDLER_CID                  \
-{ /* 9e3b6c90-2f75-11d3-8cd0-0060b0fc14a3 */         \
-    0x9e3b6c90,                                      \
-    0x2f75,                                          \
-    0x11d3,                                          \
-    {0x8c, 0xd0, 0x00, 0x60, 0xb0, 0xfc, 0x14, 0xa3} \
-}
+class nsIAboutModule;
 
 class nsAboutProtocolHandler : public nsIProtocolHandler
 {
@@ -59,13 +53,56 @@ public:
     NS_DECL_NSIPROTOCOLHANDLER
 
     // nsAboutProtocolHandler methods:
-    nsAboutProtocolHandler();
-    virtual ~nsAboutProtocolHandler();
+    nsAboutProtocolHandler() {}
+    virtual ~nsAboutProtocolHandler() {}
+};
 
-    static NS_METHOD
-    Create(nsISupports *aOuter, REFNSIID aIID, void **aResult);
+class nsSafeAboutProtocolHandler : public nsIProtocolHandler
+{
+public:
+    NS_DECL_ISUPPORTS
 
-    nsresult Init();
+    // nsIProtocolHandler methods:
+    NS_DECL_NSIPROTOCOLHANDLER
+
+    // nsSafeAboutProtocolHandler methods:
+    nsSafeAboutProtocolHandler() {}
+
+private:
+    ~nsSafeAboutProtocolHandler() {}
+};
+
+
+// Class to allow us to propagate the base URI to about:blank correctly
+class nsNestedAboutURI : public nsSimpleNestedURI {
+public:
+    nsNestedAboutURI(nsIURI* aInnerURI, nsIURI* aBaseURI)
+        : nsSimpleNestedURI(aInnerURI)
+        , mBaseURI(aBaseURI)
+    {}
+
+    // For use only from deserialization
+    nsNestedAboutURI() : nsSimpleNestedURI() {}
+
+    virtual ~nsNestedAboutURI() {}
+
+    // Override QI so we can QI to our CID as needed
+    NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr);
+
+    // Override StartClone(), the nsISerializable methods, and
+    // GetClassIDNoAlloc; this last is needed to make our nsISerializable impl
+    // work right.
+    virtual nsSimpleURI* StartClone();
+    NS_IMETHOD Read(nsIObjectInputStream* aStream);
+    NS_IMETHOD Write(nsIObjectOutputStream* aStream);
+    NS_IMETHOD GetClassIDNoAlloc(nsCID *aClassIDNoAlloc);
+
+    nsIURI* GetBaseURI() const {
+        return mBaseURI;
+    }
+
+protected:
+    nsCOMPtr<nsIURI> mBaseURI;
 };
 
 #endif /* nsAboutProtocolHandler_h___ */

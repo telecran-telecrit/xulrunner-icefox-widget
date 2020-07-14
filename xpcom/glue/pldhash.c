@@ -22,6 +22,7 @@
  * Contributor(s):
  *   Brendan Eich <brendan@mozilla.org> (Original Author)
  *   Chris Waterson <waterson@netscape.com>
+ *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -67,19 +68,27 @@
  */
 #ifdef DEBUG
 
+#define JSDHASH_SINGLE_LINE_ASSERTION PR_ASSERT
 #define RECURSION_LEVEL(table_) (*(PRUint32*)(table_->entryStore + \
                                             PL_DHASH_TABLE_SIZE(table_) * \
                                             table_->entrySize))
 
 #define ENTRY_STORE_EXTRA                   sizeof(PRUint32)
-#define INCREMENT_RECURSION_LEVEL(table_)   (++RECURSION_LEVEL(table_))
-#define DECREMENT_RECURSION_LEVEL(table_)   (--RECURSION_LEVEL(table_))
+#define INCREMENT_RECURSION_LEVEL(table_)   \
+    PR_BEGIN_MACRO                          \
+      ++RECURSION_LEVEL(table_);            \
+    PR_END_MACRO
+#define DECREMENT_RECURSION_LEVEL(table_)                         \
+    PR_BEGIN_MACRO                                                \
+      NS_ASSERTION(RECURSION_LEVEL(table_) > 0, "RECURSION_LEVEL(table_) > 0"); \
+      --RECURSION_LEVEL(table_);                                \
+    PR_END_MACRO
 
 #else
 
 #define ENTRY_STORE_EXTRA 0
-#define INCREMENT_RECURSION_LEVEL(table_)   ((void)1)
-#define DECREMENT_RECURSION_LEVEL(table_)   ((void)0)
+#define INCREMENT_RECURSION_LEVEL(table_)   PR_BEGIN_MACRO PR_END_MACRO
+#define DECREMENT_RECURSION_LEVEL(table_)   PR_BEGIN_MACRO PR_END_MACRO
 
 #endif /* defined(DEBUG) */
 
@@ -102,17 +111,9 @@ PL_DHashStringKey(PLDHashTable *table, const void *key)
     const unsigned char *s;
 
     h = 0;
-    for (s = key; *s != '\0'; s++)
-        h = (h >> (PL_DHASH_BITS - 4)) ^ (h << 4) ^ *s;
+    for (s = (const unsigned char *) key; *s != '\0'; s++)
+        h = PR_ROTATE_LEFT32(h, 4) ^ *s;
     return h;
-}
-
-const void *
-PL_DHashGetKeyStub(PLDHashTable *table, PLDHashEntryHdr *entry)
-{
-    PLDHashEntryStub *stub = (PLDHashEntryStub *)entry;
-
-    return stub->key;
 }
 
 PLDHashNumber
@@ -140,7 +141,8 @@ PL_DHashMatchStringKey(PLDHashTable *table,
 
     /* XXX tolerate null keys on account of sloppy Mozilla callers. */
     return stub->key == key ||
-           (stub->key && key && strcmp(stub->key, key) == 0);
+           (stub->key && key &&
+            strcmp((const char *) stub->key, (const char *) key) == 0);
 }
 
 void
@@ -174,7 +176,6 @@ PL_DHashFinalizeStub(PLDHashTable *table)
 static const PLDHashTableOps stub_ops = {
     PL_DHashAllocTable,
     PL_DHashFreeTable,
-    PL_DHashGetKeyStub,
     PL_DHashVoidPtrKeyStub,
     PL_DHashMatchEntryStub,
     PL_DHashMoveEntryStub,
@@ -221,10 +222,10 @@ PL_DHashTableInit(PLDHashTable *table, const PLDHashTableOps *ops, void *data,
 
 #ifdef DEBUG
     if (entrySize > 10 * sizeof(void *)) {
-        fprintf(stderr,
+        printf_stderr(
                 "pldhash: for the table at address %p, the given entrySize"
                 " of %lu %s favors chaining over double hashing.\n",
-                (void *)table,
+                (void *) table,
                 (unsigned long) entrySize,
                 (entrySize > 16 * sizeof(void*)) ? "definitely" : "probably");
     }
@@ -241,14 +242,15 @@ PL_DHashTableInit(PLDHashTable *table, const PLDHashTableOps *ops, void *data,
     if (capacity >= PL_DHASH_SIZE_LIMIT)
         return PR_FALSE;
     table->hashShift = PL_DHASH_BITS - log2;
-    table->maxAlphaFrac = 0xC0;                 /* .75 */
-    table->minAlphaFrac = 0x40;                 /* .25 */
+    table->maxAlphaFrac = (uint8)(0x100 * PL_DHASH_DEFAULT_MAX_ALPHA);
+    table->minAlphaFrac = (uint8)(0x100 * PL_DHASH_DEFAULT_MIN_ALPHA);
     table->entrySize = entrySize;
     table->entryCount = table->removedCount = 0;
     table->generation = 0;
     nbytes = capacity * entrySize;
 
-    table->entryStore = ops->allocTable(table, nbytes + ENTRY_STORE_EXTRA);
+    table->entryStore = (char *) ops->allocTable(table,
+                                                 nbytes + ENTRY_STORE_EXTRA);
     if (!table->entryStore)
         return PR_FALSE;
     memset(table->entryStore, 0, nbytes);
@@ -429,15 +431,17 @@ SearchTable(PLDHashTable *table, const void *key, PLDHashNumber keyHash,
     sizeMask = PR_BITMASK(sizeLog2);
 
     /* Save the first removed entry pointer so PL_DHASH_ADD can recycle it. */
-    if (ENTRY_IS_REMOVED(entry)) {
-        firstRemoved = entry;
-    } else {
-        firstRemoved = NULL;
-        if (op == PL_DHASH_ADD)
-            entry->keyHash |= COLLISION_FLAG;
-    }
+    firstRemoved = NULL;
 
     for (;;) {
+        if (NS_UNLIKELY(ENTRY_IS_REMOVED(entry))) {
+            if (!firstRemoved)
+                firstRemoved = entry;
+        } else {
+            if (op == PL_DHASH_ADD)
+                entry->keyHash |= COLLISION_FLAG;
+        }
+
         METER(table->stats.steps++);
         hash1 -= hash2;
         hash1 &= sizeMask;
@@ -453,13 +457,63 @@ SearchTable(PLDHashTable *table, const void *key, PLDHashNumber keyHash,
             METER(table->stats.hits++);
             return entry;
         }
+    }
 
-        if (ENTRY_IS_REMOVED(entry)) {
-            if (!firstRemoved)
-                firstRemoved = entry;
-        } else {
-            if (op == PL_DHASH_ADD)
-                entry->keyHash |= COLLISION_FLAG;
+    /* NOTREACHED */
+    return NULL;
+}
+
+/*
+ * This is a copy of SearchTable, used by ChangeTable, hardcoded to
+ *   1. assume |op == PL_DHASH_ADD|,
+ *   2. assume that |key| will never match an existing entry, and
+ *   3. assume that no entries have been removed from the current table
+ *      structure.
+ * Avoiding the need for |key| means we can avoid needing a way to map
+ * entries to keys, which means callers can use complex key types more
+ * easily.
+ */
+static PLDHashEntryHdr * PL_DHASH_FASTCALL
+FindFreeEntry(PLDHashTable *table, PLDHashNumber keyHash)
+{
+    PLDHashNumber hash1, hash2;
+    int hashShift, sizeLog2;
+    PLDHashEntryHdr *entry;
+    PRUint32 sizeMask;
+
+    METER(table->stats.searches++);
+    NS_ASSERTION(!(keyHash & COLLISION_FLAG),
+                 "!(keyHash & COLLISION_FLAG)");
+
+    /* Compute the primary hash address. */
+    hashShift = table->hashShift;
+    hash1 = HASH1(keyHash, hashShift);
+    entry = ADDRESS_ENTRY(table, hash1);
+
+    /* Miss: return space for a new entry. */
+    if (PL_DHASH_ENTRY_IS_FREE(entry)) {
+        METER(table->stats.misses++);
+        return entry;
+    }
+
+    /* Collision: double hash. */
+    sizeLog2 = PL_DHASH_BITS - table->hashShift;
+    hash2 = HASH2(keyHash, sizeLog2, hashShift);
+    sizeMask = PR_BITMASK(sizeLog2);
+
+    for (;;) {
+        NS_ASSERTION(!ENTRY_IS_REMOVED(entry),
+                     "!ENTRY_IS_REMOVED(entry)");
+        entry->keyHash |= COLLISION_FLAG;
+
+        METER(table->stats.steps++);
+        hash1 -= hash2;
+        hash1 &= sizeMask;
+
+        entry = ADDRESS_ENTRY(table, hash1);
+        if (PL_DHASH_ENTRY_IS_FREE(entry)) {
+            METER(table->stats.misses++);
+            return entry;
         }
     }
 
@@ -475,7 +529,6 @@ ChangeTable(PLDHashTable *table, int deltaLog2)
     char *newEntryStore, *oldEntryStore, *oldEntryAddr;
     PRUint32 entrySize, i, nbytes;
     PLDHashEntryHdr *oldEntry, *newEntry;
-    PLDHashGetKey getKey;
     PLDHashMoveEntry moveEntry;
 #ifdef DEBUG
     PRUint32 recursionLevel;
@@ -491,7 +544,8 @@ ChangeTable(PLDHashTable *table, int deltaLog2)
     entrySize = table->entrySize;
     nbytes = newCapacity * entrySize;
 
-    newEntryStore = table->ops->allocTable(table, nbytes + ENTRY_STORE_EXTRA);
+    newEntryStore = (char *) table->ops->allocTable(table,
+                                                    nbytes + ENTRY_STORE_EXTRA);
     if (!newEntryStore)
         return PR_FALSE;
 
@@ -507,7 +561,6 @@ ChangeTable(PLDHashTable *table, int deltaLog2)
     memset(newEntryStore, 0, nbytes);
     oldEntryAddr = oldEntryStore = table->entryStore;
     table->entryStore = newEntryStore;
-    getKey = table->ops->getKey;
     moveEntry = table->ops->moveEntry;
 #ifdef DEBUG
     RECURSION_LEVEL(table) = recursionLevel;
@@ -518,8 +571,7 @@ ChangeTable(PLDHashTable *table, int deltaLog2)
         oldEntry = (PLDHashEntryHdr *)oldEntryAddr;
         if (ENTRY_IS_LIVE(oldEntry)) {
             oldEntry->keyHash &= ~COLLISION_FLAG;
-            newEntry = SearchTable(table, getKey(table, oldEntry),
-                                   oldEntry->keyHash, PL_DHASH_ADD);
+            newEntry = FindFreeEntry(table, oldEntry->keyHash);
             NS_ASSERTION(PL_DHASH_ENTRY_IS_FREE(newEntry),
                          "PL_DHASH_ENTRY_IS_FREE(newEntry)");
             moveEntry(table, oldEntry, newEntry);

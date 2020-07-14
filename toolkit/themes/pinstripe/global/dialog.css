@@ -45,11 +45,11 @@
 /* ::::: dialog ::::: */
 
 #commonDialog > image {
-	margin-right: 14px !important;
+  -moz-margin-end: 14px !important;
 }
 
 #commonDialog > .dialog-button-box {
-	margin-left: 80px;
+  -moz-margin-start: 80px;
 }
 
 dialog { 
@@ -63,18 +63,46 @@ dialog {
   font: menu;
 }
 
+.dialog-button[dlgtype="help"] {
+  min-width: 1px;
+  padding: 0;
+  -moz-appearance: none;
+  -moz-box-align: start;
+  height: 24px;
+  width: 24px;
+  margin: 4px;
+}
+
+.dialog-button[dlgtype="help"][disabled] {
+  opacity: 0.5;
+}
+
+.dialog-button[dlgtype="help"]:focus {
+  outline: 2px solid -moz-mac-focusring;
+  outline-offset: -2px;
+  -moz-outline-radius: 100%;
+}
+
+.dialog-button[dlgtype="help"] > .button-box > .button-icon {
+  list-style-image: url("chrome://global/skin/icons/question-mark.png");
+  -moz-image-region: rect(0 24px 24px 0); 
+  padding: 0;
+  margin: 0;
+}
+
+.dialog-button[dlgtype="help"]:active > .button-box > .button-icon {
+  -moz-image-region: rect(0 48px 24px 24px); 
+}
+
+.dialog-button[dlgtype="help"] > .button-box > .button-text {
+  display: none;
+}
+
 /* ::::: dialog header ::::: */
 
 dialogheader {
   margin: 0px 5px 5px 5px;
-  border: 2px solid;
-  -moz-border-top-colors: ThreeDShadow ThreeDDarkShadow;
-  -moz-border-right-colors: ThreeDHighlight ThreeDDarkShadow;
-  -moz-border-bottom-colors: ThreeDHighlight ThreeDDarkShadow;
-  -moz-border-left-colors: ThreeDShadow ThreeDDarkShadow;
   padding: 5px 8px;
-  background-color: Highlight;
-  color: HighlightText;
 }
 
 .dialogheader-title {
@@ -88,15 +116,8 @@ dialogheader {
 
 .header-large {
   -moz-box-orient: vertical;
-  margin: 0;
-  border-left: none;
-  border-right: none;
-  border-top: 1px solid;
-  -moz-border-top-colors: #FFFFFF;
-  -moz-border-bottom-colors: #9999FF #777777;
+  margin: -14px -14px 0;
   padding: 12px 5px 12px 25px;
-  background-color: #CCCCFF;
-  color: #000000;
 }
 
 .header-large > .dialogheader-title {
@@ -110,22 +131,18 @@ dialogheader {
 
 .dialogheader-description {
 	font-weight: bold !important;
-	border: 1px solid blue;
 }
 
 .dialogheader-title {
 	font-weight: bold !important;
-	border: 1px solid red;
 }
 
-#loginContainer {
-	padding-top: 10px;
-}
+/*XXX - belongs to toolkit/content/finddialog.xul: */
 
 #findDialog, #findDialog > menu, #findDialog > groupbox {
 	font: menu !important;
 }
 
-#dialog.caseSensitive {
+#dialog\.caseSensitive {
 	margin-top: 8px;
 }

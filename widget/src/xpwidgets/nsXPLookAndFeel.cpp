@@ -37,21 +37,23 @@
 
 #include "nscore.h"
 
-static int PR_CALLBACK colorPrefChanged(const char* aPref, void* aData);
-
 #include "nsXPLookAndFeel.h"
 #include "nsIServiceManager.h"
-#include "nsIPref.h"
+#include "nsIPrefBranch2.h"
+#include "nsIPrefBranch.h"
+#include "nsIPrefService.h"
+#include "nsIObserver.h"
 #include "nsCRT.h"
 #include "nsFont.h"
+
+#include "gfxPlatform.h"
+#include "qcms.h"
 
 #ifdef DEBUG
 #include "nsSize.h"
 #endif
  
-static NS_DEFINE_CID(kPrefServiceCID, NS_PREF_CID);
-
-NS_IMPL_ISUPPORTS1(nsXPLookAndFeel, nsILookAndFeel)
+NS_IMPL_ISUPPORTS2(nsXPLookAndFeel, nsILookAndFeel, nsIObserver)
 
 nsLookAndFeelIntPref nsXPLookAndFeel::sIntPrefs[] =
 {
@@ -109,6 +111,16 @@ nsLookAndFeelIntPref nsXPLookAndFeel::sIntPrefs[] =
     eMetric_TabFocusModel, PR_FALSE, nsLookAndFeelTypeInt, 0 },
   { "ui.alertNotificationOrigin",
     eMetric_AlertNotificationOrigin, PR_FALSE, nsLookAndFeelTypeInt, 0 },
+  { "ui.scrollToClick",
+    eMetric_ScrollToClick, PR_FALSE, nsLookAndFeelTypeInt, 0 },
+  { "ui.IMERawInputUnderlineStyle",
+    eMetric_IMERawInputUnderlineStyle, PR_FALSE, nsLookAndFeelTypeInt, 0 },
+  { "ui.IMESelectedRawTextUnderlineStyle",
+    eMetric_IMESelectedRawTextUnderlineStyle, PR_FALSE, nsLookAndFeelTypeInt, 0 },
+  { "ui.IMEConvertedTextUnderlineStyle",
+    eMetric_IMEConvertedTextUnderlineStyle, PR_FALSE, nsLookAndFeelTypeInt, 0 },
+  { "ui.IMESelectedConvertedTextUnderlineStyle",
+    eMetric_IMESelectedConvertedTextUnderline, PR_FALSE, nsLookAndFeelTypeInt, 0 },
 };
 
 nsLookAndFeelFloatPref nsXPLookAndFeel::sFloatPrefs[] =
@@ -129,16 +141,20 @@ nsLookAndFeelFloatPref nsXPLookAndFeel::sFloatPrefs[] =
     PR_FALSE, nsLookAndFeelTypeFloat, 0 },
   { "ui.buttonHorizontalInsidePadding", eMetricFloat_ButtonHorizontalInsidePadding,
     PR_FALSE, nsLookAndFeelTypeFloat, 0 },
+  { "ui.IMEUnderlineRelativeSize", eMetricFloat_IMEUnderlineRelativeSize,
+    PR_FALSE, nsLookAndFeelTypeFloat, 0 },
+  { "ui.caretAspectRatio", eMetricFloat_CaretAspectRatio, PR_FALSE,
+    nsLookAndFeelTypeFloat, 0 },
 };
 
 
 // This array MUST be kept in the same order as the color list in nsILookAndFeel.h.
 /* XXX If you add any strings longer than
- * "ui.-moz-mac-accentlightesthighlight"
+ * "ui.IMESelectedConvertedTextBackground"
  * to the following array then you MUST update the
  * sizes of the sColorPrefs array in nsXPLookAndFeel.h
  */
-const char nsXPLookAndFeel::sColorPrefs[][36] =
+const char nsXPLookAndFeel::sColorPrefs[][38] =
 {
   "ui.windowBackground",
   "ui.windowForeground",
@@ -154,6 +170,20 @@ const char nsXPLookAndFeel::sColorPrefs[][36] =
   "ui.textSelectForeground",
   "ui.textSelectBackgroundDisabled",
   "ui.textSelectBackgroundAttention",
+  "ui.textHighlightBackground",
+  "ui.textHighlightForeground",
+  "ui.IMERawInputBackground",
+  "ui.IMERawInputForeground",
+  "ui.IMERawInputUnderline",
+  "ui.IMESelectedRawTextBackground",
+  "ui.IMESelectedRawTextForeground",
+  "ui.IMESelectedRawTextUnderline",
+  "ui.IMEConvertedTextBackground",
+  "ui.IMEConvertedTextForeground",
+  "ui.IMEConvertedTextUnderline",
+  "ui.IMESelectedConvertedTextBackground",
+  "ui.IMESelectedConvertedTextForeground",
+  "ui.IMESelectedConvertedTextUnderline",
   "ui.activeborder",
   "ui.activecaption",
   "ui.appworkspace",
@@ -188,6 +218,17 @@ const char nsXPLookAndFeel::sColorPrefs[][36] =
   "ui.-moz-dialog",
   "ui.-moz-dialogtext",
   "ui.-moz-dragtargetzone",
+  "ui.-moz-cellhighlight",
+  "ui.-moz_cellhighlighttext",
+  "ui.-moz-html-cellhighlight",
+  "ui.-moz-html-cellhighlighttext",
+  "ui.-moz-buttonhoverface",
+  "ui.-moz_buttonhovertext",
+  "ui.-moz_menuhover",
+  "ui.-moz_menuhovertext",
+  "ui.-moz_menubarhovertext",
+  "ui.-moz_eventreerow",
+  "ui.-moz_oddtreerow",
   "ui.-moz-mac-focusring",
   "ui.-moz-mac-menuselect",
   "ui.-moz-mac-menushadow",
@@ -199,7 +240,12 @@ const char nsXPLookAndFeel::sColorPrefs[][36] =
   "ui.-moz-mac-accentlightshadow",
   "ui.-moz-mac-accentregularshadow",
   "ui.-moz-mac-accentdarkshadow",
-  "ui.-moz-mac-accentdarkestshadow"
+  "ui.-moz-mac-accentdarkestshadow",
+  "ui.-moz-mac-alternateprimaryhighlight",
+  "ui.-moz-mac-secondaryhighlight",
+  "ui.-moz-win-mediatext",
+  "ui.-moz-win-communicationstext",
+  "ui.-moz-nativehyperlinktext"
 };
 
 PRInt32 nsXPLookAndFeel::sCachedColors[nsILookAndFeel::eColor_LAST_COLOR] = {0};
@@ -211,118 +257,114 @@ nsXPLookAndFeel::nsXPLookAndFeel() : nsILookAndFeel()
 {
 }
 
-static int PR_CALLBACK intPrefChanged (const char *newpref, void *data)
+void
+nsXPLookAndFeel::IntPrefChanged (nsLookAndFeelIntPref *data)
 {
-  nsLookAndFeelIntPref* np = (nsLookAndFeelIntPref*)data;
-  if (np)
+  if (data)
   {
-    nsresult rv;
-    nsCOMPtr<nsIPref> prefService(do_GetService(kPrefServiceCID, &rv));
-    if (NS_SUCCEEDED(rv) && prefService)
+    nsCOMPtr<nsIPrefBranch> prefService(do_GetService(NS_PREFSERVICE_CONTRACTID));
+    if (prefService)
     {
       PRInt32 intpref;
-      rv = prefService->GetIntPref(np->name, &intpref);
+      nsresult rv = prefService->GetIntPref(data->name, &intpref);
       if (NS_SUCCEEDED(rv))
       {
-        np->intVar = intpref;
-        np->isSet = PR_TRUE;
+        data->intVar = intpref;
+        data->isSet = PR_TRUE;
 #ifdef DEBUG_akkana
-        printf("====== Changed int pref %s to %d\n", np->name, np->intVar);
+        printf("====== Changed int pref %s to %d\n", data->name, data->intVar);
 #endif
       }
     }
   }
-  return 0;
 }
 
-static int PR_CALLBACK floatPrefChanged (const char *newpref, void *data)
+void
+nsXPLookAndFeel::FloatPrefChanged (nsLookAndFeelFloatPref *data)
 {
-  nsLookAndFeelFloatPref* np = (nsLookAndFeelFloatPref*)data;
-  if (np)
+  if (data)
   {
-    nsresult rv;
-    nsCOMPtr<nsIPref> prefService(do_GetService(kPrefServiceCID, &rv));
-    if (NS_SUCCEEDED(rv) && prefService)
+    nsCOMPtr<nsIPrefBranch> prefService(do_GetService(NS_PREFSERVICE_CONTRACTID));
+    if (prefService)
     {
       PRInt32 intpref;
-      rv = prefService->GetIntPref(np->name, &intpref);
+      nsresult rv = prefService->GetIntPref(data->name, &intpref);
       if (NS_SUCCEEDED(rv))
       {
-        np->floatVar = (float)intpref / 100.;
-        np->isSet = PR_TRUE;
+        data->floatVar = (float)intpref / 100.;
+        data->isSet = PR_TRUE;
 #ifdef DEBUG_akkana
-        printf("====== Changed float pref %s to %f\n", np->name, np->floatVar);
+        printf("====== Changed float pref %s to %f\n", data->name, data->floatVar);
 #endif
       }
     }
   }
-  return 0;
 }
 
-static int PR_CALLBACK colorPrefChanged (const char *newpref, void *data)
+void
+nsXPLookAndFeel::ColorPrefChanged (unsigned int index, const char *prefName)
 {
-  nsresult rv;
-  nsCOMPtr<nsIPref> prefService(do_GetService(kPrefServiceCID, &rv));
-  if (NS_SUCCEEDED(rv) && prefService) {
+  nsCOMPtr<nsIPrefBranch> prefService(do_GetService(NS_PREFSERVICE_CONTRACTID));
+  if (prefService) {
     nsXPIDLCString colorStr;
-    rv = prefService->CopyCharPref(newpref, getter_Copies(colorStr));
-    if (NS_SUCCEEDED(rv) && colorStr[0]) {
+    nsresult rv = prefService->GetCharPref(prefName, getter_Copies(colorStr));
+    if (NS_SUCCEEDED(rv) && !colorStr.IsEmpty()) {
       nscolor thecolor;
       if (colorStr[0] == '#') {
-        if (NS_SUCCEEDED(NS_HexToRGB(NS_ConvertASCIItoUCS2(Substring(colorStr, 1, colorStr.Length() - 1)),
+        if (NS_SUCCEEDED(NS_HexToRGB(NS_ConvertASCIItoUTF16(Substring(colorStr, 1, colorStr.Length() - 1)),
                                      &thecolor))) {
-          PRInt32 id = NS_PTR_TO_INT32(data);
+          PRInt32 id = NS_PTR_TO_INT32(index);
           CACHE_COLOR(id, thecolor);
         }
       }
-      else if (NS_SUCCEEDED(NS_ColorNameToRGB(NS_ConvertASCIItoUCS2(colorStr),
+      else if (NS_SUCCEEDED(NS_ColorNameToRGB(NS_ConvertASCIItoUTF16(colorStr),
                                          &thecolor))) {
-        PRInt32 id = NS_PTR_TO_INT32(data);
+        PRInt32 id = NS_PTR_TO_INT32(index);
         CACHE_COLOR(id, thecolor);
 #ifdef DEBUG_akkana
         printf("====== Changed color pref %s to 0x%lx\n",
-               newpref, thecolor);
+               prefName, thecolor);
 #endif
       }
+    } else if (colorStr.IsEmpty()) {
+      // Reset to the default color, by clearing the cache
+      // to force lookup when the color is next used
+      PRInt32 id = NS_PTR_TO_INT32(index);
+      CLEAR_COLOR_CACHE(id);
     }
   }
-  return 0;
 }
 
-nsresult
-nsXPLookAndFeel::InitFromPref(nsLookAndFeelIntPref* aPref, nsIPref* aPrefService)
+void
+nsXPLookAndFeel::InitFromPref(nsLookAndFeelIntPref* aPref, nsIPrefBranch* aPrefBranch)
 {
   PRInt32 intpref;
-  nsresult rv = aPrefService->GetIntPref(aPref->name, &intpref);
+  nsresult rv = aPrefBranch->GetIntPref(aPref->name, &intpref);
   if (NS_SUCCEEDED(rv))
   {
     aPref->isSet = PR_TRUE;
     aPref->intVar = intpref;
   }
-  aPrefService->RegisterCallback(aPref->name, intPrefChanged, aPref);
-  return rv;
 }
 
-nsresult
-nsXPLookAndFeel::InitFromPref(nsLookAndFeelFloatPref* aPref, nsIPref* aPrefService)
+void
+nsXPLookAndFeel::InitFromPref(nsLookAndFeelFloatPref* aPref, nsIPrefBranch* aPrefBranch)
 {
   PRInt32 intpref;
-  nsresult rv = aPrefService->GetIntPref(aPref->name, &intpref);
+  nsresult rv = aPrefBranch->GetIntPref(aPref->name, &intpref);
   if (NS_SUCCEEDED(rv))
   {
     aPref->isSet = PR_TRUE;
     aPref->floatVar = (float)intpref / 100.;
   }
-  aPrefService->RegisterCallback(aPref->name, floatPrefChanged, aPref);
-  return rv;
 }
 
-nsresult
-nsXPLookAndFeel::InitColorFromPref(PRInt32 i, nsIPref* aPrefService)
+void
+nsXPLookAndFeel::InitColorFromPref(PRInt32 i, nsIPrefBranch* aPrefBranch)
 {
-  char *colorStr = 0;
-  nsresult rv = aPrefService->CopyCharPref(sColorPrefs[i], &colorStr);
-  if (NS_SUCCEEDED(rv) && colorStr[0])
+  nsXPIDLCString colorStr;
+  nsresult rv = aPrefBranch->GetCharPref(sColorPrefs[i], getter_Copies(colorStr));
+  if (NS_SUCCEEDED(rv) && !colorStr.IsEmpty())
   {
     nsAutoString colorNSStr; colorNSStr.AssignWithConversion(colorStr);
     nscolor thecolor;
@@ -331,18 +373,46 @@ nsXPLookAndFeel::InitColorFromPref(PRInt32 i, nsIPref* aPrefService)
       colorNSStr.Right(hexString, colorNSStr.Length() - 1);
       if (NS_SUCCEEDED(NS_HexToRGB(hexString, &thecolor))) {
         CACHE_COLOR(i, thecolor);
-        PL_strfree(colorStr);
       }
     }
     else if (NS_SUCCEEDED(NS_ColorNameToRGB(colorNSStr, &thecolor)))
     {
       CACHE_COLOR(i, thecolor);
-      PL_strfree(colorStr);
+    }
+  }
+}
+
+NS_IMETHODIMP
+nsXPLookAndFeel::Observe(nsISupports*     aSubject,
+                         const char*      aTopic,
+                         const PRUnichar* aData)
+{
+
+  // looping in the same order as in ::Init
+
+  unsigned int i;
+  for (i = 0; i < NS_ARRAY_LENGTH(sIntPrefs); ++i) {
+    if (nsDependentString(aData).EqualsASCII(sIntPrefs[i].name)) {
+      IntPrefChanged(&sIntPrefs[i]);
+      return NS_OK;
     }
   }
 
-  aPrefService->RegisterCallback(sColorPrefs[i], colorPrefChanged, (void*)i);
-  return rv;
+  for (i = 0; i < NS_ARRAY_LENGTH(sFloatPrefs); ++i) {
+    if (nsDependentString(aData).EqualsASCII(sFloatPrefs[i].name)) {
+      FloatPrefChanged(&sFloatPrefs[i]);
+      return NS_OK;
+    }
+  }
+
+  for (i = 0; i < NS_ARRAY_LENGTH(sColorPrefs); ++i) {
+    if (nsDependentString(aData).EqualsASCII(sColorPrefs[i])) {
+      ColorPrefChanged(i, sColorPrefs[i]);
+      return NS_OK;
+    }
+  }
+
+  return NS_OK;
 }
 
 //
@@ -358,24 +428,61 @@ nsXPLookAndFeel::Init()
   // protects against some other process writing to our static variables.
   sInitialized = PR_TRUE;
 
-  nsresult rv;
-  nsCOMPtr<nsIPref> prefService(do_GetService(kPrefServiceCID, &rv));
-  if (NS_FAILED(rv) || !prefService)
+  nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
+  if (!prefs)
+    return;
+  nsCOMPtr<nsIPrefBranch2> prefBranchInternal(do_QueryInterface(prefs));
+  if (!prefBranchInternal)
     return;
 
   unsigned int i;
-  for (i = 0; i < ((sizeof (sIntPrefs) / sizeof (*sIntPrefs))); ++i)
-    InitFromPref(&sIntPrefs[i], prefService);
+  for (i = 0; i < NS_ARRAY_LENGTH(sIntPrefs); ++i) {
+    InitFromPref(&sIntPrefs[i], prefs);
+    prefBranchInternal->AddObserver(sIntPrefs[i].name, this, PR_FALSE);
+  }
 
-  for (i = 0; i < ((sizeof (sFloatPrefs) / sizeof (*sFloatPrefs))); ++i)
-    InitFromPref(&sFloatPrefs[i], prefService);
+  for (i = 0; i < NS_ARRAY_LENGTH(sFloatPrefs); ++i) {
+    InitFromPref(&sFloatPrefs[i], prefs);
+    prefBranchInternal->AddObserver(sFloatPrefs[i].name, this, PR_FALSE);
+  }
 
-  for (i = 0; i < (sizeof(sColorPrefs) / sizeof (*sColorPrefs)); ++i)
-    InitColorFromPref(i, prefService);
+  for (i = 0; i < NS_ARRAY_LENGTH(sColorPrefs); ++i) {
+    InitColorFromPref(i, prefs);
+    prefBranchInternal->AddObserver(sColorPrefs[i], this, PR_FALSE);
+  }
 }
 
 nsXPLookAndFeel::~nsXPLookAndFeel()
 {
+}
+
+PRBool
+nsXPLookAndFeel::IsSpecialColor(const nsColorID aID, nscolor &aColor)
+{
+  switch (aID) {
+    case eColor_TextSelectForeground:
+      return (aColor == NS_DONT_CHANGE_COLOR);
+    case eColor_IMESelectedRawTextBackground:
+    case eColor_IMESelectedConvertedTextBackground:
+    case eColor_IMERawInputBackground:
+    case eColor_IMEConvertedTextBackground:
+    case eColor_IMESelectedRawTextForeground:
+    case eColor_IMESelectedConvertedTextForeground:
+    case eColor_IMERawInputForeground:
+    case eColor_IMEConvertedTextForeground:
+    case eColor_IMERawInputUnderline:
+    case eColor_IMEConvertedTextUnderline:
+    case eColor_IMESelectedRawTextUnderline:
+    case eColor_IMESelectedConvertedTextUnderline:
+      return NS_IS_IME_SPECIAL_COLOR(aColor);
+    default:
+      /*
+       * In GetColor(), every color that is not a special color is color
+       * corrected. Use PR_FALSE to make other colors color corrected.
+       */
+      return PR_FALSE;
+  }
+  return PR_FALSE;
 }
 
 //
@@ -384,7 +491,8 @@ nsXPLookAndFeel::~nsXPLookAndFeel()
 // otherwise we'll return NS_ERROR_NOT_AVAILABLE, in which case, the
 // platform-specific nsLookAndFeel should use its own values instead.
 //
-NS_IMETHODIMP nsXPLookAndFeel::GetColor(const nsColorID aID, nscolor &aColor)
+NS_IMETHODIMP
+nsXPLookAndFeel::GetColor(const nsColorID aID, nscolor &aColor)
 {
   if (!sInitialized)
     Init();
@@ -490,7 +598,33 @@ NS_IMETHODIMP nsXPLookAndFeel::GetColor(const nsColorID aID, nscolor &aColor)
     return NS_OK;
   }
 
+  if (aID == eColor_TextHighlightBackground) {
+    // This makes the matched text stand out when findbar highlighting is on
+    // Used with nsISelectionController::SELECTION_FIND
+    aColor = NS_RGB(0xef, 0x0f, 0xff);
+    return NS_OK;
+  }
+
+  if (aID == eColor_TextHighlightForeground) {
+    // The foreground color for the matched text in findbar highlighting
+    // Used with nsISelectionController::SELECTION_FIND
+    aColor = NS_RGB(0xff, 0xff, 0xff);
+    return NS_OK;
+  }
+
   if (NS_SUCCEEDED(NativeGetColor(aID, aColor))) {
+    if ((gfxPlatform::GetCMSMode() == eCMSMode_All) && !IsSpecialColor(aID, aColor)) {
+      qcms_transform *transform = gfxPlatform::GetCMSInverseRGBTransform();
+      if (transform) {
+        PRUint8 color[3];
+        color[0] = NS_GET_R(aColor);
+        color[1] = NS_GET_G(aColor);
+        color[2] = NS_GET_B(aColor);
+        qcms_transform_data(transform, color, color, 1);
+        aColor = NS_RGB(color[0], color[1], color[2]);
+      }
+    }
+
     CACHE_COLOR(aID, aColor);
     return NS_OK;
   }
@@ -498,10 +632,31 @@ NS_IMETHODIMP nsXPLookAndFeel::GetColor(const nsColorID aID, nscolor &aColor)
   return NS_ERROR_NOT_AVAILABLE;
 }
   
-NS_IMETHODIMP nsXPLookAndFeel::GetMetric(const nsMetricID aID, PRInt32& aMetric)
+NS_IMETHODIMP
+nsXPLookAndFeel::GetMetric(const nsMetricID aID, PRInt32& aMetric)
 {
   if (!sInitialized)
     Init();
+
+  // Set the default values for these prefs. but allow different platforms
+  // to override them in their nsLookAndFeel if desired.
+  switch (aID) {
+    case eMetric_ScrollButtonLeftMouseButtonAction:
+      aMetric = 0;
+      return NS_OK;
+    case eMetric_ScrollButtonMiddleMouseButtonAction:
+      aMetric = 3;
+      return NS_OK;
+    case eMetric_ScrollButtonRightMouseButtonAction:
+      aMetric = 3;
+      return NS_OK;
+    default:
+      /*
+       * The metrics above are hardcoded platform defaults. All the other
+       * metrics are stored in sIntPrefs and can be changed at runtime.
+       */
+    break;
+  }
 
   for (unsigned int i = 0; i < ((sizeof (sIntPrefs) / sizeof (*sIntPrefs))); ++i)
     if (sIntPrefs[i].isSet && (sIntPrefs[i].id == aID))

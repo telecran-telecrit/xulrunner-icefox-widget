@@ -76,17 +76,17 @@ public:
   // nsIBaseWindow
   NS_IMETHOD Destroy();
 
+  static void SuppressFocusEvents(PRBool aSuppress);
 protected:
   
   virtual ~nsWebShellWindow();
 
   nsCOMPtr<nsIDOMDocument> GetNamedDOMDoc(const nsAString & aWebShellName);
-  void LoadNativeMenus(nsIDOMDocument * aDOMDoc, nsIWidget * aParentWindow);
 
   void                     LoadContentAreas();
   PRBool                   ExecuteCloseHandler();
 
-  static nsEventStatus PR_CALLBACK HandleEvent(nsGUIEvent *aEvent);
+  static nsEventStatus HandleEvent(nsGUIEvent *aEvent);
 
   nsCOMPtr<nsITimer>      mSPTimer;
   PRLock *                mSPTimerLock;

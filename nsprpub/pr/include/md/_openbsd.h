@@ -54,9 +54,11 @@
 #define _PR_SI_ARCHITECTURE "powerpc"
 #elif defined(__sparc__)
 #define _PR_SI_ARCHITECTURE "sparc"
+#elif defined(__arm__)
+#define _PR_SI_ARCHITECTURE "arm"
 #endif
 
-#define PR_DLL_SUFFIX		".so.1.0"
+#define PR_DLL_SUFFIX		".so"
 
 #define _PR_VMBASE              0x30000000
 #define _PR_STACK_VMBASE	0x50000000
@@ -67,7 +69,7 @@
 #define HAVE_DLL
 #define USE_DLFCN
 #define _PR_HAVE_SOCKADDR_LEN
-#define _PR_NO_LARGE_FILES
+#define _PR_HAVE_LARGE_OFF_T
 #define _PR_STAT_HAS_ST_ATIMESPEC
 #define _PR_POLL_AVAILABLE
 #define _PR_USE_POLL
@@ -97,6 +99,8 @@
 #define JB_SP_INDEX 34
 #elif defined(__amd64__)
 #define JB_SP_INDEX 6
+#elif defined(__arm__)
+#define JB_SP_INDEX 23
 #else
 #error "Need to define SP index in jmp_buf here"
 #endif

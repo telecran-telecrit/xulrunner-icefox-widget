@@ -39,6 +39,7 @@
 
 #include "imgIRequest.h"
 #include "imgIDecoderObserver.h"
+#include "nsISecurityInfoProvider.h"
 
 #include "imgIContainer.h"
 #include "imgIDecoder.h"
@@ -47,10 +48,10 @@
 #include "nsILoadGroup.h"
 #include "nsISupportsPriority.h"
 #include "nsCOMPtr.h"
+#include "nsAutoPtr.h"
+#include "nsThreadUtils.h"
 
 #include "imgRequest.h"
-
-#include "prlock.h"
 
 #define NS_IMGREQUESTPROXY_CID \
 { /* 20557898-1dd2-11b2-8f65-9c462ee2bc95 */         \
@@ -60,13 +61,14 @@
     {0x8f, 0x65, 0x9c, 0x46, 0x2e, 0xe2, 0xbc, 0x95} \
 }
 
-class imgRequestProxy : public imgIRequest, public nsISupportsPriority
+class imgRequestProxy : public imgIRequest, public nsISupportsPriority, public nsISecurityInfoProvider
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_IMGIREQUEST
   NS_DECL_NSIREQUEST
   NS_DECL_NSISUPPORTSPRIORITY
+  NS_DECL_NSISECURITYINFOPROVIDER
 
   imgRequestProxy();
   virtual ~imgRequestProxy();
@@ -83,6 +85,28 @@ public:
 
 protected:
   friend class imgRequest;
+
+  class imgCancelRunnable;
+  friend class imgCancelRunnable;
+
+  class imgCancelRunnable : public nsRunnable
+  {
+    public:
+      imgCancelRunnable(imgRequestProxy* owner, nsresult status)
+        : mOwner(owner), mStatus(status)
+      {}
+
+      NS_IMETHOD Run() {
+        mOwner->DoCancel(mStatus);
+        return NS_OK;
+      }
+
+    private:
+      nsRefPtr<imgRequestProxy> mOwner;
+      nsresult mStatus;
+  };
+
+
 
   /* non-virtual imgIDecoderObserver methods */
   void OnStartDecode   ();
@@ -103,18 +127,35 @@ protected:
   inline PRBool HasObserver() const {
     return mListener != nsnull;
   }
-  
+
+  /* Finish up canceling ourselves */
+  void DoCancel(nsresult status);
+
+  /* Do the proper refcount management to null out mListener */
+  void NullOutListener();
+
+  void DoRemoveFromLoadGroup() {
+    RemoveFromLoadGroup(PR_TRUE);
+  }
 private:
   friend class imgCacheValidator;
 
-  imgRequest *mOwner;
+  // We maintain the following invariant:
+  // The proxy is registered at most with a single imgRequest as an observer,
+  // and whenever it is, mOwner points to that object. This helps ensure that
+  // imgRequestProxy::~imgRequestProxy unregisters the proxy as an observer
+  // from whatever request it was registered with (if any). This, in turn,
+  // means that imgRequest::mObservers will not have any stale pointers in it.
+  nsRefPtr<imgRequest> mOwner;
 
-  imgIDecoderObserver* mListener;  // Weak ref; see imgILoader.idl
+  // mListener is only promised to be a weak ref (see imgILoader.idl),
+  // but we actually keep a strong ref to it until we've seen our
+  // first OnStopRequest.
+  imgIDecoderObserver* mListener;
   nsCOMPtr<nsILoadGroup> mLoadGroup;
 
   nsLoadFlags mLoadFlags;
   PRPackedBool mCanceled;
   PRPackedBool mIsInLoadGroup;
-
-  PRLock *mLock;
+  PRPackedBool mListenerIsStrongRef;
 };

@@ -72,7 +72,7 @@ public:
                           nsIStreamListener** aDocListener,
                           nsIContentViewer** aDocViewer);
 
-  nsresult CreateRDFDocument(const char* aCommand,
+  nsresult CreateXULDocument(const char* aCommand,
                              nsIChannel* aChannel,
                              nsILoadGroup* aLoadGroup,
                              const char* aContentType,
@@ -80,12 +80,6 @@ public:
                              nsISupports* aExtraInfo,
                              nsIStreamListener** aDocListener,
                              nsIContentViewer** aDocViewer);
-
-  nsresult CreateRDFDocument(nsISupports*,
-                             nsCOMPtr<nsIDocument>*,
-                             nsCOMPtr<nsIDocumentViewer>*);
-
-  static nsICSSStyleSheet* gUAStyleSheet;
 
 #ifdef MOZ_SVG
   static NS_IMETHODIMP RegisterSVG();
@@ -107,6 +101,7 @@ public:
 
 private:
   static nsresult EnsureUAStyleSheet();
+  static PRBool IsImageContentType(const char* aContentType);
 };
 
 nsresult

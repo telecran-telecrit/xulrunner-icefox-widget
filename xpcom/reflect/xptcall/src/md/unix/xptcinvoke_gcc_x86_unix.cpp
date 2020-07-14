@@ -91,9 +91,9 @@ xptc_invoke_copy_to_stack_keeper (void)
 
 
 /*
-  XPTC_PUBLIC_API(nsresult)
-  XPTC_InvokeByIndex(nsISupports* that, PRUint32 methodIndex,
-		     PRUint32 paramCount, nsXPTCVariant* params);
+  EXPORT_XPCOM_API(nsresult)
+  NS_InvokeByIndex_P(nsISupports* that, PRUint32 methodIndex,
+                   PRUint32 paramCount, nsXPTCVariant* params);
 
   Each param takes at most two 4-byte words.
   It doesn't matter if we push too many words, and calculating the exact
@@ -111,18 +111,18 @@ xptc_invoke_copy_to_stack_keeper (void)
   bug 140412 for details. However, avoid this if you can. It's slower.
 */
 /*
- * Hack for gcc for win32.  Functions used externally must be
+ * Hack for gcc for win32 and os2.  Functions used externally must be
  * explicitly dllexported.
  * Bug 226609
  */
-#ifdef XP_WIN32
+#if defined(XP_WIN32) || defined(XP_OS2)
 extern "C" {
-    nsresult _XPTC_InvokeByIndex(nsISupports* that, PRUint32 methodIndex,
-                                   PRUint32 paramCount, nsXPTCVariant* params);
-    XPTC_PUBLIC_API(nsresult)
-         XPTC_InvokeByIndex(nsISupports* that, PRUint32 methodIndex,
-                            PRUint32 paramCount, nsXPTCVariant* params) { 
-        return _XPTC_InvokeByIndex(that, methodIndex, paramCount, params);
+    nsresult _NS_InvokeByIndex_P(nsISupports* that, PRUint32 methodIndex,
+                               PRUint32 paramCount, nsXPTCVariant* params);
+    EXPORT_XPCOM_API(nsresult)
+    NS_InvokeByIndex_P(nsISupports* that, PRUint32 methodIndex,
+                     PRUint32 paramCount, nsXPTCVariant* params) { 
+        return _NS_InvokeByIndex_P(that, methodIndex, paramCount, params);
     }
 }
 #endif
@@ -132,13 +132,13 @@ __asm__ (
 /* alignment here seems unimportant here; this was 16, now it's 2 which
    is what xptcstubs uses. */
 	".align 2\n\t"
-#ifdef XP_WIN32
-	".globl " SYMBOL_UNDERSCORE "_XPTC_InvokeByIndex\n\t"
-	SYMBOL_UNDERSCORE "_XPTC_InvokeByIndex:\n\t"
+#if defined(XP_WIN32) || defined(XP_OS2)
+	".globl " SYMBOL_UNDERSCORE "_NS_InvokeByIndex_P\n\t"
+	SYMBOL_UNDERSCORE "_NS_InvokeByIndex_P:\n\t"
 #else
-	".globl " SYMBOL_UNDERSCORE "XPTC_InvokeByIndex\n\t"
-	".type  " SYMBOL_UNDERSCORE "XPTC_InvokeByIndex,@function\n"
-	SYMBOL_UNDERSCORE "XPTC_InvokeByIndex:\n\t"
+	".globl " SYMBOL_UNDERSCORE "NS_InvokeByIndex_P\n\t"
+	".type  " SYMBOL_UNDERSCORE "NS_InvokeByIndex_P,@function\n"
+	SYMBOL_UNDERSCORE "NS_InvokeByIndex_P:\n\t"
 #endif
 	"pushl %ebp\n\t"
 	"movl  %esp, %ebp\n\t"
@@ -156,11 +156,13 @@ __asm__ (
 	"leal  0(,%eax,8),%edx\n\t"
 	"movl  %esp, %ecx\n\t"
 	"subl  %edx, %ecx\n\t"
-/* Since there may be 64-bit data, it occurs to me that aligning this
-   space might be a performance gain. However, I don't think the rest
-   of mozilla worries about such things. In any event, do it here.
-	"andl  $0xfffffff8, %ecx\n\t"
+/* Align to maximum x86 data size: 128 bits == 16 bytes == XMM register size.
+ * This is to avoid protection faults where SSE+ alignment of stack pointer
+ * is assumed and required, e.g. by GCC4's -ftree-vectorize option.
  */
+	"andl  $0xfffffff0, %ecx\n\t"   /* drop(?) stack ptr to 128-bit align */
+	"subl  $8, %ecx\n\t"	        /* lower again; push/call below will re-align */
+	
 	"movl  %ecx, %esp\n\t"          /* make stack space */
 	"movl  0x14(%ebp), %edx\n\t"
 	"call  " SYMBOL_UNDERSCORE "invoke_copy_to_stack\n\t"
@@ -192,8 +194,8 @@ __asm__ (
 	"movl  %ebp, %esp\n\t"
 	"popl  %ebp\n\t"
 	"ret\n"
-#ifndef XP_WIN32
-	".size " SYMBOL_UNDERSCORE "XPTC_InvokeByIndex, . -" SYMBOL_UNDERSCORE "XPTC_InvokeByIndex\n\t"
+#if !defined(XP_WIN32) && !defined(XP_OS2)
+	".size " SYMBOL_UNDERSCORE "NS_InvokeByIndex_P, . -" SYMBOL_UNDERSCORE "NS_InvokeByIndex_P\n\t"
 #endif
 );
 

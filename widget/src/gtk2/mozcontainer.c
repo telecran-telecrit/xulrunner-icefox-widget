@@ -40,6 +40,11 @@
 #include <gtk/gtkprivate.h>
 #include <stdio.h>
 
+#ifdef ACCESSIBILITY
+#include <atk/atk.h>
+#include "maiRedundantObjectFactory.h"
+#endif 
+
 /* init methods */
 static void moz_container_class_init          (MozContainerClass *klass);
 static void moz_container_init                (MozContainer      *container);
@@ -100,6 +105,13 @@ moz_container_get_type(void)
         moz_container_type = g_type_register_static (GTK_TYPE_CONTAINER,
                                                      "MozContainer",
                                                      &moz_container_info, 0);
+#ifdef ACCESSIBILITY
+        /* Set a factory to return accessible object with ROLE_REDUNDANT for
+         * MozContainer, so that gail won't send focus notification for it */
+        atk_registry_set_factory_type(atk_get_default_registry(),
+                                      moz_container_type,
+                                      mai_redundant_object_factory_get_type());
+#endif
     }
 
     return moz_container_type;
@@ -363,7 +375,7 @@ moz_container_remove (GtkContainer *container, GtkWidget *child_widget)
 {
     MozContainerChild *child;
     MozContainer *moz_container;
-    GList *tmp_list;
+    GdkWindow* parent_window;
 
     g_return_if_fail (IS_MOZ_CONTAINER(container));
     g_return_if_fail (GTK_IS_WIDGET(child_widget));
@@ -373,8 +385,34 @@ moz_container_remove (GtkContainer *container, GtkWidget *child_widget)
     child = moz_container_get_child (moz_container, child_widget);
     g_return_if_fail (child);
 
-    if(child->widget == child_widget) {
-        gtk_widget_unparent(child_widget);
+    /* gtk_widget_unparent will remove the parent window (as well as the
+     * parent widget), but, in Mozilla's window hierarchy, the parent window
+     * may need to be kept because it may be part of a GdkWindow sub-hierarchy
+     * that is being moved to another MozContainer.
+     *
+     * (In a conventional GtkWidget hierarchy, GdkWindows being reparented
+     * would have their own GtkWidget and that widget would be the one being
+     * reparented.  In Mozilla's hierarchy, the parent_window needs to be
+     * retained so that the GdkWindow sub-hierarchy is maintained.)
+     */
+    parent_window = gtk_widget_get_parent_window(child_widget);
+    if (parent_window)
+        g_object_ref(parent_window);
+
+    gtk_widget_unparent(child_widget);
+
+    if (parent_window) {
+        /* The child_widget will always still exist because g_signal_emit,
+         * which invokes this function, holds a reference.
+         *
+         * If parent_window is the container's root window then it will not be
+         * the parent_window if the child_widget is placed in another
+         * container.
+         */
+        if (parent_window != GTK_WIDGET(container)->window)
+            gtk_widget_set_parent_window(child_widget, parent_window);
+
+        g_object_unref(parent_window);
     }
 
     moz_container->children = g_list_remove(moz_container->children, child);

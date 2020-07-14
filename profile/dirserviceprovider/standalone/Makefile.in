@@ -48,12 +48,6 @@ REQUIRES	= xpcom \
 		  string \
 		  $(NULL)
 
-ifdef MOZ_PROFILESHARING
-REQUIRES	+= ipcd \
-		  profilesharingsetup \
-		  $(NULL)
-endif
-
 CPPSRCS		= $(MODULES_PROFILEDIRSERVICE_SRC_LCSRCS)
 
 # we don't want the shared lib
@@ -63,5 +57,9 @@ include $(topsrcdir)/config/rules.mk
 
 LOCAL_INCLUDES = -I$(srcdir)/../src
 
+DEFINES += -DXPCOM_GLUE
+
 export:: $(MODULES_PROFILEDIRSERVICE_SRC_CSRCS)
 	$(INSTALL) $^ .
+
+GARBAGE		= $(notdir $(MODULES_PROFILEDIRSERVICE_SRC_CSRCS))

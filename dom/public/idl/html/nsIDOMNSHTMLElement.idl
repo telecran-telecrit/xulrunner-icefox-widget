@@ -38,7 +38,7 @@
 
 #include "domstubs.idl"
 
-[scriptable, uuid(da83b2ec-8264-4410-8496-ada3acd2ae42)]
+[scriptable, uuid(7F142F9A-FBA7-4949-93D6-CF08A974AC51)]
 interface nsIDOMNSHTMLElement : nsISupports
 {
   readonly attribute long             offsetTop;
@@ -48,15 +48,12 @@ interface nsIDOMNSHTMLElement : nsISupports
   readonly attribute nsIDOMElement    offsetParent;
            attribute DOMString        innerHTML;
 
-           attribute long             scrollTop;
-           attribute long             scrollLeft;
-  readonly attribute long             scrollHeight;
-  readonly attribute long             scrollWidth;
-
-  readonly attribute long             clientHeight;
-  readonly attribute long             clientWidth;
-
            attribute long             tabIndex;
+
+           attribute DOMString        contentEditable;
+
+           // for WHAT-WG drag and drop
+           attribute boolean          draggable;
 
   void blur();
   void focus();
@@ -64,10 +61,6 @@ interface nsIDOMNSHTMLElement : nsISupports
   // |top| is optional in JS, scriptability of this method is done in
   // nsHTMLElementSH
   void scrollIntoView(in boolean top);
-};
 
-[scriptable, uuid(91fdb05e-f1af-4857-a604-45448bc02471)]
-interface nsIDOMNSHTMLElement_MOZILLA_1_8_BRANCH : nsIDOMNSHTMLElement
-{
            attribute boolean         spellcheck;
 };

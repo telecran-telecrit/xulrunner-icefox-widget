@@ -44,6 +44,9 @@
 #include "nsPrimitiveHelpers.h"
 #include "nsICharsetConverterManager.h"
 #include "nsIServiceManager.h"
+#include "nsIImage.h"
+#include "nsImageToPixbuf.h"
+#include "nsStringStream.h"
 
 #include <gtk/gtkclipboard.h>
 #include <gtk/gtkinvisible.h>
@@ -163,6 +166,14 @@ nsClipboard::SetData(nsITransferable *aTransferable,
         return NS_OK;
     }
 
+    nsresult rv;
+    if (!mPrivacyHandler) {
+        rv = NS_NewClipboardPrivacyHandler(getter_AddRefs(mPrivacyHandler));
+        NS_ENSURE_SUCCESS(rv, rv);
+    }
+    rv = mPrivacyHandler->PrepareDataForClipboard(aTransferable);
+    NS_ENSURE_SUCCESS(rv, rv);
+
     // Clear out the clipboard in order to set the new data
     EmptyClipboard(aWhichClipboard);
 
@@ -186,7 +197,6 @@ nsClipboard::SetData(nsITransferable *aTransferable,
     gtk_selection_clear_targets(mWidget, selectionAtom);
 
     // Get the types of supported flavors
-    nsresult rv;
     nsCOMPtr<nsISupportsArray> flavors;
 
     rv = aTransferable->FlavorsTransferableCanExport(getter_AddRefs(flavors));
@@ -215,6 +225,38 @@ nsClipboard::SetData(nsITransferable *aTransferable,
                 AddTarget(gdk_atom_intern("TEXT", FALSE), selectionAtom);
                 AddTarget(GDK_SELECTION_TYPE_STRING, selectionAtom);
                 // next loop iteration
+                continue;
+            }
+
+            // very special case for this one. since our selection mechanism doesn't work for images,
+            // we must use GTK's clipboard utility functions
+            if (!strcmp(flavorStr, kNativeImageMime) || !strcmp(flavorStr, kPNGImageMime) ||
+                !strcmp(flavorStr, kJPEGImageMime) || !strcmp(flavorStr, kGIFImageMime)) {
+                nsCOMPtr<nsISupports> item;
+                PRUint32 len;
+                rv = aTransferable->GetTransferData(flavorStr, getter_AddRefs(item), &len);
+                nsCOMPtr<nsISupportsInterfacePointer> ptrPrimitive(do_QueryInterface(item));
+                if (!ptrPrimitive)
+                    continue;
+
+                nsCOMPtr<nsISupports> primitiveData;
+                ptrPrimitive->GetData(getter_AddRefs(primitiveData));
+                nsCOMPtr<nsIImage> image(do_QueryInterface(primitiveData));
+                if (!image) // Not getting an image for an image mime type!?
+                    continue;
+
+                if (NS_FAILED(image->LockImagePixels(PR_FALSE)))
+                    continue;
+                GdkPixbuf* pixbuf = nsImageToPixbuf::ImageToPixbuf(image);
+                if (!pixbuf) {
+                    image->UnlockImagePixels(PR_FALSE);
+                    continue;
+                }
+
+                GtkClipboard *aClipboard = gtk_clipboard_get(GetSelectionAtom(aWhichClipboard));
+                gtk_clipboard_set_image(aClipboard, pixbuf);
+                g_object_unref(pixbuf);
+                image->UnlockImagePixels(PR_FALSE);
                 continue;
             }
 
@@ -267,7 +309,7 @@ nsClipboard::GetData(nsITransferable *aTransferable, PRInt32 aWhichClipboard)
                 gchar* new_text = wait_for_text(clipboard);
                 if (new_text) {
                     // Convert utf-8 into our unicode format.
-                    NS_ConvertUTF8toUCS2 ucs2string(new_text);
+                    NS_ConvertUTF8toUTF16 ucs2string(new_text);
                     data = (guchar *)ToNewUnicode(ucs2string);
                     length = ucs2string.Length() * 2;
                     g_free(new_text);
@@ -279,6 +321,27 @@ nsClipboard::GetData(nsITransferable *aTransferable, PRInt32 aWhichClipboard)
                 // text off the clipboard, run the next loop
                 // iteration.
                 continue;
+            }
+
+            // For images, we must wrap the data in an nsIInputStream then return instead of break,
+            // because that code below won't help us.
+            if (!strcmp(flavorStr, kJPEGImageMime) || !strcmp(flavorStr, kPNGImageMime) || !strcmp(flavorStr, kGIFImageMime)) {
+                GdkAtom atom;
+                if (!strcmp(flavorStr, kJPEGImageMime)) // This is image/jpg, but X only understands image/jpeg
+                    atom = gdk_atom_intern("image/jpeg", FALSE);
+                else
+                    atom = gdk_atom_intern(flavorStr, FALSE);
+
+                GtkSelectionData *selectionData = wait_for_contents(clipboard, atom);
+                if (!selectionData)
+                    continue;
+
+                nsCOMPtr<nsIInputStream> byteStream;
+                NS_NewByteInputStream(getter_AddRefs(byteStream), (const char*)selectionData->data,
+                                      selectionData->length, NS_ASSIGNMENT_COPY);
+                aTransferable->SetTransferData(flavorStr, byteStream, sizeof(nsIInputStream*));
+                gtk_selection_data_free(selectionData);
+                return NS_OK;
             }
 
             // Get the atom for this type and try to request it off
@@ -349,15 +412,13 @@ nsClipboard::EmptyClipboard(PRInt32 aWhichClipboard)
 }
 
 NS_IMETHODIMP
-nsClipboard::HasDataMatchingFlavors(nsISupportsArray *aFlavorList,
+nsClipboard::HasDataMatchingFlavors(const char** aFlavorList, PRUint32 aLength,
                                     PRInt32 aWhichClipboard, PRBool *_retval)
 {
-    *_retval = PR_FALSE;
+    if (!aFlavorList || !_retval)
+        return NS_ERROR_NULL_POINTER;
 
-    PRUint32 length = 0;
-    aFlavorList->Count(&length);
-    if (!length)
-        return NS_OK;
+    *_retval = PR_FALSE;
 
     GtkSelectionData *selection_data =
         GetTargets(GetSelectionAtom(aWhichClipboard));
@@ -374,33 +435,30 @@ nsClipboard::HasDataMatchingFlavors(nsISupportsArray *aFlavorList,
 
     // Walk through the provided types and try to match it to a
     // provided type.
-    for (PRUint32 i = 0; i < length && !*_retval; i++) {
-        nsCOMPtr<nsISupports> genericFlavor;
-        aFlavorList->GetElementAt(i, getter_AddRefs(genericFlavor));
-        nsCOMPtr<nsISupportsCString> flavorWrapper;
-        flavorWrapper = do_QueryInterface(genericFlavor);
+    for (PRUint32 i = 0; i < aLength && !*_retval; i++) {
+        // We special case text/unicode here.
+        if (!strcmp(aFlavorList[i], kUnicodeMime) && 
+            gtk_selection_data_targets_include_text(selection_data)) {
+            *_retval = PR_TRUE;
+            break;
+        }
 
-        if (flavorWrapper) {
-            nsXPIDLCString myStr;
-            flavorWrapper->ToString(getter_Copies(myStr));
+        for (PRInt32 j = 0; j < n_targets; j++) {
+            gchar *atom_name = gdk_atom_name(targets[j]);
+            if (!atom_name)
+                continue;
 
-            // We special case text/unicode here.
-            if (!strcmp(myStr, kUnicodeMime) && 
-                gtk_selection_data_targets_include_text(selection_data)) {
+            if (!strcmp(atom_name, aFlavorList[i]))
                 *_retval = PR_TRUE;
+
+            // X clipboard wants image/jpeg, not image/jpg
+            if (!strcmp(aFlavorList[i], kJPEGImageMime) && !strcmp(atom_name, "image/jpeg"))
+                *_retval = PR_TRUE;
+
+            g_free(atom_name);
+
+            if (*_retval)
                 break;
-            }
-
-            for (PRInt32 j = 0; j < n_targets; j++) {
-                gchar *atom_name = gdk_atom_name(targets[j]);
-                if (!strcmp(atom_name, (const char *)myStr))
-                    *_retval = PR_TRUE;
-
-                g_free(atom_name);
-
-                if (*_retval)
-                    break;
-            }
         }
     }
     gtk_selection_data_free(selection_data);
@@ -471,7 +529,7 @@ nsClipboard::SelectionGetEvent (GtkWidget        *aWidget,
     else if (aSelectionData->selection == GDK_SELECTION_CLIPBOARD)
         whichClipboard = kGlobalClipboard;
     else
-        return; // THAT AINT NO CLIPBOARD I EVER HEARD OF
+        return; // THAT AIN'T NO CLIPBOARD I EVER HEARD OF
 
     nsCOMPtr<nsITransferable> trans = GetTransferable(whichClipboard);
     
@@ -572,7 +630,7 @@ nsClipboard::SelectionClearEvent (GtkWidget         *aWidget,
     else if (aEvent->selection == GDK_SELECTION_CLIPBOARD)
         whichClipboard = kGlobalClipboard;
     else
-        return; // THAT AINT NO CLIPBOARD I EVER HEARD OF
+        return; // THAT AIN'T NO CLIPBOARD I EVER HEARD OF
 
     EmptyClipboard(whichClipboard);
 }
@@ -622,10 +680,10 @@ void ConvertHTMLtoUCS2(guchar * data, PRInt32 dataLength,
     GetHTMLCharset(data, dataLength, charset);// get charset of HTML
     if (charset.EqualsLiteral("UTF-16")) {//current mozilla
         outUnicodeLen = (dataLength / 2) - 1;
-        *unicodeData = NS_REINTERPRET_CAST(PRUnichar*,
-                       nsMemory::Alloc((outUnicodeLen + sizeof('\0')) *
+        *unicodeData = reinterpret_cast<PRUnichar*>
+                                       (nsMemory::Alloc((outUnicodeLen + sizeof('\0')) *
                        sizeof(PRUnichar)));
-        if (unicodeData) {
+        if (*unicodeData) {
             memcpy(*unicodeData, data + sizeof(PRUnichar),
                    outUnicodeLen * sizeof(PRUnichar));
             (*unicodeData)[outUnicodeLen] = '\0';
@@ -659,10 +717,10 @@ void ConvertHTMLtoUCS2(guchar * data, PRInt32 dataLength,
         decoder->GetMaxLength((const char *)data, dataLength, &outUnicodeLen);
         // |outUnicodeLen| is number of chars
         if (outUnicodeLen) {
-            *unicodeData = NS_REINTERPRET_CAST(PRUnichar*,
-                           nsMemory::Alloc((outUnicodeLen + sizeof('\0')) *
+            *unicodeData = reinterpret_cast<PRUnichar*>
+                                           (nsMemory::Alloc((outUnicodeLen + sizeof('\0')) *
                            sizeof(PRUnichar)));
-            if (unicodeData) {
+            if (*unicodeData) {
                 PRInt32 numberTmp = dataLength;
                 decoder->Convert((const char *)data, &numberTmp,
                                  *unicodeData, &outUnicodeLen);
@@ -693,8 +751,7 @@ void GetHTMLCharset(guchar * data, PRInt32 dataLength, nsCString& str)
         return;
     }
     // no "FFFE" and "FEFF", assume ASCII first to find "charset" info
-    nsDependentCString htmlStr =
-        nsDependentCString((const char *)data, dataLength);
+    const nsDependentCString htmlStr((const char *)data, dataLength);
     nsACString::const_iterator start, end;
     htmlStr.BeginReading(start);
     htmlStr.EndReading(end);
@@ -855,7 +912,7 @@ clipboard_contents_received(GtkClipboard     *clipboard,
                             GtkSelectionData *selection_data,
                             gpointer          data)
 {
-    retrieval_context *context = NS_STATIC_CAST(retrieval_context *, data);
+    retrieval_context *context = static_cast<retrieval_context *>(data);
     context->completed = PR_TRUE;
 
     if (selection_data->length >= 0)
@@ -872,7 +929,7 @@ wait_for_contents(GtkClipboard *clipboard, GdkAtom target)
                                    &context);
 
     wait_for_retrieval(clipboard, &context);
-    return NS_STATIC_CAST(GtkSelectionData *, context.data);
+    return static_cast<GtkSelectionData *>(context.data);
 }
 
 static void
@@ -880,7 +937,7 @@ clipboard_text_received(GtkClipboard *clipboard,
                         const gchar  *text,
                         gpointer      data)
 {
-    retrieval_context *context = NS_STATIC_CAST(retrieval_context *, data);
+    retrieval_context *context = static_cast<retrieval_context *>(data);
     context->completed = PR_TRUE;
     context->data = g_strdup(text);
 }
@@ -892,5 +949,5 @@ wait_for_text(GtkClipboard *clipboard)
     gtk_clipboard_request_text(clipboard, clipboard_text_received, &context);
 
     wait_for_retrieval(clipboard, &context);
-    return NS_STATIC_CAST(gchar *, context.data);
+    return static_cast<gchar *>(context.data);
 }

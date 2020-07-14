@@ -40,7 +40,6 @@
 #define nsDateTimeFormatMac_h__
 
 
-#include "nsICharsetConverterManager.h"
 #include "nsCOMPtr.h"
 #include "nsIDateTimeFormat.h"
 
@@ -55,27 +54,27 @@ public:
                         const nsDateFormatSelector  dateFormatSelector, 
                         const nsTimeFormatSelector timeFormatSelector, 
                         const time_t  timetTime, 
-                        nsString& stringOut); 
+                        nsAString& stringOut); 
 
   // performs a locale sensitive date formatting operation on the struct tm parameter
   NS_IMETHOD FormatTMTime(nsILocale* locale, 
                           const nsDateFormatSelector  dateFormatSelector, 
                           const nsTimeFormatSelector timeFormatSelector, 
                           const struct tm*  tmTime, 
-                          nsString& stringOut); 
+                          nsAString& stringOut); 
   // performs a locale sensitive date formatting operation on the PRTime parameter
   NS_IMETHOD FormatPRTime(nsILocale* locale, 
                           const nsDateFormatSelector  dateFormatSelector, 
                           const nsTimeFormatSelector timeFormatSelector, 
                           const PRTime  prTime, 
-                          nsString& stringOut);
+                          nsAString& stringOut);
 
   // performs a locale sensitive date formatting operation on the PRExplodedTime parameter
   NS_IMETHOD FormatPRExplodedTime(nsILocale* locale, 
                                   const nsDateFormatSelector  dateFormatSelector, 
                                   const nsTimeFormatSelector timeFormatSelector, 
                                   const PRExplodedTime*  explodedTime, 
-                                  nsString& stringOut); 
+                                  nsAString& stringOut); 
 
   nsDateTimeFormatMac() {}
   
@@ -87,12 +86,7 @@ private:
 
   nsString    mLocale;
   nsString    mAppLocale;
-  nsCString   mCharset;
-  short       mScriptcode;
-  short       mLangcode;
-  short       mRegioncode;
   bool        mUseDefaultLocale;
-  nsCOMPtr <nsIUnicodeDecoder>   mDecoder;
 };
 
 #endif  /* nsDateTimeFormatMac_h__ */

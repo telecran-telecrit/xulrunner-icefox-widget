@@ -54,19 +54,18 @@ REQUIRES	= xpcom \
 		  widget \
 		  gfx \
 		  docshell \
-		  appshell \
 		  appcomps \
 		  dom \
-		  js \
+		  content \
 		  uriloader \
+		  places \
 		  pref \
 		  webbrwsr \
 		  windowwatcher \
-		  history \
 		  $(NULL)
 
 ifneq (,$(MOZ_PHOENIX)$(MOZ_XULRUNNER))
-REQUIRES += toolkitcomps history
+REQUIRES += toolkitcomps
 endif
 
 CPPSRCS		= \

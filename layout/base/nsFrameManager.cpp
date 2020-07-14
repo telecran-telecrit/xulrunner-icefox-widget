@@ -44,6 +44,9 @@
  * Date             Modified by     Description of modification
  * 04/20/2000       IBM Corp.      OS/2 VisualAge build.
  */
+
+/* storage of the frame tree and information about it */
+
 #include "nscore.h"
 #include "nsPresContext.h"
 #include "nsIPresShell.h"
@@ -51,16 +54,16 @@
 #include "nsCSSFrameConstructor.h"
 #include "nsStyleContext.h"
 #include "nsStyleChangeList.h"
-#include "nsIEventQueueService.h"
 #include "nsIServiceManager.h"
 #include "nsCOMPtr.h"
 #include "prthread.h"
 #include "plhash.h"
 #include "nsPlaceholderFrame.h"
-#include "nsLayoutAtoms.h"
+#include "nsContainerFrame.h"
+#include "nsBlockFrame.h"
+#include "nsGkAtoms.h"
 #include "nsCSSAnonBoxes.h"
 #include "nsCSSPseudoElements.h"
-#include "nsHTMLAtoms.h"
 #ifdef NS_DEBUG
 #include "nsISupportsArray.h"
 #include "nsIStyleRule.h"
@@ -70,7 +73,6 @@
 #include "nsIContent.h"
 #include "nsINameSpaceManager.h"
 #include "nsIDocument.h"
-#include "nsIBindingManager.h"
 #include "nsIScrollableFrame.h"
 
 #include "nsIHTMLDocument.h"
@@ -85,13 +87,17 @@
 #include "nsReadableUtils.h"
 #include "nsUnicharUtils.h"
 #include "nsPrintfCString.h"
-#include "nsDummyLayoutRequest.h"
 #include "nsLayoutErrors.h"
 #include "nsLayoutUtils.h"
 #include "nsAutoPtr.h"
 #include "imgIRequest.h"
+#include "nsStyleStructInlines.h"
 
 #include "nsFrameManager.h"
+#ifdef ACCESSIBILITY
+#include "nsIAccessibilityService.h"
+#include "nsIAccessibleEvent.h"
+#endif
 
   #ifdef DEBUG
     //#define NOISY_DEBUG
@@ -111,9 +117,6 @@
     #define NOISY_TRACE_FRAME(_msg,_frame);
   #endif
 
-// Class IID's
-static NS_DEFINE_CID(kEventQueueServiceCID, NS_EVENTQUEUESERVICE_CID);
-
 // IID's
 
 //----------------------------------------------------------------------
@@ -123,26 +126,21 @@ struct PlaceholderMapEntry : public PLDHashEntryHdr {
   nsPlaceholderFrame *placeholderFrame;
 };
 
-PR_STATIC_CALLBACK(const void *)
-PlaceholderMapGetKey(PLDHashTable *table, PLDHashEntryHdr *hdr)
-{
-  PlaceholderMapEntry *entry = NS_STATIC_CAST(PlaceholderMapEntry*, hdr);
-  return entry->placeholderFrame->GetOutOfFlowFrame();
-}
-
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 PlaceholderMapMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
                          const void *key)
 {
   const PlaceholderMapEntry *entry =
-    NS_STATIC_CAST(const PlaceholderMapEntry*, hdr);
+    static_cast<const PlaceholderMapEntry*>(hdr);
+  NS_ASSERTION(entry->placeholderFrame->GetOutOfFlowFrame() !=
+               (void*)0xdddddddd,
+               "Dead placeholder in placeholder map");
   return entry->placeholderFrame->GetOutOfFlowFrame() == key;
 }
 
 static PLDHashTableOps PlaceholderMapOps = {
   PL_DHashAllocTable,
   PL_DHashFreeTable,
-  PlaceholderMapGetKey,
   PL_DHashVoidPtrKeyStub,
   PlaceholderMapMatchEntry,
   PL_DHashMoveEntryStub,
@@ -165,26 +163,18 @@ struct PrimaryFrameMapEntry : public PLDHashEntryHdr {
   // These ops should be used if/when we switch back to a 2-word entry.
   // See comment in |PrimaryFrameMapEntry| above.
 #if 0
-PR_STATIC_CALLBACK(const void *)
-PrimaryFrameMapGetKey(PLDHashTable *table, PLDHashEntryHdr *hdr)
-{
-  PrimaryFrameMapEntry *entry = NS_STATIC_CAST(PrimaryFrameMapEntry*, hdr);
-  return entry->frame->GetContent();
-}
-
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 PrimaryFrameMapMatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
                          const void *key)
 {
   const PrimaryFrameMapEntry *entry =
-    NS_STATIC_CAST(const PrimaryFrameMapEntry*, hdr);
+    static_cast<const PrimaryFrameMapEntry*>(hdr);
   return entry->frame->GetContent() == key;
 }
 
 static PLDHashTableOps PrimaryFrameMapOps = {
   PL_DHashAllocTable,
   PL_DHashFreeTable,
-  PrimaryFrameMapGetKey,
   PL_DHashVoidPtrKeyStub,
   PrimaryFrameMapMatchEntry,
   PL_DHashMoveEntryStub,
@@ -198,7 +188,6 @@ static PLDHashTableOps PrimaryFrameMapOps = {
 
 // XXXldb This seems too complicated for what I think it's doing, and it
 // should also be using pldhash rather than plhash to use less memory.
-MOZ_DECL_CTOR_COUNTER(UndisplayedNode)
 
 class UndisplayedNode {
 public:
@@ -213,7 +202,15 @@ public:
   NS_HIDDEN ~UndisplayedNode()
   {
     MOZ_COUNT_DTOR(UndisplayedNode);
-    delete mNext;
+
+    // Delete mNext iteratively to avoid blowing up the stack (bug 460461).
+    UndisplayedNode *cur = mNext;
+    while (cur) {
+      UndisplayedNode *next = cur->mNext;
+      cur->mNext = nsnull;
+      delete cur;
+      cur = next;
+    }
   }
 
   nsCOMPtr<nsIContent>      mContent;
@@ -283,18 +280,16 @@ nsFrameManager::Destroy()
 {
   NS_ASSERTION(mPresShell, "Frame manager already shut down.");
 
-  nsPresContext *presContext = mPresShell->GetPresContext();
-  
   // Destroy the frame hierarchy.
   mPresShell->SetIgnoreFrameDestruction(PR_TRUE);
 
-  mIsDestroyingFrames = PR_TRUE;  // This flag prevents GetPrimaryFrameFor from returning pointers to destroyed frames
+  mIsDestroying = PR_TRUE;  // This flag prevents GetPrimaryFrameFor from returning pointers to destroyed frames
 
   // Unregister all placeholders before tearing down the frame tree
   nsFrameManager::ClearPlaceholderFrameMap();
 
   if (mRootFrame) {
-    mRootFrame->Destroy(presContext);
+    mRootFrame->Destroy();
     mRootFrame = nsnull;
   }
   
@@ -316,7 +311,7 @@ nsFrameManager::GetCanvasFrame()
       // get each sibling of the child and check them, startig at the child
       nsIFrame *siblingFrame = childFrame;
       while (siblingFrame) {
-        if (siblingFrame->GetType() == nsLayoutAtoms::canvasFrame) {
+        if (siblingFrame->GetType() == nsGkAtoms::canvasFrame) {
           // this is it
           return siblingFrame;
         } else {
@@ -334,14 +329,15 @@ nsFrameManager::GetCanvasFrame()
 
 // Primary frame functions
 nsIFrame*
-nsFrameManager::GetPrimaryFrameFor(nsIContent* aContent)
+nsFrameManager::GetPrimaryFrameFor(nsIContent* aContent,
+                                   PRInt32 aIndexHint)
 {
+  NS_ASSERTION(!mIsDestroyingFrames,
+               "GetPrimaryFrameFor() called while frames are being destroyed!");
   NS_ENSURE_TRUE(aContent, nsnull);
 
-  if (mIsDestroyingFrames) {
-#ifdef DEBUG
-    printf("GetPrimaryFrameFor() called while nsFrameManager is being destroyed!\n");
-#endif
+  if (mIsDestroying) {
+    NS_ERROR("GetPrimaryFrameFor() called while nsFrameManager is being destroyed!");
     return nsnull;
   }
 
@@ -350,8 +346,8 @@ nsFrameManager::GetPrimaryFrameFor(nsIContent* aContent)
   }
 
   if (mPrimaryFrameMap.ops) {
-    PrimaryFrameMapEntry *entry = NS_STATIC_CAST(PrimaryFrameMapEntry*,
-        PL_DHashTableOperate(&mPrimaryFrameMap, aContent, PL_DHASH_LOOKUP));
+    PrimaryFrameMapEntry *entry = static_cast<PrimaryFrameMapEntry*>
+                                             (PL_DHashTableOperate(&mPrimaryFrameMap, aContent, PL_DHASH_LOOKUP));
     if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
       return entry->frame;
     }
@@ -378,21 +374,24 @@ nsFrameManager::GetPrimaryFrameFor(nsIContent* aContent)
     nsIContent* parent = aContent->GetParent();
     if (parent)
     {
-      PRInt32 index = parent->IndexOf(aContent);
+      PRInt32 index = aIndexHint >= 0 ? aIndexHint : parent->IndexOf(aContent);
       if (index > 0)  // no use looking if it's the first child
       {
         nsIContent *prevSibling;
         do {
           prevSibling = parent->GetChildAt(--index);
         } while (index &&
-                 (prevSibling->IsContentOfType(nsIContent::eTEXT) ||
-                  prevSibling->IsContentOfType(nsIContent::eCOMMENT) ||
-                  prevSibling->IsContentOfType(nsIContent::ePROCESSING_INSTRUCTION)));
+                 (prevSibling->IsNodeOfType(nsINode::eTEXT) ||
+                  prevSibling->IsNodeOfType(nsINode::eCOMMENT) ||
+                  prevSibling->IsNodeOfType(nsINode::ePROCESSING_INSTRUCTION)));
         if (prevSibling) {
-          entry = NS_STATIC_CAST(PrimaryFrameMapEntry*,
-                          PL_DHashTableOperate(&mPrimaryFrameMap, prevSibling,
+          entry = static_cast<PrimaryFrameMapEntry*>
+                             (PL_DHashTableOperate(&mPrimaryFrameMap, prevSibling,
                                                PL_DHASH_LOOKUP));
-          if (PL_DHASH_ENTRY_IS_BUSY(entry))
+          // XXXbz the GetContent() == prevSibling check is needed due to bug
+          // 135040.  Remove it once that's fixed.
+          if (PL_DHASH_ENTRY_IS_BUSY(entry) && entry->frame &&
+              entry->frame->GetContent() == prevSibling)
             hint.mPrimaryFrameForPrevSibling = entry->frame;
         }
       }
@@ -419,6 +418,16 @@ nsFrameManager::SetPrimaryFrameFor(nsIContent* aContent,
   NS_ENSURE_ARG_POINTER(aContent);
   NS_ASSERTION(aPrimaryFrame && aPrimaryFrame->GetParent(),
                "BOGUS!");
+#ifdef DEBUG
+  {
+    nsIFrame *docElementCB = 
+      mPresShell->FrameConstructor()->GetDocElementContainingBlock();
+    NS_ASSERTION(aPrimaryFrame != docElementCB &&
+                 !nsLayoutUtils::IsProperAncestorFrame(aPrimaryFrame,
+                                                       docElementCB),
+                 "too high in the frame tree to be a primary frame");
+  }
+#endif
 
   // This code should be used if/when we switch back to a 2-word entry
   // in the primary frame map.
@@ -436,8 +445,8 @@ nsFrameManager::SetPrimaryFrameFor(nsIContent* aContent,
   }
 
   // Add a mapping to the hash table
-  PrimaryFrameMapEntry *entry = NS_STATIC_CAST(PrimaryFrameMapEntry*,
-      PL_DHashTableOperate(&mPrimaryFrameMap, aContent, PL_DHASH_ADD));
+  PrimaryFrameMapEntry *entry = static_cast<PrimaryFrameMapEntry*>
+                                           (PL_DHashTableOperate(&mPrimaryFrameMap, aContent, PL_DHASH_ADD));
 #ifdef DEBUG_dbaron
   if (entry->frame) {
     NS_WARNING("already have primary frame for content");
@@ -455,8 +464,8 @@ nsFrameManager::RemoveAsPrimaryFrame(nsIContent* aContent,
 {
   NS_PRECONDITION(aPrimaryFrame, "Must have a frame");
   if (aContent && mPrimaryFrameMap.ops) {
-    PrimaryFrameMapEntry *entry = NS_STATIC_CAST(PrimaryFrameMapEntry*,
-        PL_DHashTableOperate(&mPrimaryFrameMap, aContent, PL_DHASH_LOOKUP));
+    PrimaryFrameMapEntry *entry = static_cast<PrimaryFrameMapEntry*>
+                                             (PL_DHashTableOperate(&mPrimaryFrameMap, aContent, PL_DHASH_LOOKUP));
     if (PL_DHASH_ENTRY_IS_BUSY(entry) && entry->frame == aPrimaryFrame) {
       // Don't use PL_DHashTableRawRemove, since we want the table to
       // shrink as needed.
@@ -464,7 +473,7 @@ nsFrameManager::RemoveAsPrimaryFrame(nsIContent* aContent,
     }
   }
 
-  aPrimaryFrame->RemovedAsPrimaryFrame(GetPresContext());
+  aPrimaryFrame->RemovedAsPrimaryFrame();
 }
 
 void
@@ -483,8 +492,8 @@ nsFrameManager::GetPlaceholderFrameFor(nsIFrame*  aFrame)
   NS_PRECONDITION(aFrame, "null param unexpected");
 
   if (mPlaceholderMap.ops) {
-    PlaceholderMapEntry *entry = NS_STATIC_CAST(PlaceholderMapEntry*,
-           PL_DHashTableOperate(NS_CONST_CAST(PLDHashTable*, &mPlaceholderMap),
+    PlaceholderMapEntry *entry = static_cast<PlaceholderMapEntry*>
+                                            (PL_DHashTableOperate(const_cast<PLDHashTable*>(&mPlaceholderMap),
                                 aFrame, PL_DHASH_LOOKUP));
     if (PL_DHASH_ENTRY_IS_BUSY(entry)) {
       return entry->placeholderFrame;
@@ -498,7 +507,7 @@ nsresult
 nsFrameManager::RegisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame)
 {
   NS_PRECONDITION(aPlaceholderFrame, "null param unexpected");
-  NS_PRECONDITION(nsLayoutAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
+  NS_PRECONDITION(nsGkAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
                   "unexpected frame type");
   if (!mPlaceholderMap.ops) {
     if (!PL_DHashTableInit(&mPlaceholderMap, &PlaceholderMapOps, nsnull,
@@ -507,8 +516,7 @@ nsFrameManager::RegisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame)
       return NS_ERROR_OUT_OF_MEMORY;
     }
   }
-  PlaceholderMapEntry *entry = NS_STATIC_CAST(PlaceholderMapEntry*, 
-         PL_DHashTableOperate(&mPlaceholderMap,
+  PlaceholderMapEntry *entry = static_cast<PlaceholderMapEntry*>(PL_DHashTableOperate(&mPlaceholderMap,
                               aPlaceholderFrame->GetOutOfFlowFrame(),
                               PL_DHASH_ADD));
   if (!entry)
@@ -524,7 +532,7 @@ void
 nsFrameManager::UnregisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame)
 {
   NS_PRECONDITION(aPlaceholderFrame, "null param unexpected");
-  NS_PRECONDITION(nsLayoutAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
+  NS_PRECONDITION(nsGkAtoms::placeholderFrame == aPlaceholderFrame->GetType(),
                   "unexpected frame type");
 
   if (mPlaceholderMap.ops) {
@@ -534,11 +542,11 @@ nsFrameManager::UnregisterPlaceholderFrame(nsPlaceholderFrame* aPlaceholderFrame
   }
 }
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 UnregisterPlaceholders(PLDHashTable* table, PLDHashEntryHdr* hdr,
                        PRUint32 number, void* arg)
 {
-  PlaceholderMapEntry* entry = NS_STATIC_CAST(PlaceholderMapEntry*, hdr);
+  PlaceholderMapEntry* entry = static_cast<PlaceholderMapEntry*>(hdr);
   entry->placeholderFrame->SetOutOfFlowFrame(nsnull);
   return PL_DHASH_NEXT;
 }
@@ -562,9 +570,6 @@ nsFrameManager::GetUndisplayedContent(nsIContent* aContent)
     return nsnull;
 
   nsIContent* parent = aContent->GetParent();
-  if (!parent)
-    return nsnull;
-
   for (UndisplayedNode* node = mUndisplayedMap->GetFirstNode(parent);
          node; node = node->mNext) {
     if (node->mContent == aContent)
@@ -579,19 +584,22 @@ nsFrameManager::SetUndisplayedContent(nsIContent* aContent,
                                       nsStyleContext* aStyleContext)
 {
 #ifdef DEBUG_UNDISPLAYED_MAP
-   static int i = 0;
-   printf("SetUndisplayedContent(%d): p=%p \n", i++, (void *)aContent);
+  static int i = 0;
+  printf("SetUndisplayedContent(%d): p=%p \n", i++, (void *)aContent);
 #endif
+
+  NS_ASSERTION(!GetUndisplayedContent(aContent),
+               "Already have an undisplayed context entry for aContent");
 
   if (! mUndisplayedMap) {
     mUndisplayedMap = new UndisplayedMap;
   }
   if (mUndisplayedMap) {
     nsIContent* parent = aContent->GetParent();
-    NS_ASSERTION(parent, "undisplayed content must have a parent");
-    if (parent) {
-      mUndisplayedMap->AddNodeFor(parent, aContent, aStyleContext);
-    }
+    NS_ASSERTION(parent || (mPresShell && mPresShell->GetDocument() &&
+                 mPresShell->GetDocument()->GetRootContent() == aContent),
+                 "undisplayed content must have a parent, unless it's the root content");
+    mUndisplayedMap->AddNodeFor(parent, aContent, aStyleContext);
   }
 }
 
@@ -681,21 +689,10 @@ nsFrameManager::InsertFrames(nsIFrame*       aParentFrame,
                              nsIFrame*       aPrevFrame,
                              nsIFrame*       aFrameList)
 {
-#ifdef IBMBIDI
-  if (aPrevFrame) {
-    // Insert aFrameList after the last bidi continuation of aPrevFrame.
-    nsPropertyTable *propTable = GetPresContext()->PropertyTable();
-    nsIFrame* nextBidi;
-    for (; ;) {
-      nextBidi = NS_STATIC_CAST(nsIFrame*,
-                  propTable->GetProperty(aPrevFrame, nsLayoutAtoms::nextBidi));
-      if (!nextBidi) {
-        break;
-      }
-      aPrevFrame = nextBidi;
-    }
-  }
-#endif // IBMBIDI
+  NS_PRECONDITION(!aPrevFrame || (!aPrevFrame->GetNextContinuation()
+                  || IS_TRUE_OVERFLOW_CONTAINER(aPrevFrame->GetNextContinuation()))
+                  && !IS_TRUE_OVERFLOW_CONTAINER(aPrevFrame),
+                  "aPrevFrame must be the last continuation in its chain!");
 
   return aParentFrame->InsertFrames(aListName, aPrevFrame, aFrameList);
 }
@@ -705,16 +702,22 @@ nsFrameManager::RemoveFrame(nsIFrame*       aParentFrame,
                             nsIAtom*        aListName,
                             nsIFrame*       aOldFrame)
 {
-#ifdef IBMBIDI
-  // Don't let the parent remove next bidi. In the other cases the it should NOT be removed.
-  nsIFrame* nextBidi =
-    NS_STATIC_CAST(nsIFrame*, aOldFrame->GetProperty(nsLayoutAtoms::nextBidi));
-  if (nextBidi) {
-    RemoveFrame(aParentFrame, aListName, nextBidi);
-  }
-#endif // IBMBIDI
+  PRBool wasDestroyingFrames = mIsDestroyingFrames;
+  mIsDestroyingFrames = PR_TRUE;
 
-  return aParentFrame->RemoveFrame(aListName, aOldFrame);
+  // In case the reflow doesn't invalidate anything since it just leaves
+  // a gap where the old frame was, we invalidate it here.  (This is
+  // reasonably likely to happen when removing a last child in a way
+  // that doesn't change the size of the parent.)
+  // This has to sure to invalidate the entire overflow rect; this
+  // is important in the presence of absolute positioning
+  aOldFrame->Invalidate(aOldFrame->GetOverflowRect());
+
+  nsresult rv = aParentFrame->RemoveFrame(aListName, aOldFrame);
+
+  mIsDestroyingFrames = wasDestroyingFrames;
+
+  return rv;
 }
 
 //----------------------------------------------------------------------
@@ -727,8 +730,8 @@ nsFrameManager::NotifyDestroyingFrame(nsIFrame* aFrame)
   // during frame destruction, since this problem keeps coming back to
   // bite us.  We may want to remove the previous caller.
   if (mPrimaryFrameMap.ops) {
-    PrimaryFrameMapEntry *entry = NS_STATIC_CAST(PrimaryFrameMapEntry*,
-        PL_DHashTableOperate(&mPrimaryFrameMap, aFrame->GetContent(), PL_DHASH_LOOKUP));
+    PrimaryFrameMapEntry *entry = static_cast<PrimaryFrameMapEntry*>
+                                             (PL_DHashTableOperate(&mPrimaryFrameMap, aFrame->GetContent(), PL_DHASH_LOOKUP));
     if (PL_DHASH_ENTRY_IS_BUSY(entry) && entry->frame == aFrame) {
       NS_NOTREACHED("frame was not removed from primary frame map before "
                     "destruction or was readded to map after being removed");
@@ -748,18 +751,18 @@ DumpContext(nsIFrame* aFrame, nsStyleContext* aContext)
 
     if (NS_SUCCEEDED(aFrame->QueryInterface(NS_GET_IID(nsIFrameDebug), (void**)&frameDebug))) {
       frameDebug->GetFrameName(name);
-      fputs(NS_LossyConvertUCS2toASCII(name).get(), stdout);
+      fputs(NS_LossyConvertUTF16toASCII(name).get(), stdout);
     }
-    fprintf(stdout, " (%p)", NS_STATIC_CAST(void*, aFrame));
+    fprintf(stdout, " (%p)", static_cast<void*>(aFrame));
   }
   if (aContext) {
-    fprintf(stdout, " style: %p ", NS_STATIC_CAST(void*, aContext));
+    fprintf(stdout, " style: %p ", static_cast<void*>(aContext));
 
     nsIAtom* pseudoTag = aContext->GetPseudoType();
     if (pseudoTag) {
       nsAutoString  buffer;
       pseudoTag->ToString(buffer);
-      fputs(NS_LossyConvertUCS2toASCII(buffer).get(), stdout);
+      fputs(NS_LossyConvertUTF16toASCII(buffer).get(), stdout);
       fputs(" ", stdout);
     }
 
@@ -804,8 +807,8 @@ VerifySameTree(nsStyleContext* aContext1, nsStyleContext* aContext2)
       break;
     top2 = parent;
   }
-  if (top1 != top2)
-    printf("Style contexts are not in the same style context tree.\n");
+  NS_ASSERTION(top1 == top2,
+               "Style contexts are not in the same style context tree");
 }
 
 static void
@@ -839,9 +842,10 @@ VerifyContextParent(nsPresContext* aPresContext, nsIFrame* aFrame,
     if (aParentContext != actualParentContext) {
       DumpContext(aFrame, aContext);
       if (aContext == aParentContext) {
-        fputs("Using parent's style context\n\n", stdout);
+        NS_ERROR("Using parent's style context");
       }
       else {
+        NS_ERROR("Wrong parent style context");
         fputs("Wrong parent style context: ", stdout);
         DumpContext(nsnull, actualParentContext);
         fputs("should be using: ", stdout);
@@ -853,6 +857,7 @@ VerifyContextParent(nsPresContext* aPresContext, nsIFrame* aFrame,
   }
   else {
     if (actualParentContext) {
+      NS_ERROR("Have parent context and shouldn't");
       DumpContext(aFrame, aContext);
       fputs("Has parent context: ", stdout);
       DumpContext(nsnull, actualParentContext);
@@ -875,9 +880,10 @@ VerifyStyleTree(nsPresContext* aPresContext, nsIFrame* aFrame,
   do {
     child = aFrame->GetFirstChild(childList);
     while (child) {
-      if (NS_FRAME_OUT_OF_FLOW != (child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)) {
-        // only do frames that are in flow
-        if (nsLayoutAtoms::placeholderFrame == child->GetType()) { 
+      if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)
+          || (child->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER)) {
+        // only do frames that don't have placeholders
+        if (nsGkAtoms::placeholderFrame == child->GetType()) { 
           // placeholder: first recurse and verify the out of flow frame,
           // then verify the placeholder's context
           nsIFrame* outOfFlowFrame =
@@ -928,6 +934,15 @@ nsFrameManager::DebugVerifyStyleTree(nsIFrame* aFrame)
 nsresult
 nsFrameManager::ReParentStyleContext(nsIFrame* aFrame)
 {
+  if (nsGkAtoms::placeholderFrame == aFrame->GetType()) {
+    // Also reparent the out-of-flow
+    nsIFrame* outOfFlow =
+      nsPlaceholderFrame::GetRealFrameForPlaceholder(aFrame);
+    NS_ASSERTION(outOfFlow, "no out-of-flow frame");
+
+    ReParentStyleContext(outOfFlow);
+  }
+
   // DO NOT verify the style tree before reparenting.  The frame
   // tree has already been changed, so this check would just fail.
   nsStyleContext* oldContext = aFrame->GetStyleContext();
@@ -951,40 +966,51 @@ nsFrameManager::ReParentStyleContext(nsIFrame* aFrame)
       NS_NOTREACHED("Reparenting something that has no usable parent? "
                     "Shouldn't happen!");
     }
+    // XXX need to do something here to produce the correct style context
+    // for an IB split whose first inline part is inside a first-line frame.
+    // Currently the IB anonymous block's style context takes the first part's
+    // style context as parent, which is wrong since first-line style should
+    // not apply to the anonymous block.
 
     newContext = mStyleSet->ReParentStyleContext(presContext, oldContext,
                                                  newParentContext);
     if (newContext) {
       if (newContext != oldContext) {
+        // Make sure to call CalcStyleDifference so that the new context ends
+        // up resolving all the structs the old context resolved.
+        nsChangeHint styleChange = oldContext->CalcStyleDifference(newContext);
+        // The style change is always 0 because we have the same rulenode and
+        // CalcStyleDifference optimizes us away.  That's OK, though:
+        // reparenting should never trigger a frame reconstruct, and whenever
+        // it's happening we already plan to reflow and repaint the frames.
+        NS_ASSERTION(!(styleChange & nsChangeHint_ReconstructFrame),
+                     "Our frame tree is likely to be bogus!");
+        
         PRInt32 listIndex = 0;
         nsIAtom* childList = nsnull;
         nsIFrame* child;
           
-        aFrame->SetStyleContext(presContext, newContext);
+        aFrame->SetStyleContext(newContext);
 
         do {
           child = aFrame->GetFirstChild(childList);
           while (child) {
-            // only do frames that are in flow
-            if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)) {
-              if (nsLayoutAtoms::placeholderFrame == child->GetType()) {
-                // get out of flow frame and recurse there
+            // only do frames that don't have placeholders
+            if ((!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW) ||
+                 (child->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER)) &&
+                child != providerChild) {
+#ifdef DEBUG
+              if (nsGkAtoms::placeholderFrame == child->GetType()) {
                 nsIFrame* outOfFlowFrame =
                   nsPlaceholderFrame::GetRealFrameForPlaceholder(child);
                 NS_ASSERTION(outOfFlowFrame, "no out-of-flow frame");
 
                 NS_ASSERTION(outOfFlowFrame != providerChild,
                              "Out of flow provider?");
-
-                ReParentStyleContext(outOfFlowFrame);
-
-                // reparent placeholder too
-                ReParentStyleContext(child);
               }
-              else if (child != providerChild) {
-                // regular frame, not reparented yet
-                ReParentStyleContext(child);
-              }
+#endif
+
+              ReParentStyleContext(child);
             }
 
             child = child->GetNextSibling();
@@ -992,6 +1018,20 @@ nsFrameManager::ReParentStyleContext(nsIFrame* aFrame)
 
           childList = aFrame->GetAdditionalChildListName(listIndex++);
         } while (childList);
+
+        // If this frame is part of an IB split, then the style context of
+        // the next part of the split might be a child of our style context.
+        // Reparent its style context just in case one of our ancestors
+        // (split or not) hasn't done so already). It's not a problem to
+        // reparent the same frame twice because the "if (newContext !=
+        // oldContext)" check will prevent us from redoing work.
+        if ((aFrame->GetStateBits() & NS_FRAME_IS_SPECIAL) &&
+            !aFrame->GetPrevInFlow()) {
+          nsIFrame* sib = static_cast<nsIFrame*>(aFrame->GetProperty(nsGkAtoms::IBSplitSpecialSibling));
+          if (sib) {
+            ReParentStyleContext(sib);
+          }
+        }
 
         // do additional contexts 
         PRInt32 contextIndex = -1;
@@ -1004,6 +1044,21 @@ nsFrameManager::ReParentStyleContext(nsIFrame* aFrame)
                                                               oldExtraContext,
                                                               newContext);
             if (newExtraContext) {
+              if (newExtraContext != oldExtraContext) {
+                // Make sure to call CalcStyleDifference so that the new
+                // context ends up resolving all the structs the old context
+                // resolved.
+                styleChange =
+                  oldExtraContext->CalcStyleDifference(newExtraContext);
+                // The style change is always 0 because we have the same
+                // rulenode and CalcStyleDifference optimizes us away.  That's
+                // OK, though: reparenting should never trigger a frame
+                // reconstruct, and whenever it's happening we already plan to
+                // reflow and repaint the frames.
+                NS_ASSERTION(!(styleChange & nsChangeHint_ReconstructFrame),
+                             "Our frame tree is likely to be bogus!");
+              }
+              
               aFrame->SetAdditionalStyleContext(contextIndex, newExtraContext);
             }
           }
@@ -1034,13 +1089,49 @@ CaptureChange(nsStyleContext* aOldContext, nsStyleContext* aNewContext,
   return aMinChange;
 }
 
+static PRBool
+ShouldStopImage(imgIRequest *aOldImage, imgIRequest *aNewImage)
+{
+  if (!aOldImage)
+    return PR_FALSE;
+
+  PRBool stopImages = !aNewImage;
+  if (!stopImages) {
+    nsCOMPtr<nsIURI> oldURI, newURI;
+    aOldImage->GetURI(getter_AddRefs(oldURI));
+    aNewImage->GetURI(getter_AddRefs(newURI));
+    PRBool equal;
+    stopImages =
+      NS_FAILED(oldURI->Equals(newURI, &equal)) || !equal;
+  }
+  return stopImages;
+}
+
+/**
+ * Recompute style for aFrame and accumulate changes into aChangeList
+ * given that aMinChange is already accumulated for an ancestor.
+ * aParentContent is the content node used to resolve the parent style
+ * context.  This means that, for pseudo-elements, it is the content
+ * that should be used for selector matching (rather than the fake
+ * content node attached to the frame).
+ */
 nsChangeHint
-nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
+nsFrameManager::ReResolveStyleContext(nsPresContext     *aPresContext,
                                       nsIFrame          *aFrame,
                                       nsIContent        *aParentContent,
                                       nsStyleChangeList *aChangeList, 
                                       nsChangeHint       aMinChange)
 {
+  // It would be nice if we could make stronger assertions here; they
+  // would let us simplify the ?: expressions below setting |content|
+  // and |pseudoContent| in sensible ways as well as making what
+  // |localContent|, |content|, and |pseudoContent| mean make more
+  // sense.  However, we can't, because of frame trees like the one in
+  // https://bugzilla.mozilla.org/show_bug.cgi?id=472353#c14 .  Once we
+  // fix bug 242277 we should be able to make this make more sense.
+  NS_ASSERTION(aFrame->GetContent() || !aParentContent ||
+               !aParentContent->GetParent(),
+               "frame must have content (unless at the top of the tree)");
   // XXXldb get new context from prev-in-flow if possible, to avoid
   // duplication.  (Or should we just let |GetContext| handle that?)
   // Getting the hint would be nice too, but that's harder.
@@ -1050,13 +1141,24 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
   // that the frame has the last reference to it, so AddRef it here.
 
   nsChangeHint assumeDifferenceHint = NS_STYLE_HINT_NONE;
+  // XXXbz oldContext should just be an nsRefPtr
   nsStyleContext* oldContext = aFrame->GetStyleContext();
   nsStyleSet* styleSet = aPresContext->StyleSet();
+#ifdef ACCESSIBILITY
+  PRBool isVisible = aFrame->GetStyleVisibility()->IsVisible();
+#endif
 
+  // XXXbz the nsIFrame constructor takes an nsStyleContext, so how
+  // could oldContext be null?
   if (oldContext) {
     oldContext->AddRef();
     nsIAtom* const pseudoTag = oldContext->GetPseudoType();
     nsIContent* localContent = aFrame->GetContent();
+    // |content| is the node that we used for rule matching of
+    // normal elements (not pseudo-elements) and for which we generate
+    // framechange hints if we need them.
+    // XXXldb Why does it make sense to use aParentContent?  (See
+    // comment above assertion at start of function.)
     nsIContent* content = localContent ? localContent : aParentContent;
 
     nsStyleContext* parentContext;
@@ -1078,12 +1180,13 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
 
       // assumeDifferenceHint forces the parent's change to be also
       // applied to this frame, no matter what
-      // nsStyleStruct::CalcStyleDifference says. CalcStyleDifference
+      // nsStyleContext::CalcStyleDifference says. CalcStyleDifference
       // can't be trusted because it assumes any changes to the parent
       // style context provider will be automatically propagated to
       // the frame(s) with child style contexts.
       assumeDifferenceHint = ReResolveStyleContext(aPresContext, providerFrame,
-                                                   content, aChangeList, aMinChange);
+                                                   aParentContent, aChangeList,
+                                                   aMinChange);
 
       // The provider's new context becomes the parent context of
       // aFrame's context.
@@ -1094,6 +1197,7 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
     }
     
     // do primary context
+    // XXXbz newContext should just be an nsRefPtr
     nsStyleContext* newContext = nsnull;
     if (pseudoTag == nsCSSAnonBoxes::mozNonElement) {
       NS_ASSERTION(localContent,
@@ -1101,6 +1205,10 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
       newContext = styleSet->ResolveStyleForNonElement(parentContext).get();
     }
     else if (pseudoTag) {
+      // XXXldb This choice of pseudoContent seems incorrect for anon
+      // boxes and perhaps other cases.
+      // See also the comment above the assertion at the start of this
+      // function.
       nsIContent* pseudoContent =
           aParentContent ? aParentContent : localContent;
       if (pseudoTag == nsCSSPseudoElements::before ||
@@ -1119,6 +1227,14 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
           newContext->AddRef();
         }
       } else {
+        if (pseudoTag == nsCSSPseudoElements::firstLetter) {
+          NS_ASSERTION(aFrame->GetType() == nsGkAtoms::letterFrame, 
+                       "firstLetter pseudoTag without a nsFirstLetterFrame");
+          nsBlockFrame* block = nsBlockFrame::GetNearestAncestorBlock(aFrame);
+          pseudoContent = block->GetContent();
+        } else if (pseudoTag == nsCSSAnonBoxes::pageBreak) {
+          pseudoContent = nsnull;
+        }
         newContext = styleSet->ResolvePseudoStyleFor(pseudoContent,
                                                      pseudoTag,
                                                      parentContext).get();
@@ -1150,27 +1266,34 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
                                    assumeDifferenceHint);
         if (!(aMinChange & nsChangeHint_ReconstructFrame)) {
           // if frame gets regenerated, let it keep old context
-          aFrame->SetStyleContext(aPresContext, newContext);
+          aFrame->SetStyleContext(newContext);
         }
         // if old context had image and new context does not have the same image, 
         // stop the image load for the frame
-        const nsStyleBackground* oldColor = oldContext->GetStyleBackground();
-        const nsStyleBackground* newColor = newContext->GetStyleBackground();
+        if (ShouldStopImage(
+              oldContext->GetStyleBackground()->mBackgroundImage,
+              newContext->GetStyleBackground()->mBackgroundImage)) {
+          // stop the image loading for the frame, the image has changed
+          aPresContext->StopBackgroundImageFor(aFrame);
+        }
 
-        if (oldColor->mBackgroundImage) {
-          PRBool stopImages = !newColor->mBackgroundImage;
-          if (!stopImages) {
-            nsCOMPtr<nsIURI> oldURI, newURI;
-            oldColor->mBackgroundImage->GetURI(getter_AddRefs(oldURI));
-            newColor->mBackgroundImage->GetURI(getter_AddRefs(newURI));
-            PRBool equal;
-            stopImages =
-              NS_FAILED(oldURI->Equals(newURI, &equal)) || !equal;
-          }
-          if (stopImages) {
-            // stop the image loading for the frame, the image has changed
-            aPresContext->StopImagesFor(aFrame);
-          }
+        imgIRequest *newBorderImage =
+          newContext->GetStyleBorder()->GetBorderImage();
+        if (ShouldStopImage(oldContext->GetStyleBorder()->GetBorderImage(),
+                            newBorderImage)) {
+          // stop the image loading for the frame, the image has changed
+          aPresContext->StopBorderImageFor(aFrame);
+        }
+
+        // Since the CalcDifference call depended on the result of
+        // GetActualBorder() and that result depends on whether the
+        // image has loaded, start the image load now so that we'll get
+        // notified when it completes loading and can do a restyle.
+        // Otherwise, the image might finish loading from the network
+        // before we start listening to its notifications, and then
+        // we'll never know that it's finished loading.
+        if (newBorderImage) {
+          aPresContext->LoadBorderImage(newBorderImage, aFrame);
         }
       }
       oldContext->Release();
@@ -1213,10 +1336,28 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
     }
 
     // now look for undisplayed child content and pseudos
-    if (localContent && mUndisplayedMap) {
+
+    // When the root element is display:none, we still construct *some*
+    // frames that have the root element as their mContent, down to the
+    // DocElementContainingBlock.
+    PRBool checkUndisplayed;
+    nsIContent *undisplayedParent;
+    if (pseudoTag) {
+      checkUndisplayed = aFrame == mPresShell->FrameConstructor()->
+                                     GetDocElementContainingBlock();
+      undisplayedParent = nsnull;
+    } else {
+      checkUndisplayed = !!localContent;
+      undisplayedParent = localContent;
+    }
+    if (checkUndisplayed && mUndisplayedMap) {
       for (UndisplayedNode* undisplayed =
-                                   mUndisplayedMap->GetFirstNode(localContent);
+                              mUndisplayedMap->GetFirstNode(undisplayedParent);
            undisplayed; undisplayed = undisplayed->mNext) {
+        NS_ASSERTION(undisplayedParent ||
+                     undisplayed->mContent ==
+                       mPresShell->GetDocument()->GetRootContent(),
+                     "undisplayed node child of null must be root");
         nsRefPtr<nsStyleContext> undisplayedContext;
         nsIAtom* const undisplayedPseudoTag = undisplayed->mStyle->GetPseudoType();
         if (!undisplayedPseudoTag) {  // child content
@@ -1238,8 +1379,8 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
           if (display->mDisplay != NS_STYLE_DISPLAY_NONE) {
             aChangeList->AppendChange(nsnull,
                                       undisplayed->mContent
-                                      ? NS_STATIC_CAST(nsIContent*,
-                                                       undisplayed->mContent)
+                                      ? static_cast<nsIContent*>
+                                                   (undisplayed->mContent)
                                       : localContent, 
                                       NS_STYLE_HINT_FRAMECHANGE);
             // The node should be removed from the undisplayed map when
@@ -1254,13 +1395,14 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
 
     if (!(aMinChange & nsChangeHint_ReconstructFrame)) {
       // Make sure not to do this for pseudo-frames -- those can't have :before
-      // or :after content.
+      // or :after content.  Neither can non-elements or leaf frames.
       if (!pseudoTag && localContent &&
-          localContent->IsContentOfType(nsIContent::eELEMENT)) {
+          localContent->IsNodeOfType(nsINode::eELEMENT) &&
+          !aFrame->IsLeaf()) {
         // Check for a new :before pseudo and an existing :before
-        // frame, but only if the frame is the first-in-flow.
-        nsIFrame* prevInFlow = aFrame->GetPrevInFlow();
-        if (!prevInFlow) {
+        // frame, but only if the frame is the first continuation.
+        nsIFrame* prevContinuation = aFrame->GetPrevContinuation();
+        if (!prevContinuation) {
           // Checking for a :before frame is cheaper than getting the
           // :before style context.
           if (!nsLayoutUtils::GetBeforeFrame(aFrame) &&
@@ -1279,14 +1421,15 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
     
     if (!(aMinChange & nsChangeHint_ReconstructFrame)) {
       // Make sure not to do this for pseudo-frames -- those can't have :before
-      // or :after content.
+      // or :after content.  Neither can non-elements or leaf frames.
       if (!pseudoTag && localContent &&
-          localContent->IsContentOfType(nsIContent::eELEMENT)) {
+          localContent->IsNodeOfType(nsINode::eELEMENT) &&
+          !aFrame->IsLeaf()) {
         // Check for new :after content, but only if the frame is the
-        // first-in-flow.
-        nsIFrame* nextInFlow = aFrame->GetNextInFlow();
+        // last continuation.
+        nsIFrame* nextContinuation = aFrame->GetNextContinuation();
 
-        if (!nextInFlow) {
+        if (!nextContinuation) {
           // Getting the :after frame is more expensive than getting the pseudo
           // context, so get the pseudo context first.
           if (nsLayoutUtils::HasPseudoStyle(localContent, newContext,
@@ -1316,9 +1459,10 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
       do {
         nsIFrame* child = aFrame->GetFirstChild(childList);
         while (child) {
-          if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)) {
-            // only do frames that are in flow
-            if (nsLayoutAtoms::placeholderFrame == child->GetType()) { // placeholder
+          if (!(child->GetStateBits() & NS_FRAME_OUT_OF_FLOW)
+              || (child->GetStateBits() & NS_FRAME_IS_OVERFLOW_CONTAINER)) {
+            // only do frames that don't have placeholders
+            if (nsGkAtoms::placeholderFrame == child->GetType()) { // placeholder
               // get out of flow frame and recur there
               nsIFrame* outOfFlowFrame =
                 nsPlaceholderFrame::GetRealFrameForPlaceholder(child);
@@ -1354,7 +1498,7 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
                 ReResolveStyleContext(aPresContext, child, content,
                                       aChangeList, aMinChange);
               } else {
-                NOISY_TRACE_FRAME("child frame already resolved as descendent, skipping",aFrame);
+                NOISY_TRACE_FRAME("child frame already resolved as descendant, skipping",aFrame);
               }
             }
           }
@@ -1369,20 +1513,43 @@ nsFrameManager::ReResolveStyleContext(nsPresContext    *aPresContext,
     newContext->Release();
   }
 
+#ifdef ACCESSIBILITY
+  if (mPresShell->IsAccessibilityActive() &&
+      aFrame->GetStyleVisibility()->IsVisible() != isVisible &&
+      !aFrame->GetPrevContinuation()) { // Primary frames only
+    // XXX Visibility does not affect descendents with visibility set
+    // Work on a separate, accurate mechanism for dealing with visibility changes.
+    // A significant enough change occured that this part
+    // of the accessible tree is no longer valid.
+    nsCOMPtr<nsIAccessibilityService> accService = 
+      do_GetService("@mozilla.org/accessibilityService;1");
+    if (accService) {
+      PRUint32 event = isVisible ?
+        PRUint32(nsIAccessibleEvent::EVENT_ASYNCH_HIDE) :
+        PRUint32(nsIAccessibleEvent::EVENT_ASYNCH_SHOW);
+      accService->InvalidateSubtreeFor(mPresShell, aFrame->GetContent(), event);
+    }
+  }
+#endif
+
   return aMinChange;
 }
 
-nsChangeHint
+void
 nsFrameManager::ComputeStyleChangeFor(nsIFrame          *aFrame, 
                                       nsStyleChangeList *aChangeList,
                                       nsChangeHint       aMinChange)
 {
+  if (aMinChange) {
+    aChangeList->AppendChange(aFrame, aFrame->GetContent(), aMinChange);
+  }
+
   nsChangeHint topLevelChange = aMinChange;
 
   nsIFrame* frame = aFrame;
   nsIFrame* frame2 = aFrame;
 
-  NS_ASSERTION(!frame->GetPrevInFlow(), "must start with the first in flow");
+  NS_ASSERTION(!frame->GetPrevContinuation(), "must start with the first in flow");
 
   // We want to start with this frame and walk all its next-in-flows,
   // as well as all its special siblings and their next-in-flows,
@@ -1403,39 +1570,40 @@ nsFrameManager::ComputeStyleChangeFor(nsIFrame          *aFrame,
         // If it's going to cause a framechange, then don't bother
         // with the continuations or special siblings since they'll be
         // clobbered by the frame reconstruct anyway.
-        NS_ASSERTION(!frame->GetPrevInFlow(),
+        NS_ASSERTION(!frame->GetPrevContinuation(),
                      "continuing frame had more severe impact than first-in-flow");
-        return topLevelChange;
+        return;
       }
 
-      frame = frame->GetNextInFlow();
+      frame = frame->GetNextContinuation();
     } while (frame);
 
     // Might we have special siblings?
     if (!(frame2->GetStateBits() & NS_FRAME_IS_SPECIAL)) {
       // nothing more to do here
-      return topLevelChange;
+      return;
     }
     
-    frame2 = NS_STATIC_CAST(nsIFrame*,
-         propTable->GetProperty(frame2, nsLayoutAtoms::IBSplitSpecialSibling));
+    frame2 = static_cast<nsIFrame*>
+                        (propTable->GetProperty(frame2, nsGkAtoms::IBSplitSpecialSibling));
     frame = frame2;
   } while (frame2);
-  return topLevelChange;
 }
 
 
 nsReStyleHint
 nsFrameManager::HasAttributeDependentStyle(nsIContent *aContent,
                                            nsIAtom *aAttribute,
-                                           PRInt32 aModType)
+                                           PRInt32 aModType,
+                                           PRUint32 aStateMask)
 {
   nsReStyleHint hint = mStyleSet->HasAttributeDependentStyle(GetPresContext(),
                                                              aContent,
                                                              aAttribute,
-                                                             aModType);
+                                                             aModType,
+                                                             aStateMask);
 
-  if (aAttribute == nsHTMLAtoms::style) {
+  if (aAttribute == nsGkAtoms::style) {
     // Perhaps should check that it's XUL, SVG, (or HTML) namespace, but
     // it doesn't really matter.  Or we could even let
     // HTMLCSSStyleSheetImpl::HasAttributeDependentStyle handle it.
@@ -1467,8 +1635,7 @@ nsFrameManager::CaptureFrameStateFor(nsIFrame* aFrame,
 
   // Capture the state, exit early if we get null (nothing to save)
   nsAutoPtr<nsPresState> frameState;
-  nsresult rv = statefulFrame->SaveState(GetPresContext(),
-                                         getter_Transfers(frameState));
+  nsresult rv = statefulFrame->SaveState(aID, getter_Transfers(frameState));
   if (!frameState) {
     return;
   }
@@ -1525,7 +1692,7 @@ nsFrameManager::RestoreFrameStateFor(nsIFrame* aFrame,
     return;
   }
 
-  // Only capture state for stateful frames
+  // Only restore state for stateful frames
   nsIStatefulFrame* statefulFrame;
   CallQueryInterface(aFrame, &statefulFrame);
   if (!statefulFrame) {
@@ -1556,7 +1723,7 @@ nsFrameManager::RestoreFrameStateFor(nsIFrame* aFrame,
   }
 
   // Restore it
-  rv = statefulFrame->RestoreState(GetPresContext(), frameState);
+  rv = statefulFrame->RestoreState(frameState);
   if (NS_FAILED(rv)) {
     return;
   }
@@ -1602,8 +1769,6 @@ CompareKeys(void* key1, void* key2)
 }
 
 //----------------------------------------------------------------------
-
-MOZ_DECL_CTOR_COUNTER(UndisplayedMap)
 
 nsFrameManagerBase::UndisplayedMap::UndisplayedMap(PRUint32 aNumBuckets)
 {
@@ -1733,7 +1898,7 @@ nsFrameManagerBase::UndisplayedMap::RemoveNodesFor(nsIContent* aParentContent)
   }
 }
 
-PR_STATIC_CALLBACK(PRIntn)
+static PRIntn
 RemoveUndisplayedEntry(PLHashEntry* he, PRIntn i, void* arg)
 {
   UndisplayedNode*  node = (UndisplayedNode*)(he->value);

@@ -52,7 +52,6 @@ REQUIRES	= xpcom \
 		  gfx \
 		  widget \
 		  necko \
-		  pref \
 		  docshell \
 		  appshell \
 		  appcomps \
@@ -94,18 +93,12 @@ LIBXUL_LIBRARY = 1
 
 LOCAL_INCLUDES	= \
 	-I$(srcdir) \
-	-I$(srcdir)/.. \
-	-I$(topsrcdir)/gfx/src/mac \
 	$(NULL)
 
-ifdef MOZ_XUL_APP
 LOCAL_INCLUDES += \
 	-I$(topsrcdir)/toolkit/xre \
 	-I$(topsrcdir)/toolkit/components/startup/src \
 	$(NULL)
-else
-LOCAL_INCLUDES += -I$(topsrcdir)/xpfe/components/startup/src
-endif
 
 include $(topsrcdir)/config/rules.mk
 
@@ -129,12 +122,7 @@ $(PACKAGE_DIR):
 
 libs:: $(RSRC_DEST)
 
-# workaround gcc -MD dependency issue by copying source to local dir
-export:: $(srcdir)/../nsDocLoadObserver.cpp
-	$(INSTALL) $< .
-
 GARBAGE += $(RES_DEST) $(RSRC_DEST) \
-	../nsDocLoadObserver.$(OBJ_SUFFIX) nsDocLoadObserver.cpp \
 	$(NULL)
 
 OS_CXXFLAGS += -fexceptions

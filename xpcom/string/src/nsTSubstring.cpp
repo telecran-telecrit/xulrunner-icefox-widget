@@ -36,6 +36,40 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+nsTSubstring_CharT::nsTSubstring_CharT( char_type *data, size_type length,
+                                        PRUint32 flags)
+  : mData(data),
+    mLength(length),
+    mFlags(flags)
+  {
+    if (flags & F_OWNED) {
+      STRING_STAT_INCREMENT(Adopt);
+#ifdef NS_BUILD_REFCNT_LOGGING
+      NS_LogCtor(mData, "StringAdopt", 1);
+#endif
+    }
+  }
+
+nsTSubstring_CharT::nsTSubstring_CharT(const substring_tuple_type& tuple)
+    : mData(nsnull),
+      mLength(0),
+      mFlags(F_NONE)
+{
+  Assign(tuple);
+}
+
+nsTSubstring_CharT::nsTSubstring_CharT()
+: mData(const_cast<char_type*>(char_traits::sEmptyBuffer)),
+  mLength(0),
+  mFlags(F_TERMINATED) {}
+
+nsTSubstring_CharT::nsTSubstring_CharT( PRUint32 flags )
+        : mFlags(flags) {}
+
+nsTSubstring_CharT::nsTSubstring_CharT( const self_type& str )
+  : mData(str.mData),
+    mLength(str.mLength),
+    mFlags(str.mFlags & (F_TERMINATED | F_VOIDED)) {}
 
   /**
    * helper function for down-casting a nsTSubstring to a nsTFixedString.
@@ -43,7 +77,7 @@
 inline const nsTFixedString_CharT*
 AsFixedString( const nsTSubstring_CharT* s )
   {
-    return NS_STATIC_CAST(const nsTFixedString_CharT*, s);
+    return static_cast<const nsTFixedString_CharT*>(s);
   }
 
 
@@ -79,8 +113,10 @@ nsTSubstring_CharT::MutatePrep( size_type capacity, char_type** oldData, PRUint3
 
     if (curCapacity != size_type(-1))
       {
-        if (capacity <= curCapacity)
+        if (capacity <= curCapacity) {
+          mFlags &= ~F_VOIDED;  // mutation clears voided flag
           return PR_TRUE;
+        }
 
         if (curCapacity > 0)
           {
@@ -119,6 +155,7 @@ nsTSubstring_CharT::MutatePrep( size_type capacity, char_type** oldData, PRUint3
 
             hdr = newHdr;
             mData = (char_type*) hdr->Data();
+            mFlags &= ~F_VOIDED;  // mutation clears voided flag
             return PR_TRUE;
           }
       }
@@ -169,12 +206,10 @@ nsTSubstring_CharT::Finalize()
     // mData, mLength, and mFlags are purposefully left dangling
   }
 
-#ifndef MOZ_V1_STRING_ABI
 nsTSubstring_CharT::~nsTSubstring_CharT()
   {
     Finalize();
   }
-#endif
 
 PRBool
 nsTSubstring_CharT::ReplacePrep( index_type cutStart, size_type cutLen, size_type fragLen )
@@ -269,19 +304,38 @@ nsTSubstring_CharT::Capacity() const
     return capacity;
   }
 
-void
-nsTSubstring_CharT::EnsureMutable()
+PRBool
+nsTSubstring_CharT::EnsureMutable( size_type newLen )
   {
-    if (mFlags & (F_FIXED | F_OWNED))
-      return;
-    if ((mFlags & F_SHARED) && !nsStringBuffer::FromData(mData)->IsReadonly())
-      return;
+    if (newLen == size_type(-1) || newLen == mLength)
+      {
+        if (mFlags & (F_FIXED | F_OWNED))
+          return PR_TRUE;
+        if ((mFlags & F_SHARED) && !nsStringBuffer::FromData(mData)->IsReadonly())
+          return PR_TRUE;
 
-    // promote to a shared string buffer
-    Assign(string_type(mData, mLength));
+        // promote to a shared string buffer
+        char_type* prevData = mData;
+        Assign(string_type(mData, mLength));
+        return mData != prevData;
+      }
+    else
+      {
+        SetLength(newLen);
+        return mLength == newLen;
+      }
   }
 
 // ---------------------------------------------------------------------------
+
+  // This version of Assign is optimized for single-character assignment.
+void
+nsTSubstring_CharT::Assign( char_type c )
+  {
+    if (ReplacePrep(0, mLength, 1))
+      *mData = c;
+  }
+
 
 void
 nsTSubstring_CharT::Assign( const char_type* data, size_type length )
@@ -380,23 +434,18 @@ nsTSubstring_CharT::Assign( const substring_tuple_type& tuple )
 
     size_type length = tuple.Length();
 
-    if (ReplacePrep(0, mLength, length) && length)
+    // don't use ReplacePrep here because it changes the length
+    char_type* oldData;
+    PRUint32 oldFlags;
+    if (MutatePrep(length, &oldData, &oldFlags)) {
+      if (oldData)
+        ::ReleaseData(oldData, oldFlags);
+
       tuple.WriteTo(mData, length);
+      mData[length] = 0;
+      mLength = length;
+    }
   }
-
-  // this is non-inline to reduce codesize at the callsite
-#ifdef MOZ_V1_STRING_ABI
-void
-nsTSubstring_CharT::Assign( const abstract_string_type& readable )
-  {
-      // promote to string if possible to take advantage of sharing
-    if (readable.mVTable == nsTObsoleteAString_CharT::sCanonicalVTable)
-      Assign(*readable.AsSubstring());
-    else
-      Assign(readable.ToSubstring());
-  }
-#endif
-
 
 void
 nsTSubstring_CharT::Adopt( char_type* data, size_type length )
@@ -413,11 +462,27 @@ nsTSubstring_CharT::Adopt( char_type* data, size_type length )
         SetDataFlags(F_TERMINATED | F_OWNED);
 
         STRING_STAT_INCREMENT(Adopt);
+#ifdef NS_BUILD_REFCNT_LOGGING
+        // Treat this as construction of a "StringAdopt" object for leak
+        // tracking purposes.        
+        NS_LogCtor(mData, "StringAdopt", 1);
+#endif // NS_BUILD_REFCNT_LOGGING
       }
     else
       {
         SetIsVoid(PR_TRUE);
       }
+  }
+
+
+  // This version of Replace is optimized for single-character replacement.
+void
+nsTSubstring_CharT::Replace( index_type cutStart, size_type cutLength, char_type c )
+  {
+    cutStart = PR_MIN(cutStart, Length());
+
+    if (ReplacePrep(cutStart, cutLength, 1))
+      mData[cutStart] = c;
   }
 
 
@@ -489,14 +554,6 @@ nsTSubstring_CharT::Replace( index_type cutStart, size_type cutLength, const sub
       tuple.WriteTo(mData + cutStart, length);
   }
 
-#ifdef MOZ_V1_STRING_ABI
-void
-nsTSubstring_CharT::Replace( index_type cutStart, size_type cutLength, const abstract_string_type& readable )
-  {
-    Replace(cutStart, cutLength, readable.ToSubstring());
-  }
-#endif
-
 void
 nsTSubstring_CharT::SetCapacity( size_type capacity )
   {
@@ -506,7 +563,7 @@ nsTSubstring_CharT::SetCapacity( size_type capacity )
     if (capacity == 0)
       {
         ::ReleaseData(mData, mFlags);
-        mData = NS_CONST_CAST(char_type*, char_traits::sEmptyBuffer);
+        mData = const_cast<char_type*>(char_traits::sEmptyBuffer);
         mLength = 0;
         SetDataFlags(F_TERMINATED);
       }
@@ -548,7 +605,8 @@ nsTSubstring_CharT::SetLength( size_type length )
     // out.  We should improve that.  For now we just verify that the capacity
     // changed as expected as a means of error checking.
  
-    if (Capacity() >= length)
+    size_type capacity = Capacity();
+    if (capacity != size_type(-1) && capacity >= length)
       mLength = length;
   }
 
@@ -577,26 +635,6 @@ nsTSubstring_CharT::Equals( const self_type& str, const comparator_type& comp ) 
   {
     return mLength == str.mLength && comp(mData, str.mData, mLength) == 0;
   }
-
-#ifdef MOZ_V1_STRING_ABI
-PRBool
-nsTSubstring_CharT::Equals( const abstract_string_type& readable ) const
-  {
-    const char_type* data;
-    size_type length = readable.GetReadableBuffer(&data);
-
-    return mLength == length && char_traits::compare(mData, data, mLength) == 0;
-  }
-
-PRBool
-nsTSubstring_CharT::Equals( const abstract_string_type& readable, const comparator_type& comp ) const
-  {
-    const char_type* data;
-    size_type length = readable.GetReadableBuffer(&data);
-
-    return mLength == length && comp(mData, data, mLength) == 0;
-  }
-#endif
 
 PRBool
 nsTSubstring_CharT::Equals( const char_type* data ) const

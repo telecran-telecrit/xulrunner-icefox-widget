@@ -44,23 +44,17 @@
 
 #define XPTI_STRING_ARENA_BLOCK_SIZE    (1024 * 1)
 #define XPTI_STRUCT_ARENA_BLOCK_SIZE    (1024 * 1)
-#define XPTI_HASHTABLE_SIZE             128
+#define XPTI_HASHTABLE_SIZE             2048
 
 /***************************************************************************/
 
-PR_STATIC_CALLBACK(const void*)
-IIDGetKey(PLDHashTable *table, PLDHashEntryHdr *entry)
-{
-    return ((xptiHashEntry*)entry)->value->GetTheIID();
-}
-
-PR_STATIC_CALLBACK(PLDHashNumber)
+static PLDHashNumber
 IIDHash(PLDHashTable *table, const void *key)
 {
     return (PLDHashNumber) ((const nsIID*)key)->m0;        
 }
 
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 IIDMatch(PLDHashTable *table,
          const PLDHashEntryHdr *entry,
          const void *key)
@@ -75,7 +69,6 @@ const static struct PLDHashTableOps IIDTableOps =
 {
     PL_DHashAllocTable,
     PL_DHashFreeTable,
-    IIDGetKey,
     IIDHash,
     IIDMatch,
     PL_DHashMoveEntryStub,
@@ -85,13 +78,7 @@ const static struct PLDHashTableOps IIDTableOps =
 
 /***************************************************************************/
 
-PR_STATIC_CALLBACK(const void*)
-NameGetKey(PLDHashTable *table, PLDHashEntryHdr *entry)
-{
-    return ((xptiHashEntry*)entry)->value->GetTheName();
-}
-
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 NameMatch(PLDHashTable *table,
           const PLDHashEntryHdr *entry,
           const void *key)
@@ -105,7 +92,6 @@ static const struct PLDHashTableOps NameTableOps =
 {
     PL_DHashAllocTable,
     PL_DHashFreeTable,
-    NameGetKey,
     PL_DHashStringKey,
     NameMatch,
     PL_DHashMoveEntryStub,
@@ -114,8 +100,6 @@ static const struct PLDHashTableOps NameTableOps =
 };
 
 /***************************************************************************/
-
-MOZ_DECL_CTOR_COUNTER(xptiWorkingSet)
 
 xptiWorkingSet::xptiWorkingSet(nsISupportsArray* aDirectories)
     : mFileCount(0),
@@ -151,14 +135,14 @@ xptiWorkingSet::IsValid() const
             mIIDTable;          
 }
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_Remover(PLDHashTable *table, PLDHashEntryHdr *hdr,
              PRUint32 number, void *arg)
 {
     return PL_DHASH_REMOVE;
 }       
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_Invalidator(PLDHashTable *table, PLDHashEntryHdr *hdr,
                  PRUint32 number, void *arg)
 {

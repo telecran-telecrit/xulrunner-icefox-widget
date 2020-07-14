@@ -37,6 +37,8 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/* class to notify frames of background image loads */
+
 #include "nsImageLoader.h"
 
 #include "imgILoader.h"
@@ -53,9 +55,8 @@
 
 #include "imgIContainer.h"
 
-#include "nsIViewManager.h"
-
 #include "nsStyleContext.h"
+#include "nsGkAtoms.h"
 
 // Paint forcing
 #include "prenv.h"
@@ -73,16 +74,18 @@ nsImageLoader::~nsImageLoader()
   mPresContext = nsnull;
 
   if (mRequest) {
-    mRequest->Cancel(NS_ERROR_FAILURE);
+    mRequest->CancelAndForgetObserver(NS_ERROR_FAILURE);
   }
 }
 
 
 void
-nsImageLoader::Init(nsIFrame *aFrame, nsPresContext *aPresContext)
+nsImageLoader::Init(nsIFrame *aFrame, nsPresContext *aPresContext,
+                    PRBool aReflowOnLoad)
 {
   mFrame = aFrame;
   mPresContext = aPresContext;
+  mReflowOnLoad = aReflowOnLoad;
 }
 
 void
@@ -92,7 +95,7 @@ nsImageLoader::Destroy()
   mPresContext = nsnull;
 
   if (mRequest) {
-    mRequest->Cancel(NS_ERROR_FAILURE);
+    mRequest->CancelAndForgetObserver(NS_ERROR_FAILURE);
   }
 
   mRequest = nsnull;
@@ -119,7 +122,7 @@ nsImageLoader::Load(imgIRequest *aImage)
     }
 
     // Now cancel the old request so it won't hold a stale ref to us.
-    mRequest->Cancel(NS_ERROR_FAILURE);
+    mRequest->CancelAndForgetObserver(NS_ERROR_FAILURE);
     mRequest = nsnull;
   }
 
@@ -133,11 +136,6 @@ nsImageLoader::Load(imgIRequest *aImage)
 }
 
                     
-
-NS_IMETHODIMP nsImageLoader::OnStartDecode(imgIRequest *aRequest)
-{
-  return NS_OK;
-}
 
 NS_IMETHODIMP nsImageLoader::OnStartContainer(imgIRequest *aRequest,
                                               imgIContainer *aImage)
@@ -153,22 +151,6 @@ NS_IMETHODIMP nsImageLoader::OnStartContainer(imgIRequest *aRequest,
     // Ensure the animation (if any) is started.
     aImage->StartAnimation();
   }
-  return NS_OK;
-}
-
-NS_IMETHODIMP nsImageLoader::OnStartFrame(imgIRequest *aRequest,
-                                          gfxIImageFrame *aFrame)
-{
-  return NS_OK;
-}
-
-NS_IMETHODIMP nsImageLoader::OnDataAvailable(imgIRequest *aRequest,
-                                             gfxIImageFrame *aFrame,
-                                             const nsRect *aRect)
-{
-  // Background images are not displayed incrementally, they are displayed after the entire 
-  // image has been loaded.
-  // Note: Images referenced by the <img> element are displayed incrementally in nsImageFrame.cpp
   return NS_OK;
 }
 
@@ -200,19 +182,6 @@ NS_IMETHODIMP nsImageLoader::OnStopFrame(imgIRequest *aRequest,
   return NS_OK;
 }
 
-NS_IMETHODIMP nsImageLoader::OnStopContainer(imgIRequest *aRequest,
-                                             imgIContainer *aImage)
-{
-  return NS_OK;
-}
-
-NS_IMETHODIMP nsImageLoader::OnStopDecode(imgIRequest *aRequest,
-                                          nsresult status,
-                                          const PRUnichar *statusArg)
-{
-  return NS_OK;
-}
-
 NS_IMETHODIMP nsImageLoader::FrameChanged(imgIContainer *aContainer,
                                           gfxIImageFrame *newframe,
                                           nsRect * dirtyRect)
@@ -227,12 +196,10 @@ NS_IMETHODIMP nsImageLoader::FrameChanged(imgIContainer *aContainer,
   
   nsRect r(*dirtyRect);
 
-  float p2t;
-  p2t = mPresContext->PixelsToTwips();
-  r.x = NSIntPixelsToTwips(r.x, p2t);
-  r.y = NSIntPixelsToTwips(r.y, p2t);
-  r.width = NSIntPixelsToTwips(r.width, p2t);
-  r.height = NSIntPixelsToTwips(r.height, p2t);
+  r.x = nsPresContext::CSSPixelsToAppUnits(r.x);
+  r.y = nsPresContext::CSSPixelsToAppUnits(r.y);
+  r.width = nsPresContext::CSSPixelsToAppUnits(r.width);
+  r.height = nsPresContext::CSSPixelsToAppUnits(r.height);
 
   RedrawDirtyFrame(&r);
 
@@ -243,6 +210,16 @@ NS_IMETHODIMP nsImageLoader::FrameChanged(imgIContainer *aContainer,
 void
 nsImageLoader::RedrawDirtyFrame(const nsRect* aDamageRect)
 {
+  if (mReflowOnLoad) {
+    nsIPresShell *shell = mPresContext->GetPresShell();
+#ifdef DEBUG
+    nsresult rv = 
+#endif
+      shell->FrameNeedsReflow(mFrame, nsIPresShell::eStyleChange, NS_FRAME_IS_DIRTY);
+    NS_WARN_IF_FALSE(NS_SUCCEEDED(rv), "Could not reflow after loading border-image");
+    // The reflow might not do all the invalidation we need, so continue
+    // on with the invalidation codepath.
+  }
   // NOTE: It is not sufficient to invalidate only the size of the image:
   //       the image may be tiled! 
   //       The best option is to call into the frame, however lacking this
@@ -254,6 +231,11 @@ nsImageLoader::RedrawDirtyFrame(const nsRect* aDamageRect)
   // XXX We really only need to invalidate the client area of the frame...    
 
   nsRect bounds(nsPoint(0, 0), mFrame->GetSize());
+
+  if (mFrame->GetType() == nsGkAtoms::canvasFrame) {
+    // The canvas's background covers the whole viewport.
+    bounds = mFrame->GetOverflowRect();
+  }
 
   // XXX this should be ok, but there is some crappy ass bug causing it not to work
   // XXX seems related to the "body fixup rule" dealing with the canvas and body frames...
@@ -278,5 +260,7 @@ nsImageLoader::RedrawDirtyFrame(const nsRect* aDamageRect)
 
 #endif
 
-  mFrame->Invalidate(bounds, PR_FALSE);
+  if (mFrame->GetStyleVisibility()->IsVisible()) {
+    mFrame->Invalidate(bounds);
+  }
 }

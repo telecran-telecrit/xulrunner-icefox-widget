@@ -38,7 +38,7 @@
 #define DEVT_H
 
 #ifdef DEBUG
-static const char DEVT_CVS_ID[] = "@(#) $RCSfile: devt.h,v $ $Revision: 1.22 $ $Date: 2005/01/20 02:25:47 $";
+static const char DEVT_CVS_ID[] = "@(#) $RCSfile: devt.h,v $ $Revision: 1.24 $ $Date: 2010/01/08 02:00:58 $";
 #endif /* DEBUG */
 
 /*
@@ -59,17 +59,11 @@ static const char DEVT_CVS_ID[] = "@(#) $RCSfile: devt.h,v $ $Revision: 1.22 $ $
 #include "nssdevt.h"
 #endif /* NSSDEVT_H */
 
-#ifndef NSSCKT_H
-#include "nssckt.h"
-#endif /* NSSCKT_H */
-
 #ifndef BASET_H
 #include "baset.h"
 #endif /* BASET_H */
 
-#ifdef NSS_3_4_CODE
 #include "secmodt.h"
-#endif /* NSS_3_4_CODE */
 
 PR_BEGIN_EXTERN_C
 
@@ -99,9 +93,7 @@ struct NSSTokenStr
     NSSTrustDomain *trustDomain;
     PRIntervalTime lastTime;
     nssTokenObjectCache *cache;
-#ifdef NSS_3_4_CODE
     PK11SlotInfo *pk11slot;
-#endif
 };
 
 typedef enum {
@@ -128,10 +120,8 @@ struct NSSSlotStr
   struct nssSlotAuthInfoStr authInfo;
   PRIntervalTime lastTokenPing;
   PZLock *lock;
-#ifdef NSS_3_4_CODE
   void *epv;
   PK11SlotInfo *pk11slot;
-#endif
 };
 
 struct nssSessionStr

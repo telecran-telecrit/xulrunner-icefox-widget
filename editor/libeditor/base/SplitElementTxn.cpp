@@ -52,6 +52,21 @@ SplitElementTxn::SplitElementTxn()
 {
 }
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(SplitElementTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(SplitElementTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mParent)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mNewLeftNode)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(SplitElementTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mParent)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mNewLeftNode)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(SplitElementTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
+
 NS_IMETHODIMP SplitElementTxn::Init(nsEditor   *aEditor,
                                     nsIDOMNode *aNode,
                                     PRInt32     aOffset)
@@ -63,10 +78,6 @@ NS_IMETHODIMP SplitElementTxn::Init(nsEditor   *aEditor,
   mExistingRightNode = do_QueryInterface(aNode);
   mOffset = aOffset;
   return NS_OK;
-}
-
-SplitElementTxn::~SplitElementTxn()
-{
 }
 
 NS_IMETHODIMP SplitElementTxn::DoTransaction(void)
@@ -212,13 +223,6 @@ NS_IMETHODIMP SplitElementTxn::RedoTransaction(void)
   return result;
 }
 
-
-NS_IMETHODIMP SplitElementTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge = PR_FALSE;
-  return NS_OK;
-}
 
 NS_IMETHODIMP SplitElementTxn::GetTxnDescription(nsAString& aString)
 {

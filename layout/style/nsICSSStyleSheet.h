@@ -34,6 +34,9 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/* representation of a CSS style sheet */
+
 #ifndef nsICSSStyleSheet_h___
 #define nsICSSStyleSheet_h___
 
@@ -47,17 +50,17 @@ class nsCSSRuleProcessor;
 class nsMediaList;
 class nsICSSGroupRule;
 class nsICSSImportRule;
+class nsIPrincipal;
 
 // IID for the nsICSSStyleSheet interface
-// 446df065-af5e-46b8-b32f-289bf5906876
+// ee0270c7-5581-4165-92a5-a83ff691f60d
 #define NS_ICSS_STYLE_SHEET_IID     \
-{0x446df065, 0xaf5e, 0x46b8, {0xb3, 0x2f, 0x28, 0x9b, 0xf5, 0x90, 0x68, 0x76}}
+{ 0xee0270c7, 0x5581, 0x4165, \
+ { 0x92, 0xa5, 0xa8, 0x3f, 0xf6, 0x91, 0xf6, 0x0d } }
 
 class nsICSSStyleSheet : public nsIStyleSheet {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_ICSS_STYLE_SHEET_IID)
-
-  NS_IMETHOD  ContainsStyleSheet(nsIURI* aURL, PRBool& aContains, nsIStyleSheet** aTheChild=nsnull) = 0;
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICSS_STYLE_SHEET_IID)
 
   NS_IMETHOD  AppendStyleSheet(nsICSSStyleSheet* aSheet) = 0;
   NS_IMETHOD  InsertStyleSheetAt(nsICSSStyleSheet* aSheet, PRInt32 aIndex) = 0;
@@ -82,7 +85,19 @@ public:
    * SetURIs may only be called while the sheet is 1) incomplete and 2)
    * has no rules in it
    */
-  NS_IMETHOD  SetURIs(nsIURI* aSheetURI, nsIURI* aBaseURI) = 0;
+  NS_IMETHOD  SetURIs(nsIURI* aSheetURI, nsIURI* aOriginalSheetURI,
+                      nsIURI* aBaseURI) = 0;
+
+  /**
+   * SetPrincipal should be called on all sheets before parsing into them.
+   * This can only be called once with a non-null principal.  Calling this with
+   * a null pointer is allowed and is treated as a no-op.
+   */
+  virtual NS_HIDDEN_(void) SetPrincipal(nsIPrincipal* aPrincipal) = 0;
+
+  // Principal() never returns a null pointer.
+  virtual NS_HIDDEN_(nsIPrincipal*) Principal() const = 0;
+  
   NS_IMETHOD  SetTitle(const nsAString& aTitle) = 0;
   NS_IMETHOD  SetMedia(nsMediaList* aMedia) = 0;
   NS_IMETHOD  SetOwningNode(nsIDOMNode* aOwningNode) = 0;
@@ -104,7 +119,15 @@ public:
 
   NS_IMETHOD  AddRuleProcessor(nsCSSRuleProcessor* aProcessor) = 0;
   NS_IMETHOD  DropRuleProcessor(nsCSSRuleProcessor* aProcessor) = 0;
+
+  /**
+   * Like the DOM insertRule() method, but doesn't do any security checks
+   */
+  NS_IMETHOD InsertRuleInternal(const nsAString& aRule,
+                                PRUint32 aIndex, PRUint32* aReturn) = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsICSSStyleSheet, NS_ICSS_STYLE_SHEET_IID)
 
 nsresult
 NS_NewCSSStyleSheet(nsICSSStyleSheet** aInstancePtrResult);

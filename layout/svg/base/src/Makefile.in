@@ -59,33 +59,39 @@ REQUIRES	= xpcom \
 		  unicharutil \
 		  webshell \
 		  imglib2 \
-		  intl \
-		  windowwatcher \
 		  js \
 		  xpconnect \
 		  docshell \
+		  thebes \
+		  qcms \
 		  $(NULL)
 
 CPPSRCS		= \
-		nsSVGCircleFrame.cpp \
+		nsSVGAFrame.cpp \
 		nsSVGClipPathFrame.cpp \
-		nsSVGDefsFrame.cpp \
-		nsSVGEllipseFrame.cpp \
+		nsSVGContainerFrame.cpp \
+		nsSVGEffects.cpp \
+		nsSVGFilterFrame.cpp \
+		nsSVGFilterInstance.cpp \
+		nsSVGForeignObjectFrame.cpp \
 		nsSVGGFrame.cpp \
 		nsSVGGenericContainerFrame.cpp \
+		nsSVGGeometryFrame.cpp \
 		nsSVGGlyphFrame.cpp \
 		nsSVGGradientFrame.cpp \
 		nsSVGImageFrame.cpp \
 		nsSVGInnerSVGFrame.cpp \
-		nsSVGLineFrame.cpp \
+		nsSVGIntegrationUtils.cpp \
+		nsSVGLeafFrame.cpp \
 		nsSVGMarkerFrame.cpp \
+		nsSVGMaskFrame.cpp \
 		nsSVGOuterSVGFrame.cpp \
-		nsSVGPathFrame.cpp \
+		nsSVGPaintServerFrame.cpp \
 		nsSVGPathGeometryFrame.cpp \
-		nsSVGPolygonFrame.cpp \
-		nsSVGPolylineFrame.cpp \
-		nsSVGRectFrame.cpp \
+		nsSVGPatternFrame.cpp \
 		nsSVGStopFrame.cpp \
+		nsSVGSwitchFrame.cpp \
+		nsSVGTextContainerFrame.cpp \
 		nsSVGTextFrame.cpp \
 		nsSVGTextPathFrame.cpp \
 		nsSVGTSpanFrame.cpp \
@@ -93,21 +99,20 @@ CPPSRCS		= \
 		nsSVGUtils.cpp \
 		$(NULL)
 
-ifdef MOZ_SVG_FOREIGNOBJECT
-CPPSRCS += nsSVGForeignObjectFrame.cpp
-endif
-
 include $(topsrcdir)/config/config.mk
 
 # we don't want the shared lib, but we want to force the creation of a static lib.
 FORCE_STATIC_LIB = 1
 
-EXPORTS = nsSVGUtils.h
+EXPORTS = \
+	nsSVGEffects.h \
+	nsSVGFilterInstance.h \
+	nsSVGForeignObjectFrame.h \
+	nsSVGIntegrationUtils.h \
+	nsSVGUtils.h \
+	$(NULL)
 
 include $(topsrcdir)/config/rules.mk
-
-CFLAGS		+= $(MOZ_CAIRO_CFLAGS)
-CXXFLAGS	+= $(MOZ_CAIRO_CFLAGS)
 
 LOCAL_INCLUDES	= \
 		-I$(srcdir)/../../../base \
@@ -115,6 +120,7 @@ LOCAL_INCLUDES	= \
 		-I$(srcdir)/../../../style \
 		-I$(srcdir)/../../../xul/base/src \
 		-I$(srcdir)/../../../../content/svg/content/src \
+		-I$(srcdir)/../../../../content/base/src \
 		$(NULL)
 
 libs::

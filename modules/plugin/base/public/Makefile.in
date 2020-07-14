@@ -53,16 +53,12 @@ EXPORTS		= \
 		nsDefaultPlugin.h \
 		nsPluginNativeWindow.h \
 		nsPluginsCID.h \
-		npapi.h \
-		npupp.h \
-		npruntime.h \
-		nptypes.h \
 		nsIPluginInstanceInternal.h \
 		$(NULL)
 
 SDK_HEADERS	 = \
 		npapi.h \
-		npupp.h \
+		npfunctions.h \
 		nptypes.h \
 		npruntime.h \
 		$(NULL)
@@ -83,6 +79,7 @@ XPIDLSRCS 	= \
 		nsIClassicPluginFactory.idl \
 		nsIWindowlessPlugInstPeer.idl \
 		nsIScriptablePlugin.idl \
+		nsIPluginTag.idl \
 		nsIPluginTagInfo.idl \
 		nsIPluginTagInfo2.idl \
 		nsIJRILiveConnectPIPeer.idl \
@@ -94,6 +91,7 @@ XPIDLSRCS 	= \
 		nsPIPluginInstancePeer.idl \
 		nsIPluginHost.idl \
 		nsIPluginDocument.idl \
+		nsIJVMAuthTools.idl \
 		$(NULL)
 
 ifeq ($(OS_ARCH),OS2)

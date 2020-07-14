@@ -45,16 +45,20 @@
   {0x9e70a320, 0xbe02, 0x11d1,    \
     {0x80, 0x31, 0x00, 0x60, 0x08, 0x15, 0x9b, 0x5a}}
 
+namespace TestArray {
+
 static const PRBool kExitOnError = PR_TRUE;
 
 class IFoo : public nsISupports {
 public:
 
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IFOO_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IFOO_IID)
 
   NS_IMETHOD_(nsrefcnt) RefCnt() = 0;
   NS_IMETHOD_(PRInt32) ID() = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(IFoo, NS_IFOO_IID)
 
 class Foo : public IFoo {
 public:
@@ -134,6 +138,10 @@ void FillArray(nsISupportsArray* aArray, PRInt32 aCount)
     aArray->AppendElement(foo);
   }
 }
+
+}
+
+using namespace TestArray;
 
 int main(int argc, char *argv[])
 {

@@ -36,6 +36,11 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/*
+ * used by nsCSSFrameConstructor to determine and iterate the child list
+ * used to construct frames (normal children or something from XBL)
+ */
+
 #include "nsCOMPtr.h"
 #include "nsIContent.h"
 #include "nsIDOMNodeList.h"
@@ -47,7 +52,7 @@
  * node APIs, since it handles XBL-generated anonymous content as
  * well.
  */
-class ChildIterator
+class NS_STACK_CLASS ChildIterator
 {
 protected:
   nsCOMPtr<nsIContent> mContent;
@@ -116,7 +121,7 @@ public:
     return !aOther.operator==(*this);
   }
 
-  PRUint32 index() {
+  PRUint32 position() {
     return mIndex;
   }
 

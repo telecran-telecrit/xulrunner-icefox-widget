@@ -38,18 +38,45 @@
 #ifndef _NSDATAOBJ_H_
 #define _NSDATAOBJ_H_
 
+#ifdef __MINGW32__
 #include <unknwn.h>
 #include <basetyps.h>
 #include <objidl.h>
-// The above are required for __MINGW32__
+#endif
 #include <oleidl.h>
 
-//#include "Ddforw.h"
+#include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsILocalFile.h"
 #include "nsIURI.h"
+#include "nsIInputStream.h"
+#include "nsIChannel.h"
+#include "nsTArray.h"
+#include "nsVoidArray.h"
 
-#define MAX_FORMATS 32
+// XXX for older version of PSDK where IAsyncOperation and related stuff is not available
+// but thisdefine  should be removed when parocles config is updated
+#ifndef __IAsyncOperation_INTERFACE_DEFINED__
+// IAsyncOperation inerface definition
+EXTERN_C const IID IID_IAsyncOperation;
+
+MIDL_INTERFACE("3D8B0590-F691-11d2-8EA9-006097DF5BD4")
+IAsyncOperation : public IUnknown
+{
+  virtual HRESULT STDMETHODCALLTYPE SetAsyncMode(BOOL fDoOpAsync) = 0;
+  virtual HRESULT STDMETHODCALLTYPE GetAsyncMode(BOOL *pfIsOpAsync) = 0;
+  virtual HRESULT STDMETHODCALLTYPE StartOperation(IBindCtx *pbcReserved) = 0;
+  virtual HRESULT STDMETHODCALLTYPE InOperation(BOOL *pfInAsyncOp) = 0;
+  virtual HRESULT STDMETHODCALLTYPE EndOperation(HRESULT hResult,
+                                                 IBindCtx *pbcReserved,
+                                                 DWORD dwEffects) = 0;
+};
+// this is not defined in the old headers for some reason
+#ifndef FD_PROGRESSUI
+  #define FD_PROGRESSUI 0x4000
+#endif
+
+#endif // __IAsyncOperation_INTERFACE_DEFINED__
 
 /* 
  * CFSTR_SHELLURL is deprecated and doesn't have a Unicode version.
@@ -57,10 +84,10 @@
  * See http://msdn.microsoft.com/library/default.asp?url=/library/en-us/shellcc/platform/shell/programmersguide/shell_basics/shell_basics_programming/transferring/clipboard.asp
  */
 #ifndef CFSTR_INETURLA
-#define CFSTR_INETURLA    "UniformResourceLocator"
+#define CFSTR_INETURLA    L"UniformResourceLocator"
 #endif
 #ifndef CFSTR_INETURLW
-#define CFSTR_INETURLW    "UniformResourceLocatorW"
+#define CFSTR_INETURLW    L"UniformResourceLocatorW"
 #endif
 
 // For support of MinGW w32api v2.4. 
@@ -68,10 +95,10 @@
 // http://sources.redhat.com/cgi-bin/cvsweb.cgi/src/winsup/w32api/include/shlobj.h?cvsroot=src
 // then that can be made the base required version and this code should be removed.
 #ifndef CFSTR_FILEDESCRIPTORA
-# define CFSTR_FILEDESCRIPTORA   "FileGroupDescriptor"
+# define CFSTR_FILEDESCRIPTORA   L"FileGroupDescriptor"
 #endif
 #ifndef CFSTR_FILEDESCRIPTORW
-# define CFSTR_FILEDESCRIPTORW   "FileGroupDescriptorW"
+# define CFSTR_FILEDESCRIPTORW   L"FileGroupDescriptorW"
 #endif
 
 #ifdef __MINGW32__
@@ -103,7 +130,6 @@ typedef struct _FILEGROUPDESCRIPTORW {
 # endif /*__W32API_MAJOR_VERSION*/
 #endif /*__MINGW32__*/
 
-class nsVoidArray;
 class CEnumFormatEtc;
 class nsITransferable;
 
@@ -112,7 +138,8 @@ class nsITransferable;
  * can be adapted by an object derived from CfDragDrop. The CfDragDrop is
  * associated with instances via SetDragDrop().
  */
-class nsDataObj : public IDataObject
+class nsDataObj : public IDataObject,
+                  public IAsyncOperation
 {
   public: // construction, destruction
     nsDataObj(nsIURI *uri = nsnull);
@@ -147,8 +174,8 @@ class nsDataObj : public IDataObject
 		// S_FALSE otherwise.
 		STDMETHODIMP QueryGetData (LPFORMATETC pFE);
 
-		// Set pCanonFE to the cannonical format of pFE if one exists and return
-		// NOERROR, otherwise return DATA_S_SAMEFORMATETC. A cannonical format
+		// Set pCanonFE to the canonical format of pFE if one exists and return
+		// NOERROR, otherwise return DATA_S_SAMEFORMATETC. A canonical format
 		// implies an identical rendering.
 		STDMETHODIMP GetCanonicalFormatEtc (LPFORMATETC pFE, LPFORMATETC pCanonFE);
 
@@ -177,25 +204,28 @@ class nsDataObj : public IDataObject
       // object.
 		STDMETHODIMP EnumDAdvise (LPENUMSTATDATA *ppEnum);
 
+    // IAsyncOperation methods
+    STDMETHOD(EndOperation)(HRESULT hResult, IBindCtx *pbcReserved, DWORD dwEffects);
+    STDMETHOD(GetAsyncMode)(BOOL *pfIsOpAsync);
+    STDMETHOD(InOperation)(BOOL *pfInAsyncOp);
+    STDMETHOD(SetAsyncMode)(BOOL fDoOpAsync);
+    STDMETHOD(StartOperation)(IBindCtx *pbcReserved);
+
 	public: // other methods
 
-		// Return the total reference counts of all instances of this class.
-		static ULONG GetCumRefCount();
-
-		// Return the reference count (which helps determine if another app has
-		// released the interface pointer after a drop).
-		ULONG GetRefCount() const;
+    // Gets the filename from the kFilePromiseURLMime flavour
+    nsresult GetDownloadDetails(nsIURI **aSourceURI,
+                                nsAString &aFilename);
 
 	protected:
-	
-	    // Help determine if the drag should create an internet shortcut
-	  PRBool IsInternetShortcut ( ) ;
+	  // help determine the kind of drag
+    PRBool IsFlavourPresent(const char *inFlavour);
 
 		virtual HRESULT AddSetFormat(FORMATETC&  FE);
 		virtual HRESULT AddGetFormat(FORMATETC&  FE);
 
+		virtual HRESULT GetFile ( FORMATETC& aFE, STGMEDIUM& aSTG );
 		virtual HRESULT GetText ( const nsACString& aDF, FORMATETC& aFE, STGMEDIUM & aSTG );
-		virtual HRESULT GetFile ( const nsACString& aDF, FORMATETC& aFE, STGMEDIUM& aSTG );
 		virtual HRESULT GetBitmap ( const nsACString& inFlavor, FORMATETC&  FE, STGMEDIUM&  STM);
 		virtual HRESULT GetDib ( const nsACString& inFlavor, FORMATETC &, STGMEDIUM & aSTG );
 		virtual HRESULT GetMetafilePict(FORMATETC&  FE, STGMEDIUM&  STM);
@@ -217,6 +247,11 @@ class nsDataObj : public IDataObject
     virtual HRESULT GetFileDescriptorInternetShortcutW ( FORMATETC& aFE, STGMEDIUM& aSTG ) ;
     virtual HRESULT GetFileContentsInternetShortcut ( FORMATETC& aFE, STGMEDIUM& aSTG ) ;
 
+    // IStream implementation
+    virtual HRESULT GetFileDescriptor_IStreamA ( FORMATETC& aFE, STGMEDIUM& aSTG ) ;
+    virtual HRESULT GetFileDescriptor_IStreamW ( FORMATETC& aFE, STGMEDIUM& aSTG ) ;
+    virtual HRESULT GetFileContents_IStream ( FORMATETC& aFE, STGMEDIUM& aSTG ) ;
+
     nsresult ExtractShortcutURL ( nsString & outURL ) ;
     nsresult ExtractShortcutTitle ( nsString & outTitle ) ;
     
@@ -226,14 +261,11 @@ class nsDataObj : public IDataObject
     // Used for the SourceURL part of CF_HTML
     nsCString mSourceURL;
 
-    nsString mStringData;
-
     BOOL FormatsMatch(const FORMATETC& source, const FORMATETC& target) const;
 
-   	static ULONG g_cRef;              // the cum reference count of all instances
 		ULONG        m_cRef;              // the reference count
 
-    nsVoidArray * mDataFlavors;       // we own and its contents
+    nsVoidArray mDataFlavors;
 
     nsITransferable  * mTransferable; // nsDataObj owns and ref counts nsITransferable, 
                                       // the nsITransferable does know anything about the nsDataObj
@@ -241,7 +273,64 @@ class nsDataObj : public IDataObject
     CEnumFormatEtc   * m_enumFE;      // Ownership Rules: 
                                       // nsDataObj owns and ref counts CEnumFormatEtc,
 
-    nsCOMPtr<nsILocalFile> mCachedTempFile;
+    nsCOMPtr<nsIFile> mCachedTempFile;
+
+    BOOL mIsAsyncMode;
+    BOOL mIsInOperation;
+    ///////////////////////////////////////////////////////////////////////////////
+    // CStream class implementation
+    // this class is used in Drag and drop with download sample
+    // called from IDataObject::GetData
+    class CStream : public IStream
+    {
+      ULONG mRefCount;  // reference counting
+      nsCOMPtr<nsIInputStream> mInputStream;
+      nsCOMPtr<nsIChannel> mChannel;
+
+    protected:
+      virtual ~CStream();
+      // TODO: forbid copying and assignment
+
+    public:
+      CStream();
+      nsresult Init(nsIURI *pSourceURI);
+
+      // IUnknown
+      STDMETHOD(QueryInterface)(REFIID refiid, void** ppvResult);
+      STDMETHOD_(ULONG, AddRef)(void);
+      STDMETHOD_(ULONG, Release)(void);
+
+      // IStream  
+      STDMETHOD(Clone)(IStream** ppStream);
+      STDMETHOD(Commit)(DWORD dwFrags);
+      STDMETHOD(CopyTo)(IStream* pDestStream, ULARGE_INTEGER nBytesToCopy, ULARGE_INTEGER* nBytesRead, ULARGE_INTEGER* nBytesWritten);
+      STDMETHOD(LockRegion)(ULARGE_INTEGER nStart, ULARGE_INTEGER nBytes, DWORD dwFlags);
+      STDMETHOD(Read)(void* pvBuffer, ULONG nBytesToRead, ULONG* nBytesRead);
+      STDMETHOD(Revert)(void);
+      STDMETHOD(Seek)(LARGE_INTEGER nMove, DWORD dwOrigin, ULARGE_INTEGER* nNewPos);
+      STDMETHOD(SetSize)(ULARGE_INTEGER nNewSize);
+      STDMETHOD(Stat)(STATSTG* statstg, DWORD dwFlags);
+      STDMETHOD(UnlockRegion)(ULARGE_INTEGER nStart, ULARGE_INTEGER nBytes, DWORD dwFlags);
+      STDMETHOD(Write)(const void* pvBuffer, ULONG nBytesToRead, ULONG* nBytesRead);
+    };
+
+    HRESULT CreateStream(IStream **outStream);
+
+  private:
+
+    // Drag and drop helper data for implementing drag and drop image support 
+    typedef struct {
+      FORMATETC   fe;
+      STGMEDIUM   stgm;
+    } DATAENTRY, *LPDATAENTRY;
+
+    nsTArray <LPDATAENTRY> mDataEntryList;
+
+    HRESULT FindFORMATETC(FORMATETC *pfe, LPDATAENTRY *ppde, BOOL fAdd);
+    HRESULT AddRefStgMedium(STGMEDIUM *pstgmIn, STGMEDIUM *pstgmOut,
+                            BOOL fCopyIn);
+    IUnknown* GetCanonicalIUnknown(IUnknown *punk);
+    HGLOBAL GlobalClone(HGLOBAL hglobIn);
 };
 
 

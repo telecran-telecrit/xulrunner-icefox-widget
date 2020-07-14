@@ -50,6 +50,8 @@
 #include "jsdhash.h"
 #endif
 
+JS_BEGIN_EXTERN_C
+
 struct JSRegExpStatics {
     JSString    *input;         /* input string to match (perl $_, GC root) */
     JSBool      multiline;      /* whether input contains newlines (perl $*) */
@@ -62,6 +64,14 @@ struct JSRegExpStatics {
     JSSubString leftContext;    /* input to left of last match (perl $`) */
     JSSubString rightContext;   /* input to right of last match (perl $') */
 };
+
+extern JS_FRIEND_API(void)
+js_SaveAndClearRegExpStatics(JSContext *cx, JSRegExpStatics *statics,
+                             JSTempValueRooter *tvr);
+
+extern JS_FRIEND_API(void)
+js_RestoreRegExpStatics(JSContext *cx, JSRegExpStatics *statics,
+                        JSTempValueRooter *tvr);
 
 /*
  * This struct holds a bitmap representation of a class from a regexp.
@@ -100,8 +110,6 @@ typedef struct RENode RENode;
 struct JSRegExp {
     jsrefcount   nrefs;         /* reference count */
     uint16       flags;         /* flags, see jsapi.h's JSREG_* defines */
-    uint16       cloneIndex;    /* index in fp->vars or funobj->slots of
-                                   cloned regexp object */
     size_t       parenCount;    /* number of parenthesized submatches */
     size_t       classCount;    /* count [...] bitmaps */
     RECharSet    *classList;    /* list of [...] bitmaps */
@@ -114,8 +122,7 @@ js_NewRegExp(JSContext *cx, JSTokenStream *ts,
              JSString *str, uintN flags, JSBool flat);
 
 extern JSRegExp *
-js_NewRegExpOpt(JSContext *cx, JSTokenStream *ts,
-                JSString *str, JSString *opt, JSBool flat);
+js_NewRegExpOpt(JSContext *cx, JSString *str, JSString *opt, JSBool flat);
 
 #define HOLD_REGEXP(cx, re) JS_ATOMIC_INCREMENT(&(re)->nrefs)
 #define DROP_REGEXP(cx, re) js_DestroyRegExp(cx, re)
@@ -132,21 +139,29 @@ extern JSBool
 js_ExecuteRegExp(JSContext *cx, JSRegExp *re, JSString *str, size_t *indexp,
                  JSBool test, jsval *rval);
 
-/*
- * These two add and remove GC roots, respectively, so their calls must be
- * well-ordered.
- */
-extern JSBool
-js_InitRegExpStatics(JSContext *cx, JSRegExpStatics *res);
+extern void
+js_InitRegExpStatics(JSContext *cx);
 
 extern void
-js_FreeRegExpStatics(JSContext *cx, JSRegExpStatics *res);
+js_TraceRegExpStatics(JSTracer *trc, JSContext *acx);
 
-#define JSVAL_IS_REGEXP(cx, v)                                                \
+extern void
+js_FreeRegExpStatics(JSContext *cx);
+
+#define VALUE_IS_REGEXP(cx, v)                                                \
     (JSVAL_IS_OBJECT(v) && JSVAL_TO_OBJECT(v) &&                              \
      OBJ_GET_CLASS(cx, JSVAL_TO_OBJECT(v)) == &js_RegExpClass)
 
 extern JSClass js_RegExpClass;
+
+enum regexp_tinyid {
+    REGEXP_SOURCE       = -1,
+    REGEXP_GLOBAL       = -2,
+    REGEXP_IGNORE_CASE  = -3,
+    REGEXP_LAST_INDEX   = -4,
+    REGEXP_MULTILINE    = -5,
+    REGEXP_STICKY       = -6
+};
 
 extern JSObject *
 js_InitRegExpClass(JSContext *cx, JSObject *obj);
@@ -155,8 +170,7 @@ js_InitRegExpClass(JSContext *cx, JSObject *obj);
  * Export js_regexp_toString to the decompiler.
  */
 extern JSBool
-js_regexp_toString(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
-                   jsval *rval);
+js_regexp_toString(JSContext *cx, JSObject *obj, jsval *vp);
 
 /*
  * Create, serialize/deserialize, or clone a RegExp object.
@@ -166,7 +180,7 @@ js_NewRegExpObject(JSContext *cx, JSTokenStream *ts,
                    jschar *chars, size_t length, uintN flags);
 
 extern JSBool
-js_XDRRegExp(JSXDRState *xdr, JSObject **objp);
+js_XDRRegExpObject(JSXDRState *xdr, JSObject **objp);
 
 extern JSObject *
 js_CloneRegExpObject(JSContext *cx, JSObject *obj, JSObject *parent);
@@ -179,5 +193,7 @@ js_GetLastIndex(JSContext *cx, JSObject *obj, jsdouble *lastIndex);
 
 extern JSBool
 js_SetLastIndex(JSContext *cx, JSObject *obj, jsdouble lastIndex);
+
+JS_END_EXTERN_C
 
 #endif /* jsregexp_h___ */

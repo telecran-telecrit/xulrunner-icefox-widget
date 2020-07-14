@@ -35,7 +35,7 @@
  * ***** END LICENSE BLOCK ***** */
 
 #ifdef DEBUG
-static const char CVS_ID[] = "@(#) $RCSfile: cryptocontext.c,v $ $Revision: 1.14.28.2 $ $Date: 2006/08/22 17:12:04 $";
+static const char CVS_ID[] = "@(#) $RCSfile: cryptocontext.c,v $ $Revision: 1.19 $ $Date: 2010/05/21 00:02:48 $";
 #endif /* DEBUG */
 
 #ifndef DEV_H
@@ -49,20 +49,6 @@ static const char CVS_ID[] = "@(#) $RCSfile: cryptocontext.c,v $ $Revision: 1.14
 #ifndef PKISTORE_H
 #include "pkistore.h"
 #endif /* PKISTORE_H */
-
-#include "pki1t.h"
-
-#ifdef PURE_STAN_BUILD
-struct NSSCryptoContextStr
-{
-    PRInt32 refCount;
-    NSSArena *arena;
-    NSSTrustDomain *td;
-    NSSToken *token;
-    nssSession *session;
-    nssCertificateStore *certStore;
-};
-#endif
 
 extern const NSSError NSS_ERROR_NOT_FOUND;
 extern const NSSError NSS_ERROR_INVALID_ARGUMENT;
@@ -245,7 +231,7 @@ nssCryptoContext_ImportSMIMEProfile (
 NSS_IMPLEMENT NSSCertificate *
 NSSCryptoContext_FindBestCertificateByNickname (
   NSSCryptoContext *cc,
-  NSSUTF8 *name,
+  const NSSUTF8 *name,
   NSSTime *timeOpt, /* NULL for "now" */
   NSSUsage *usage,
   NSSPolicies *policiesOpt /* NULL for none */

@@ -34,22 +34,37 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/*
+ * interface for rendering objects for replaced elements containing a
+ * document, such as <frame>, <iframe>, and some <object>s
+ */
+
 #ifndef nsIFrameFrame_h___
 #define nsIFrameFrame_h___
 
 class nsIDocShell;
 
 #define NS_IFRAMEFRAME_IID \
-{ 0xda876f25, 0x1cff, 0x4f0a, { \
-  0xbf, 0x7e, 0x83, 0xd7, 0x4f, 0xc5, 0x2a, 0x3b } }
+{ 0x22e34108, 0xc24b, 0x40ea, { \
+  0xb9, 0x79, 0x50, 0x18, 0x38, 0x8d, 0xd5, 0x88 } }
 
 class nsIFrameFrame : public nsISupports
 {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IFRAMEFRAME_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IFRAMEFRAME_IID)
 
   NS_IMETHOD GetDocShell(nsIDocShell **aDocShell) = 0;
+
+  /**
+   * Only allowed to fail if the other frame is not the same type as
+   * this one or if one of the frames has no docshell.  Don't call
+   * EndSwapDocShells() unless BeginSwapDocShells() succeeds.
+   */
+  NS_IMETHOD BeginSwapDocShells(nsIFrame* aOther) = 0;
+  virtual void EndSwapDocShells(nsIFrame* aOther) = 0;
 };
 
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIFrameFrame, NS_IFRAMEFRAME_IID)
 
 #endif

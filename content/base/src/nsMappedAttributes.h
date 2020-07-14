@@ -36,11 +36,16 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/*
+ * A unique per-element set of attributes that is used as an
+ * nsIStyleRule; used to implement presentational attributes.
+ */
+
 #ifndef nsMappedAttributes_h___
 #define nsMappedAttributes_h___
 
 #include "nsAttrAndChildArray.h"
-#include "nsGenericHTMLElement.h"
+#include "nsMappedAttributeElement.h"
 #include "nsIStyleRule.h"
 
 class nsIAtom;
@@ -122,11 +127,11 @@ private:
    */
   const InternalAttr* Attrs() const
   {
-    return NS_REINTERPRET_CAST(const InternalAttr*, &(mAttrs[0]));
+    return reinterpret_cast<const InternalAttr*>(&(mAttrs[0]));
   }
   InternalAttr* Attrs()
   {
-    return NS_REINTERPRET_CAST(InternalAttr*, &(mAttrs[0]));
+    return reinterpret_cast<InternalAttr*>(&(mAttrs[0]));
   }
 
   PRUint16 mAttrCount;

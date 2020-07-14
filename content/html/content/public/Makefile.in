@@ -47,15 +47,14 @@ XPIDL_MODULE    = content_html
 
 XPIDLSRCS	= \
 		nsISelectElement.idl \
+		nsIFormSubmitObserver.idl \
 		nsIPhonetic.idl \
-		nsIPluginElement.idl \
 		$(NULL)
 
 EXPORTS		= \
 		nsIFormControl.h \
 		nsIForm.h \
 		nsIFormProcessor.h \
-		nsIFormSubmitObserver.h \
 		nsILink.h \
 		nsIOptionElement.h \
 		nsIRadioControlElement.h \
@@ -65,6 +64,10 @@ EXPORTS		= \
 		nsIFileControlElement.h \
 		nsIFormSubmission.h \
 		nsIFrameSetElement.h \
+		nsHTMLAudioElement.h \
+		nsHTMLMediaElement.h \
+		nsHTMLVideoElement.h \
+		nsIHTMLCollection.h \
                 $(NULL)
 
 include $(topsrcdir)/config/rules.mk

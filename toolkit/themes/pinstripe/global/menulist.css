@@ -48,26 +48,32 @@
 
 menulist {
   -moz-appearance: menulist;
-  margin: 2px 4px;
+  margin: 2px 4px 1px;
   min-height: 20px !important;
+  color: -moz-DialogText;
 }
 
 .menulist-label-box {
   -moz-appearance: menulist-text;
   -moz-box-align: center;
   -moz-box-pack: center;
-  background-color: #CCCCCC;
-border: 1px solid blue;
+  margin-bottom: 1px;
 }
 
 .menulist-label {
   margin: 1px 3px !important;
 }
 
+.menulist-description {
+  font-style: italic;
+  color: GrayText;
+  -moz-margin-start: 1ex !important;
+}
+
 /* ..... dropmarker ..... */
 
 .menulist-dropmarker {
-  -moz-appearance: menulist-button;
+  display: none;
 }
 
 /* ..... disabled state ..... */
@@ -84,31 +90,8 @@ menulist[disabled="true"] > .menulist-dropmarker {
 
 menulist[editable="true"] {
   -moz-user-focus: normal;
-}
-
-menulist[editable="true"] > .menulist-dropmarker {
-  -moz-border-left-colors: #000000 #CCCCCC #FFFFFF;
-  -moz-border-radius: 2px;
-}
-
-menulist[editable="true"][open="true"] > .menulist-dropmarker {
-  -moz-border-left-colors: #000000 #454545 #555555;
-}
-
-.menulist-editable-box {
-  margin: -1px 1px -2px -5px;
-  padding: 0 2px;
-  border: 1px solid #CCCCCC;
-  background-color: -moz-Field;
-  color: -moz-FieldText;
-  -moz-box-align: center;
-}
-
-menulist[editable="true"][focused="true"] > .menulist-editable-box {
-  -moz-border-top-colors: -moz-mac-focusring -moz-mac-focusring #000000;
-  -moz-border-right-colors: -moz-mac-focusring -moz-mac-focusring #000000;
-  -moz-border-bottom-colors: -moz-mac-focusring -moz-mac-focusring #000000;
-  -moz-border-left-colors: -moz-mac-focusring -moz-mac-focusring #000000;
+  -moz-appearance: menulist-textfield;
+  margin: 2px 4px;
 }
 
 html|*.menulist-editable-input {

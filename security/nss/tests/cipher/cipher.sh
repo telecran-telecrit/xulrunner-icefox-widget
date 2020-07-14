@@ -1,4 +1,4 @@
-#! /bin/sh  
+#! /bin/bash  
 #
 # ***** BEGIN LICENSE BLOCK *****
 # Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -17,7 +17,7 @@
 #
 # The Initial Developer of the Original Code is
 # Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1994-2000
+# Portions created by the Initial Developer are Copyright (C) 1994-2009
 # the Initial Developer. All Rights Reserved.
 #
 # Contributor(s):
@@ -102,7 +102,7 @@ cipher_main()
              while [ $outOff -lt 8 ]
              do
                  echo "bltest -T -m $PARAM -d $CIPHERTESTDIR -1 $inOff -2 $outOff"
-                 bltest -T -m $PARAM -d $CIPHERTESTDIR -1 $inOff -2 $outOff
+                 ${PROFTOOL} ${BINDIR}/bltest -T -m $PARAM -d $CIPHERTESTDIR -1 $inOff -2 $outOff
                  if [ $? -ne 0 ]; then
                      failedStr="$failedStr[$inOff:$outOff]"
                  fi

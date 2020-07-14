@@ -49,15 +49,19 @@ DIRS =						\
 	events					\
 	stylesheets				\
 	views					\
+	sidebar                                 \
 	css					\
-        sidebar                                 \
 	traversal				\
 	range					\
 	xbl					\
 	xpath					\
 	ls					\
 	xul                                     \
-	storage
+	storage                                 \
+	json                                    \
+	offline                                 \
+	geolocation                             \
+	threads
 
 ifdef MOZ_SVG
 DIRS += svg

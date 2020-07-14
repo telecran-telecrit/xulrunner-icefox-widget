@@ -48,12 +48,11 @@
 #include "nsCDefaultURIFixup.h"
 
 /* Header file */
-class nsDefaultURIFixup : public nsIURIFixup_MOZILLA_1_8_BRANCH
+class nsDefaultURIFixup : public nsIURIFixup
 {
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIURIFIXUP
-    NS_DECL_NSIURIFIXUP_MOZILLA_1_8_BRANCH
 
     nsDefaultURIFixup();
 
@@ -68,11 +67,12 @@ private:
     PRBool PossiblyByteExpandedFileName(const nsAString& aIn);
     PRBool PossiblyHostPortUrl(const nsACString& aUrl);
     PRBool MakeAlternateURI(nsIURI *aURI);
+    PRBool IsLikelyFTP(const nsCString& aHostSpec);
     const char * GetFileSystemCharset();
     const char * GetCharsetForUrlBar();
 
     nsCOMPtr<nsIPrefBranch> mPrefBranch;
-    nsCAutoString mFsCharset;
+    nsCString mFsCharset;
 };
 
 #endif

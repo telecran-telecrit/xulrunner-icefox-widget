@@ -47,7 +47,7 @@
 #if defined(XP_MAC)
   #include <stat.h>
 #else
-  #ifdef XP_OS2_EMX
+  #ifdef XP_OS2
     #include <sys/types.h>
   #endif
 #endif
@@ -69,10 +69,6 @@
 #include "nsPrintfCString.h"
 #include "prlink.h"
 
-#ifdef MOZ_PROFILESHARING
-#include "nsSharedPrefHandler.h"
-#endif
-
 #ifdef XP_OS2
 #define INCL_DOS
 #include <os2.h>
@@ -85,10 +81,10 @@
 #define BOGUS_DEFAULT_INT_PREF_VALUE (-5632)
 #define BOGUS_DEFAULT_BOOL_PREF_VALUE (-2)
 
-PR_STATIC_CALLBACK(void)
+static void
 clearPrefEntry(PLDHashTable *table, PLDHashEntryHdr *entry)
 {
-    PrefHashEntry *pref = NS_STATIC_CAST(PrefHashEntry *, entry);
+    PrefHashEntry *pref = static_cast<PrefHashEntry *>(entry);
     if (pref->flags & PREF_STRING)
     {
         PR_FREEIF(pref->defaultPref.stringVal);
@@ -100,18 +96,18 @@ clearPrefEntry(PLDHashTable *table, PLDHashEntryHdr *entry)
     memset(entry, 0, table->entrySize);
 }
 
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 matchPrefEntry(PLDHashTable*, const PLDHashEntryHdr* entry,
                const void* key)
 {
     const PrefHashEntry *prefEntry =
-        NS_STATIC_CAST(const PrefHashEntry*,entry);
+        static_cast<const PrefHashEntry*>(entry);
 
     if (prefEntry->key == key) return PR_TRUE;
 
     if (!prefEntry->key || !key) return PR_FALSE;
 
-    const char *otherKey = NS_REINTERPRET_CAST(const char*, key);
+    const char *otherKey = reinterpret_cast<const char*>(key);
     return (strcmp(prefEntry->key, otherKey) == 0);
 }
 
@@ -122,12 +118,14 @@ PRBool              gDirty = PR_FALSE;
 static struct CallbackNode* gCallbacks = NULL;
 static PRBool       gCallbacksEnabled = PR_TRUE;
 static PRBool       gIsAnyPrefLocked = PR_FALSE;
+// These are only used during the call to pref_DoCallback
+static PRBool       gCallbacksInProgress = PR_FALSE;
+static PRBool       gShouldCleanupDeadNodes = PR_FALSE;
 
 
 static PLDHashTableOps     pref_HashTableOps = {
     PL_DHashAllocTable,
     PL_DHashFreeTable,
-    PL_DHashGetKeyStub,
     PL_DHashStringKey,
     matchPrefEntry,
     PL_DHashMoveEntryStub,
@@ -161,7 +159,7 @@ static char *ArenaStrDup(const char* str, PLArenaPool* aArena)
     PL_ARENA_ALLOCATE(mem, aArena, len+1);
     if (mem)
         memcpy(mem, str, len+1);
-    return NS_STATIC_CAST(char*, mem);
+    return static_cast<char*>(mem);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -175,6 +173,9 @@ static PRBool pref_ValueChanged(PrefValue oldValue, PrefValue newValue, PrefType
 /* -- Privates */
 struct CallbackNode {
     char*                   domain;
+    // If someone attempts to remove the node from the callback list while
+    // pref_DoCallback is running, |func| is set to nsnull. Such nodes will
+    // be removed at the end of pref_DoCallback.
     PrefChangedFunc         func;
     void*                   data;
     struct CallbackNode*    next;
@@ -187,12 +188,14 @@ static nsresult pref_DoCallback(const char* changed_pref);
 static nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, PRBool defaultPref);
 static inline PrefHashEntry* pref_HashTableLookup(const void *key);
 
+#define PREF_HASHTABLE_INITIAL_SIZE	2048
 
 nsresult PREF_Init()
 {
     if (!gHashTable.ops) {
         if (!PL_DHashTableInit(&gHashTable, &pref_HashTableOps, nsnull,
-                               sizeof(PrefHashEntry), 1024)) {
+                               sizeof(PrefHashEntry),
+                               PREF_HASHTABLE_INITIAL_SIZE)) {
             gHashTable.ops = nsnull;
             return NS_ERROR_OUT_OF_MEMORY;
         }
@@ -206,6 +209,8 @@ nsresult PREF_Init()
 /* Frees the callback list. */
 void PREF_Cleanup()
 {
+    NS_ASSERTION(!gCallbacksInProgress,
+        "PREF_Cleanup was called while gCallbacksInProgress is PR_TRUE!");
     struct CallbackNode* node = gCallbacks;
     struct CallbackNode* next_node;
 
@@ -312,8 +317,8 @@ PREF_SetBoolPref(const char *pref_name, PRBool value, PRBool set_default)
 PLDHashOperator
 pref_savePref(PLDHashTable *table, PLDHashEntryHdr *heh, PRUint32 i, void *arg)
 {
-    pref_saveArgs *argData = NS_STATIC_CAST(pref_saveArgs *, arg);
-    PrefHashEntry *pref = NS_STATIC_CAST(PrefHashEntry *, heh);
+    pref_saveArgs *argData = static_cast<pref_saveArgs *>(arg);
+    PrefHashEntry *pref = static_cast<PrefHashEntry *>(heh);
 
     PR_ASSERT(pref);
     if (!pref)
@@ -334,14 +339,6 @@ pref_savePref(PLDHashTable *table, PLDHashEntryHdr *heh, PRUint32 i, void *arg)
     else
         // do not save default prefs that haven't changed
         return PL_DHASH_NEXT;
-
-#if MOZ_PROFILESHARING
-  if ((argData->saveTypes == SAVE_SHARED &&
-      !gSharedPrefHandler->IsPrefShared(pref->key)) ||
-      (argData->saveTypes == SAVE_NONSHARED &&
-      gSharedPrefHandler->IsPrefShared(pref->key)))
-    return PL_DHASH_NEXT;
-#endif
 
     // strings are in quotes!
     if (pref->flags & PREF_STRING) {
@@ -367,7 +364,7 @@ pref_savePref(PLDHashTable *table, PLDHashEntryHdr *heh, PRUint32 i, void *arg)
     return PL_DHASH_NEXT;
 }
 
-int PR_CALLBACK
+int
 pref_CompareStrings(const void *v1, const void *v2, void *unused)
 {
     char *s1 = *(char**) v1;
@@ -509,10 +506,10 @@ nsresult PREF_GetBoolPref(const char *pref_name, PRBool * return_value, PRBool g
 }
 
 /* Delete a branch. Used for deleting mime types */
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 pref_DeleteItem(PLDHashTable *table, PLDHashEntryHdr *heh, PRUint32 i, void *arg)
 {
-    PrefHashEntry* he = NS_STATIC_CAST(PrefHashEntry*,heh);
+    PrefHashEntry* he = static_cast<PrefHashEntry*>(heh);
     const char *to_delete = (const char *) arg;
     int len = PL_strlen(to_delete);
 
@@ -561,6 +558,15 @@ PREF_ClearUserPref(const char *pref_name)
     if (pref && PREF_HAS_USER_VALUE(pref))
     {
         pref->flags &= ~PREF_USERSET;
+
+        if ((pref->flags & PREF_INT && 
+             pref->defaultPref.intVal == ((PRInt32) BOGUS_DEFAULT_INT_PREF_VALUE)) ||
+            (pref->flags & PREF_BOOL && 
+             pref->defaultPref.boolVal == ((PRBool) BOGUS_DEFAULT_BOOL_PREF_VALUE)) ||
+            (pref->flags & PREF_STRING && !pref->defaultPref.stringVal)) {
+            PL_DHashTableOperate(&gHashTable, pref_name, PL_DHASH_REMOVE);
+        }
+
         if (gCallbacksEnabled)
             pref_DoCallback(pref_name);
         gDirty = PR_TRUE;
@@ -569,26 +575,30 @@ PREF_ClearUserPref(const char *pref_name)
     return rv;
 }
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 pref_ClearUserPref(PLDHashTable *table, PLDHashEntryHdr *he, PRUint32,
                    void *arg)
 {
-    PrefHashEntry *pref = NS_STATIC_CAST(PrefHashEntry*,  he);
+    PrefHashEntry *pref = static_cast<PrefHashEntry*>(he);
+
+    PLDHashOperator nextOp = PL_DHASH_NEXT;
 
     if (PREF_HAS_USER_VALUE(pref))
     {
-        // Note that we're not unhashing the pref. A pref which has both
-        // a user value and a default value needs to remain. Currently,
-        // there isn't a way to determine that a pref has a default value,
-        // other than comparing its value to BOGUS_DEFAULT_XXX_PREF_VALUE.
-        // This needs to be fixed. If we could positively identify a pref
-        // as not having a set default value here, we could unhash it.
-
         pref->flags &= ~PREF_USERSET;
+
+        if ((pref->flags & PREF_INT && 
+             pref->defaultPref.intVal == ((PRInt32) BOGUS_DEFAULT_INT_PREF_VALUE)) ||
+            (pref->flags & PREF_BOOL && 
+             pref->defaultPref.boolVal == ((PRBool) BOGUS_DEFAULT_BOOL_PREF_VALUE)) ||
+            (pref->flags & PREF_STRING && !pref->defaultPref.stringVal)) {
+            nextOp = PL_DHASH_REMOVE;
+        }
+
         if (gCallbacksEnabled)
             pref_DoCallback(pref->key);
     }
-    return PL_DHASH_NEXT;
+    return nextOp;
 }
 
 nsresult
@@ -670,7 +680,7 @@ static void pref_SetValue(PrefValue* oldValue, PrefValue newValue, PrefType type
 static inline PrefHashEntry* pref_HashTableLookup(const void *key)
 {
     PrefHashEntry* result =
-        NS_STATIC_CAST(PrefHashEntry*, PL_DHashTableOperate(&gHashTable, key, PL_DHASH_LOOKUP));
+        static_cast<PrefHashEntry*>(PL_DHashTableOperate(&gHashTable, key, PL_DHASH_LOOKUP));
 
     if (PL_DHASH_ENTRY_IS_FREE(result))
         return nsnull;
@@ -683,7 +693,7 @@ nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, PRBool s
     if (!gHashTable.ops)
         return NS_ERROR_OUT_OF_MEMORY;
 
-    PrefHashEntry* pref = NS_STATIC_CAST(PrefHashEntry*, PL_DHashTableOperate(&gHashTable, key, PL_DHASH_ADD));
+    PrefHashEntry* pref = static_cast<PrefHashEntry*>(PL_DHashTableOperate(&gHashTable, key, PL_DHASH_ADD));
 
     if (!pref)
         return NS_ERROR_OUT_OF_MEMORY;
@@ -694,8 +704,8 @@ nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, PRBool s
         // initialize the pref entry
         pref->flags = type;
         pref->key = ArenaStrDup(key, &gPrefNameArena);
-        pref->defaultPref.intVal = 0;
-        pref->userPref.intVal = 0;
+        memset(&pref->defaultPref, 0, sizeof(pref->defaultPref));
+        memset(&pref->userPref, 0, sizeof(pref->userPref));
 
         /* ugly hack -- define it to a default that no pref will ever
            default to this should really get fixed right by some out
@@ -758,10 +768,6 @@ nsresult pref_HashPref(const char *key, PrefValue value, PrefType type, PRBool s
             if (NS_FAILED(rv2))
                 rv = rv2;
         }
-#ifdef MOZ_PROFILESHARING
-        if (gSharedPrefHandler)
-            gSharedPrefHandler->OnPrefChanged(set_default, pref, value);
-#endif
     }
     return rv;
 }
@@ -791,7 +797,7 @@ PRBool
 PREF_PrefIsLocked(const char *pref_name)
 {
     PRBool result = PR_FALSE;
-    if (gIsAnyPrefLocked) {
+    if (gIsAnyPrefLocked && gHashTable.ops) {
         PrefHashEntry* pref = pref_HashTableLookup(pref_name);
         if (pref && PREF_IS_LOCKED(pref))
             result = PR_TRUE;
@@ -806,6 +812,9 @@ PREF_RegisterCallback(const char *pref_node,
                        PrefChangedFunc callback,
                        void * instance_data)
 {
+    NS_PRECONDITION(pref_node, "pref_node must not be nsnull");
+    NS_PRECONDITION(callback, "callback must not be nsnull");
+
     struct CallbackNode* node = (struct CallbackNode*) malloc(sizeof(struct CallbackNode));
     if (node)
     {
@@ -818,7 +827,29 @@ PREF_RegisterCallback(const char *pref_node,
     return;
 }
 
-/* Deletes a node from the callback list. */
+/* Removes |node| from gCallbacks list.
+   Returns the node after the deleted one. */
+struct CallbackNode*
+pref_RemoveCallbackNode(struct CallbackNode* node,
+                        struct CallbackNode* prev_node)
+{
+    NS_PRECONDITION(!prev_node || prev_node->next == node, "invalid params");
+    NS_PRECONDITION(prev_node || gCallbacks == node, "invalid params");
+
+    NS_ASSERTION(!gCallbacksInProgress,
+        "modifying the callback list while gCallbacksInProgress is PR_TRUE");
+
+    struct CallbackNode* next_node = node->next;
+    if (prev_node)
+        prev_node->next = next_node;
+    else
+        gCallbacks = next_node;
+    PR_Free(node->domain);
+    PR_Free(node);
+    return next_node;
+}
+
+/* Deletes a node from the callback list or marks it for deletion. */
 nsresult
 PREF_UnregisterCallback(const char *pref_node,
                          PrefChangedFunc callback,
@@ -832,16 +863,21 @@ PREF_UnregisterCallback(const char *pref_node,
     {
         if ( strcmp(node->domain, pref_node) == 0 &&
              node->func == callback &&
-             node->data == instance_data )
+             node->data == instance_data)
         {
-            struct CallbackNode* next_node = node->next;
-            if (prev_node)
-                prev_node->next = next_node;
+            if (gCallbacksInProgress)
+            {
+                // postpone the node removal until after
+                // gCallbacks enumeration is finished.
+                node->func = nsnull;
+                gShouldCleanupDeadNodes = PR_TRUE;
+                prev_node = node;
+                node = node->next;
+            }
             else
-                gCallbacks = next_node;
-            PR_Free(node->domain);
-            PR_Free(node);
-            node = next_node;
+            {
+                node = pref_RemoveCallbackNode(node, prev_node);
+            }
             rv = NS_OK;
         }
         else
@@ -857,15 +893,49 @@ static nsresult pref_DoCallback(const char* changed_pref)
 {
     nsresult rv = NS_OK;
     struct CallbackNode* node;
+
+    PRBool reentered = gCallbacksInProgress;
+    gCallbacksInProgress = PR_TRUE;
+    // Nodes must not be deleted while gCallbacksInProgress is PR_TRUE.
+    // Nodes that need to be deleted are marked for deletion by nulling
+    // out the |func| pointer. We release them at the end of this function
+    // if we haven't reentered.
+
     for (node = gCallbacks; node != NULL; node = node->next)
     {
-        if ( PL_strncmp(changed_pref, node->domain, PL_strlen(node->domain)) == 0 )
+        if ( node->func &&
+             PL_strncmp(changed_pref,
+                        node->domain,
+                        PL_strlen(node->domain)) == 0 )
         {
             nsresult rv2 = (*node->func) (changed_pref, node->data);
             if (NS_FAILED(rv2))
                 rv = rv2;
         }
     }
+
+    gCallbacksInProgress = reentered;
+
+    if (gShouldCleanupDeadNodes && !gCallbacksInProgress)
+    {
+        struct CallbackNode* prev_node = NULL;
+        node = gCallbacks;
+
+        while (node != NULL)
+        {
+            if (!node->func)
+            {
+                node = pref_RemoveCallbackNode(node, prev_node);
+            }
+            else
+            {
+                prev_node = node;
+                node = node->next;
+            }
+        }
+        gShouldCleanupDeadNodes = PR_FALSE;
+    }
+
     return rv;
 }
 

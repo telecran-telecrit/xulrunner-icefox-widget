@@ -38,7 +38,9 @@
 
 #include "nsCOMPtr.h"
 #include "nsICSSLoaderObserver.h"
-#include "nsISupportsArray.h"
+#include "nsCOMArray.h"
+#include "nsContentUtils.h"
+#include "nsCycleCollectionParticipant.h"
 
 class nsIContent;
 class nsIAtom;
@@ -50,8 +52,6 @@ class nsXBLPrototypeBinding;
 
 // *********************************************************************/
 // The XBLResourceLoader class
-
-MOZ_DECL_CTOR_COUNTER(nsXBLResource)
 
 struct nsXBLResource {
   nsXBLResource* mNext;
@@ -67,17 +67,19 @@ struct nsXBLResource {
 
   ~nsXBLResource() { 
     MOZ_COUNT_DTOR(nsXBLResource);  
-    delete mNext; 
+    NS_CONTENT_DELETE_LIST_MEMBER(nsXBLResource, this, mNext);
   }
 };
 
 class nsXBLResourceLoader : public nsICSSLoaderObserver
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS(nsXBLResourceLoader)
 
   // nsICSSLoaderObserver
-  NS_IMETHOD StyleSheetLoaded(nsICSSStyleSheet* aSheet, PRBool aNotify);
+  NS_IMETHOD StyleSheetLoaded(nsICSSStyleSheet* aSheet, PRBool aWasAlternate,
+                              nsresult aStatus);
 
   void LoadResources(PRBool* aResult);
   void AddResource(nsIAtom* aResourceType, const nsAString& aSrc);
@@ -100,9 +102,12 @@ public:
   nsXBLResource* mLastResource;
 
   PRPackedBool mLoadingResources;
+  // We need mInLoadResourcesFunc because we do a mixture of sync and
+  // async loads.
   PRPackedBool mInLoadResourcesFunc;
   PRInt16 mPendingSheets; // The number of stylesheets that have yet to load.
-  
-  nsCOMPtr<nsISupportsArray> mBoundElements; // Bound elements that are waiting on the stylesheets and scripts.
+
+  // Bound elements that are waiting on the stylesheets and scripts.
+  nsCOMArray<nsIContent> mBoundElements;
 };
 

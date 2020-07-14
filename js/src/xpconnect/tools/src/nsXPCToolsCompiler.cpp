@@ -42,6 +42,7 @@
 
 #include "xpctools_private.h"
 #include "nsDirectoryServiceDefs.h"
+#include "nsDirectoryServiceUtils.h"
 
 NS_IMPL_ISUPPORTS1(nsXPCToolsCompiler, nsIXPCToolsCompiler)
 
@@ -68,7 +69,7 @@ NS_IMETHODIMP nsXPCToolsCompiler::GetBinDir(nsILocalFile * *aBinDir)
     return NS_OK;
 }
 
-JS_STATIC_DLL_CALLBACK(void) ErrorReporter(JSContext *cx, const char *message,
+static void ErrorReporter(JSContext *cx, const char *message,
                           JSErrorReport *report)
 {
     printf("compile error!\n");
@@ -92,8 +93,8 @@ NS_IMETHODIMP nsXPCToolsCompiler::CompileFile(nsILocalFile *aFile, PRBool strict
         return NS_ERROR_FAILURE;
 
     // get the xpconnect native call context
-    nsCOMPtr<nsIXPCNativeCallContext> callContext;
-    xpc->GetCurrentNativeCallContext(getter_AddRefs(callContext));
+    nsAXPCNativeCallContext *callContext = nsnull;
+    xpc->GetCurrentNativeCallContext(&callContext);
     if(!callContext)
         return NS_ERROR_FAILURE;
 

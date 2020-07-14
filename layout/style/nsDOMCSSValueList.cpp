@@ -35,6 +35,8 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/* DOM object representing lists of values in DOM computed style */
+
 #include "nsDOMCSSValueList.h"
 #include "nsCOMPtr.h"
 #include "nsDOMError.h"
@@ -82,8 +84,7 @@ nsDOMCSSValueList::Item(PRUint32 aIndex, nsIDOMCSSValue **aReturn)
 {
   NS_ENSURE_ARG_POINTER(aReturn);
 
-  *aReturn = mCSSValues[aIndex];
-  NS_IF_ADDREF(*aReturn);
+  NS_IF_ADDREF(*aReturn = GetItemAt(aIndex));
 
   return NS_OK;
 }
@@ -123,7 +124,7 @@ nsDOMCSSValueList::GetCssText(nsAString& aCssText)
       }
 
       // If this isn't the first item in the list, then
-      // its ok to append a separator.
+      // it's ok to append a separator.
       if (!aCssText.IsEmpty()) {
         aCssText.Append(separator);
       }

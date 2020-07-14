@@ -67,16 +67,11 @@
 
 nsPluginInstancePeerImpl::nsPluginInstancePeerImpl()
 {
-  mInstance = nsnull;
-  mOwner = nsnull;
   mMIMEType = nsnull;
 }
 
 nsPluginInstancePeerImpl::~nsPluginInstancePeerImpl()
 {
-  mInstance = nsnull;
-  NS_IF_RELEASE(mOwner);
-
   if (nsnull != mMIMEType) {
     PR_Free((void *)mMIMEType);
     mMIMEType = nsnull;
@@ -88,18 +83,20 @@ static NS_DEFINE_IID(kIPluginTagInfo2IID, NS_IPLUGINTAGINFO2_IID);
 #ifdef OJI
 static NS_DEFINE_IID(kIJVMPluginTagInfoIID, NS_IJVMPLUGINTAGINFO_IID);
 
-NS_IMPL_ISUPPORTS7(nsPluginInstancePeerImpl,
+NS_IMPL_ISUPPORTS8(nsPluginInstancePeerImpl,
                    nsIPluginInstancePeer,
                    nsIPluginInstancePeer2,
+                   nsIPluginInstancePeer2_1_9_1_BRANCH,
                    nsIWindowlessPluginInstancePeer,
                    nsIPluginTagInfo,
                    nsIPluginTagInfo2,
                    nsIJVMPluginTagInfo,
                    nsPIPluginInstancePeer)
 #else
-NS_IMPL_ISUPPORTS6(nsPluginInstancePeerImpl,
+NS_IMPL_ISUPPORTS7(nsPluginInstancePeerImpl,
                    nsIPluginInstancePeer,
                    nsIPluginInstancePeer2,
+                   nsIPluginInstancePeer2_1_9_1_BRANCH,
                    nsIWindowlessPluginInstancePeer,
                    nsIPluginTagInfo,
                    nsIPluginTagInfo2,
@@ -805,8 +802,10 @@ nsPluginInstancePeerImpl::GetJSContext(JSContext* *outContext)
 {
   *outContext = NULL;
   nsresult rv = NS_ERROR_FAILURE;
-  nsCOMPtr<nsIDocument> document;
+  if (!mOwner)
+    return rv;
 
+  nsCOMPtr<nsIDocument> document;
   rv = mOwner->GetDocument(getter_AddRefs(document));
 
   if (NS_SUCCEEDED(rv) && document) {
@@ -824,15 +823,19 @@ nsPluginInstancePeerImpl::GetJSContext(JSContext* *outContext)
   return rv;
 }
 
+NS_IMETHODIMP
+nsPluginInstancePeerImpl::InvalidateOwner()
+{
+  mOwner = nsnull;
+
+  return NS_OK;
+}
+
 nsresult
 nsPluginInstancePeerImpl::Initialize(nsIPluginInstanceOwner *aOwner,
                                      const nsMIMEType aMIMEType)
 {
   mOwner = aOwner;
-  NS_IF_ADDREF(mOwner);
-
-  aOwner->GetInstance(mInstance);
-  NS_IF_RELEASE(mInstance);
 
   if (nsnull != aMIMEType) {
     mMIMEType = (nsMIMEType)PR_Malloc(PL_strlen(aMIMEType) + 1);
@@ -850,14 +853,7 @@ nsPluginInstancePeerImpl::Initialize(nsIPluginInstanceOwner *aOwner,
 nsresult
 nsPluginInstancePeerImpl::SetOwner(nsIPluginInstanceOwner *aOwner)
 {
-  // get rid of the previous owner
-  NS_IF_RELEASE(mOwner);
-
   mOwner = aOwner;
-  NS_IF_ADDREF(mOwner);
-
-  aOwner->GetInstance(mInstance);
-  NS_IF_RELEASE(mInstance);
   return NS_OK;
 }
 

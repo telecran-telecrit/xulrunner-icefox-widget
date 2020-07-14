@@ -42,8 +42,8 @@ DEPTH = ../..
 include manifest.mn
 include $(CORE_DEPTH)/coreconf/config.mk
 
-ifndef USE_SYSTEM_ZLIB
-ZLIB_SRCDIR = zlib  # Add the zlib directory to DIRS.
+ifdef BUILD_LIBPKIX_TESTS
+DIRS += libpkix
 endif
 
 INCLUDES += \

@@ -36,14 +36,10 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: nss.h,v 1.46.2.13 2007/01/17 18:58:06 wtchang%redhat.com Exp $ */
+/* $Id: nss.h,v 1.81.2.2 2010/09/16 18:08:52 christophe.ravel.bugs%sun.com Exp $ */
 
 #ifndef __nss_h_
 #define __nss_h_
-
-#include "seccomon.h"
-
-SEC_BEGIN_PROTOS
 
 /* The private macro _NSS_ECC_STRING is for NSS internal use only. */
 #ifdef NSS_ENABLE_ECC
@@ -56,18 +52,106 @@ SEC_BEGIN_PROTOS
 #define _NSS_ECC_STRING ""
 #endif
 
+/* The private macro _NSS_CUSTOMIZED is for NSS internal use only. */
+#if defined(NSS_ALLOW_UNSUPPORTED_CRITICAL)
+#define _NSS_CUSTOMIZED " (Customized build)"
+#else
+#define _NSS_CUSTOMIZED 
+#endif
+
 /*
- * NSS's major version, minor version, patch level, and whether
+ * NSS's major version, minor version, patch level, build number, and whether
  * this is a beta release.
  *
  * The format of the version string should be
- *     "<major version>.<minor version>[.<patch level>][ <ECC>][ <Beta>]"
+ *     "<major version>.<minor version>[.<patch level>[.<build number>]][ <ECC>][ <Beta>]"
  */
-#define NSS_VERSION  "3.11.5" _NSS_ECC_STRING
+#define NSS_VERSION  "3.12.8.0" _NSS_ECC_STRING _NSS_CUSTOMIZED
 #define NSS_VMAJOR   3
-#define NSS_VMINOR   11
-#define NSS_VPATCH   5
+#define NSS_VMINOR   12
+#define NSS_VPATCH   8
+#define NSS_VBUILD   0
 #define NSS_BETA     PR_FALSE
+
+#ifndef RC_INVOKED
+
+#include "seccomon.h"
+
+typedef struct NSSInitParametersStr NSSInitParameters;
+
+/*
+ * parameters used to initialize softoken. Mostly strings used to 
+ * internationalize softoken. Memory for the strings are owned by the caller,
+ * who is free to free them once NSS_ContextInit returns. If the string 
+ * parameter is NULL (as opposed to empty, zero length), then the softoken
+ * default is used. These are equivalent to the parameters for 
+ * PK11_ConfigurePKCS11().
+ *
+ * field names match their equivalent parameter names for softoken strings 
+ * documented at https://developer.mozilla.org/en/PKCS11_Module_Specs.
+ * 
+ * minPWLen 
+ *     Minimum password length in bytes. 
+ * manufacturerID 
+ *     Override the default manufactureID value for the module returned in 
+ *     the CK_INFO, CK_SLOT_INFO, and CK_TOKEN_INFO structures with an 
+ *     internationalize string (UTF8). This value will be truncated at 32 
+ *     bytes (not including the trailing NULL, partial UTF8 characters will be
+ *     dropped). 
+ * libraryDescription 
+ *     Override the default libraryDescription value for the module returned in
+ *     the CK_INFO structure with an internationalize string (UTF8). This value
+ *     will be truncated at 32 bytes(not including the trailing NULL, partial 
+ *     UTF8 characters will be dropped). 
+ * cryptoTokenDescription 
+ *     Override the default label value for the internal crypto token returned
+ *     in the CK_TOKEN_INFO structure with an internationalize string (UTF8).
+ *     This value will be truncated at 32 bytes (not including the trailing
+ *     NULL, partial UTF8 characters will be dropped). 
+ * dbTokenDescription 
+ *     Override the default label value for the internal DB token returned in 
+ *     the CK_TOKEN_INFO structure with an internationalize string (UTF8). This
+ *     value will be truncated at 32 bytes (not including the trailing NULL,
+ *     partial UTF8 characters will be dropped). 
+ * FIPSTokenDescription 
+ *     Override the default label value for the internal FIPS token returned in
+ *     the CK_TOKEN_INFO structure with an internationalize string (UTF8). This
+ *     value will be truncated at 32 bytes (not including the trailing NULL,
+ *     partial UTF8 characters will be dropped). 
+ * cryptoSlotDescription 
+ *     Override the default slotDescription value for the internal crypto token
+ *     returned in the CK_SLOT_INFO structure with an internationalize string
+ *     (UTF8). This value will be truncated at 64 bytes (not including the
+ *     trailing NULL, partial UTF8 characters will be dropped). 
+ * dbSlotDescription 
+ *     Override the default slotDescription value for the internal DB token 
+ *     returned in the CK_SLOT_INFO structure with an internationalize string 
+ *     (UTF8). This value will be truncated at 64 bytes (not including the
+ *     trailing NULL, partial UTF8 characters will be dropped). 
+ * FIPSSlotDescription 
+ *     Override the default slotDecription value for the internal FIPS token
+ *     returned in the CK_SLOT_INFO structure with an internationalize string
+ *     (UTF8). This value will be truncated at 64 bytes (not including the
+ *     trailing NULL, partial UTF8 characters will be dropped). 
+ *
+ */
+struct NSSInitParametersStr {
+   unsigned int	  length;      /* allow this structure to grow in the future,
+				* must be set */
+   PRBool passwordRequired;
+   int    minPWLen;
+   char * manufactureID;           /* variable names for strings match the */
+   char * libraryDescription;      /*   parameter name in softoken */
+   char * cryptoTokenDescription;
+   char * dbTokenDescription;
+   char * FIPSTokenDescription;
+   char * cryptoSlotDescription;
+   char * dbSlotDescription;
+   char * FIPSSlotDescription;
+};
+   
+
+SEC_BEGIN_PROTOS
 
 /*
  * Return a boolean that indicates whether the underlying library
@@ -161,7 +245,7 @@ extern SECStatus NSS_InitReadWrite(const char *configdir);
  *                      use both NSS and the Java SunPKCS11 provider.
  *
  * Also NOTE: This is not the recommended method for initializing NSS. 
- * The prefered method is NSS_init().
+ * The preferred method is NSS_init().
  */
 #define NSS_INIT_READONLY	0x1
 #define NSS_INIT_NOCERTDB	0x2
@@ -179,16 +263,36 @@ extern SECStatus NSS_InitReadWrite(const char *configdir);
         NSS_INIT_NOPK11FINALIZE | \
         NSS_INIT_RESERVED
 
-#ifdef macintosh
-#define SECMOD_DB "Security Modules"
-#else
 #define SECMOD_DB "secmod.db"
-#endif
+
+typedef struct NSSInitContextStr NSSInitContext;
+
 
 extern SECStatus NSS_Initialize(const char *configdir, 
 	const char *certPrefix, const char *keyPrefix, 
 	const char *secmodName, PRUint32 flags);
 
+extern NSSInitContext *NSS_InitContext(const char *configdir, 
+	const char *certPrefix, const char *keyPrefix, 
+	const char *secmodName, NSSInitParameters *initParams, PRUint32 flags);
+
+extern SECStatus NSS_ShutdownContext(NSSInitContext *);
+
+/*
+ * same as NSS_Init, but checks to see if we need to merge an
+ * old database in.
+ *   updatedir is the directory where the old database lives.
+ *   updCertPrefix is the certPrefix for the old database.
+ *   updKeyPrefix is the keyPrefix for the old database.
+ *   updateID is a unique identifier chosen by the application for
+ *      the specific database.
+ *   updatName is the name the user will be prompted for when
+ *      asking to authenticate to the old database  */
+extern SECStatus NSS_InitWithMerge(const char *configdir, 
+	const char *certPrefix, const char *keyPrefix, const char *secmodName,
+	const char *updatedir,  const char *updCertPrefix, 
+	const char *updKeyPrefix, const char *updateID, 
+	const char *updateName, PRUint32 flags);
 /*
  * initialize NSS without a creating cert db's, key db's, or secmod db's.
  */
@@ -227,9 +331,9 @@ extern SECStatus NSS_Shutdown(void);
 /*
  * set the PKCS #11 strings for the internal token.
  */
-void PK11_ConfigurePKCS11(const char *man, const char *libdes, 
-	const char *tokdes, const char *ptokdes, const char *slotdes, 
-	const char *pslotdes, const char *fslotdes, const char *fpslotdes,
+void PK11_ConfigurePKCS11(const char *man, const char *libdesc, 
+	const char *tokdesc, const char *ptokdesc, const char *slotdesc, 
+	const char *pslotdesc, const char *fslotdesc, const char *fpslotdesc,
         int minPwd, int pwRequired);
 
 /*
@@ -240,4 +344,5 @@ void nss_DumpCertificateCacheInfo(void);
 
 SEC_END_PROTOS
 
+#endif /* RC_INVOKED */
 #endif /* __nss_h_ */

@@ -40,7 +40,6 @@
 #include "nsDOMKeyboardEvent.h"
 #include "nsContentUtils.h"
 
-
 nsDOMKeyboardEvent::nsDOMKeyboardEvent(nsPresContext* aPresContext,
                                        nsKeyEvent* aEvent)
   : nsDOMUIEvent(aPresContext, aEvent ? aEvent :
@@ -54,6 +53,14 @@ nsDOMKeyboardEvent::nsDOMKeyboardEvent(nsPresContext* aPresContext,
   else {
     mEventIsInternal = PR_TRUE;
     mEvent->time = PR_Now();
+  }
+}
+
+nsDOMKeyboardEvent::~nsDOMKeyboardEvent()
+{
+  if (mEventIsInternal) {
+    delete static_cast<nsKeyEvent*>(mEvent);
+    mEvent = nsnull;
   }
 }
 
@@ -105,15 +112,14 @@ nsDOMKeyboardEvent::GetCharCode(PRUint32* aCharCode)
   switch (mEvent->message) {
   case NS_KEY_UP:
   case NS_KEY_DOWN:
-#if defined(NS_DEBUG) && defined(DEBUG_brade)
-    printf("GetCharCode used for wrong key event; should use onkeypress.\n");
-#endif
+    ReportWrongPropertyAccessWarning("charCode");
     *aCharCode = 0;
     break;
   case NS_KEY_PRESS:
     *aCharCode = ((nsKeyEvent*)mEvent)->charCode;
     break;
   default:
+    ReportWrongPropertyAccessWarning("charCode");
     break;
   }
   return NS_OK;
@@ -131,6 +137,7 @@ nsDOMKeyboardEvent::GetKeyCode(PRUint32* aKeyCode)
     *aKeyCode = ((nsKeyEvent*)mEvent)->keyCode;
     break;
   default:
+    ReportWrongPropertyAccessWarning("keyCode");
     *aKeyCode = 0;
     break;
   }
@@ -156,10 +163,11 @@ nsDOMKeyboardEvent::GetWhich(PRUint32* aWhich)
           *aWhich = keyCode;
           return NS_OK;
         }
-	return GetCharCode(aWhich);
+        return GetCharCode(aWhich);
       }
       break;
     default:
+      ReportWrongPropertyAccessWarning("which");
       *aWhich = 0;
       break;
   }
@@ -176,7 +184,7 @@ nsDOMKeyboardEvent::InitKeyEvent(const nsAString& aType, PRBool aCanBubble, PRBo
   nsresult rv = nsDOMUIEvent::InitUIEvent(aType, aCanBubble, aCancelable, aView, 0);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  nsKeyEvent* keyEvent = NS_STATIC_CAST(nsKeyEvent*, mEvent);
+  nsKeyEvent* keyEvent = static_cast<nsKeyEvent*>(mEvent);
   keyEvent->isControl = aCtrlKey;
   keyEvent->isAlt = aAltKey;
   keyEvent->isShift = aShiftKey;

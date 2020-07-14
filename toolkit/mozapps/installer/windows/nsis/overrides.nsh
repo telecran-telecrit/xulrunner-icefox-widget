@@ -1,7 +1,20 @@
 ################################################################################
 # Modified versions of macros provided by NSIS
 
-; Modified version of Locate from the NSIS File Functions Header v3.2
+!ifndef OVERRIDES_INCLUDED
+!define OVERRIDES_INCLUDED
+
+; When including a file check if its verbose macro is defined to prevent
+; loading the file a second time.
+!ifmacrondef TEXTFUNC_VERBOSE
+!include TextFunc.nsh
+!endif
+
+!ifmacrondef FILEFUNC_VERBOSE
+!include FileFunc.nsh
+!endif
+
+; Modified version of Locate from the NSIS File Functions Header v3.4
 ; This version has the calls to SetDetailsPrint and DetailsPrint commented out.
 ; See <NSIS App Dir>/include/FileFunc.nsh for more information
 !macro LocateNoDetails
@@ -158,11 +171,13 @@
       findfirst:
       FindFirst $0 $R7 '$R8\$4'
       IfErrors subdir
-      StrCmp $R7 '.' 0 +5
+      StrCmp $R7 '.' 0 dir
       FindNext $0 $R7
-      StrCmp $R7 '..' 0 +3
+      StrCmp $R7 '..' 0 dir
       FindNext $0 $R7
-      IfErrors subdir
+      IfErrors 0 dir
+      FindClose $0
+      goto subdir
 
       dir:
       IfFileExists '$R8\$R7\*.*' 0 file
@@ -231,9 +246,13 @@
       Pop $2
       Pop $1
       Pop $0
-      IfErrors error
 
-      StrCmp $R9 'StopLocate' clearstack
+      IfErrors 0 +3
+      FindClose $0
+      goto error
+      StrCmp $R9 'StopLocate' 0 +3
+      FindClose $0
+      goto clearstack
       goto $9
 
       findnext:
@@ -245,17 +264,20 @@
       StrCpy $9 $7 2
       StrCmp $9 'G0' end
       FindFirst $0 $R7 '$R8\*.*'
-      StrCmp $R7 '.' 0 +5
+      StrCmp $R7 '.' 0 pushdir
       FindNext $0 $R7
-      StrCmp $R7 '..' 0 +3
+      StrCmp $R7 '..' 0 pushdir
       FindNext $0 $R7
-      IfErrors +7
+      IfErrors 0 pushdir
+      FindClose $0
+      StrCmp $8 0 end nextdir
 
+      pushdir:
       IfFileExists '$R8\$R7\*.*' 0 +3
       Push '$R8\$R7'
       IntOp $8 $8 + 1
       FindNext $0 $R7
-      IfErrors 0 -4
+      IfErrors 0 pushdir
       FindClose $0
       StrCmp $8 0 end nextdir
 
@@ -566,3 +588,5 @@
     !verbose pop
   !endif
 !macroend
+
+!endif

@@ -41,10 +41,11 @@
 #include "nsIClipboard.h"
 #include "nsITransferable.h"
 #include "nsIClipboardOwner.h"
+#include "nsClipboardPrivacyHandler.h"
+#include "nsAutoPtr.h"
 #include "nsCOMPtr.h"
 
-#include <qcstring.h>
-#include <qmime.h>
+#include <qclipboard.h>
 
 /* Native Qt Clipboard wrapper */
 class nsClipboard : public nsIClipboard
@@ -60,18 +61,16 @@ public:
     NS_DECL_NSICLIPBOARD
 
 protected:
-    NS_IMETHOD SetNativeClipboardData(PRInt32 aWhichClipboard);
+    NS_IMETHOD SetNativeClipboardData(nsITransferable *aTransferable,
+                                      QClipboard::Mode cbMode);
     NS_IMETHOD GetNativeClipboardData(nsITransferable *aTransferable,
-                                      PRInt32 aWhichClipboard);
-
-    nsITransferable *GetTransferable(PRInt32 aWhichClipboard);
-
-    PRBool mIgnoreEmptyNotification;
+                                      QClipboard::Mode cbMode);
 
     nsCOMPtr<nsIClipboardOwner> mSelectionOwner;
     nsCOMPtr<nsIClipboardOwner> mGlobalOwner;
     nsCOMPtr<nsITransferable>   mSelectionTransferable;
     nsCOMPtr<nsITransferable>   mGlobalTransferable;
+    nsRefPtr<nsClipboardPrivacyHandler> mPrivacyHandler;
 };
 
 #endif // nsClipboard_h__

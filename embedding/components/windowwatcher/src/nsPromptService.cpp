@@ -36,27 +36,33 @@
  * ***** END LICENSE BLOCK ***** */
 
 #include "nsPromptService.h"
+#include "nsPrompt.h"
 
 #include "nsDialogParamBlock.h"
 #include "nsIComponentManager.h"
 #include "nsIDialogParamBlock.h"
 #include "nsIDOMWindow.h"
+#include "nsPIDOMWindow.h"
+#include "nsIDOMEventTarget.h"
+#include "nsIDOMEvent.h"
+#include "nsIPrivateDOMEvent.h"
+#include "nsIDOMDocumentEvent.h"
 #include "nsIServiceManager.h"
 #include "nsISupportsUtils.h"
 #include "nsString.h"
 #include "nsIStringBundle.h"
 #include "nsXPIDLString.h"
+#include "nsISound.h"
 
 static const char kPromptURL[] = "chrome://global/content/commonDialog.xul";
 static const char kSelectPromptURL[] = "chrome://global/content/selectDialog.xul";
 static const char kQuestionIconClass[] = "question-icon";
 static const char kAlertIconClass[] = "alert-icon";
 static const char kWarningIconClass[] = "message-icon";
-
-static NS_DEFINE_CID(kStringBundleServiceCID, NS_STRINGBUNDLESERVICE_CID);
+// We include question-icon for backwards compatibility
+static const char kAuthenticationIconClass[] = "authentication-icon question-icon";
 
 #define kCommonDialogsProperties "chrome://global/locale/commonDialogs.properties"
-
 
 /****************************************************************
  ************************* ParamBlock ***************************
@@ -85,7 +91,7 @@ private:
  ************************ nsPromptService ***********************
  ****************************************************************/
 
-NS_IMPL_ISUPPORTS3(nsPromptService, nsIPromptService,
+NS_IMPL_ISUPPORTS4(nsPromptService, nsIPromptService, nsIPromptService2,
                    nsPIPromptService, nsINonBlockingAlertService)
 
 nsPromptService::nsPromptService() {
@@ -106,6 +112,12 @@ NS_IMETHODIMP
 nsPromptService::Alert(nsIDOMWindow *parent,
                    const PRUnichar *dialogTitle, const PRUnichar *text)
 {
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -126,8 +138,9 @@ nsPromptService::Alert(nsIDOMWindow *parent,
   block->SetString(eDialogTitle, dialogTitle);
 
   nsString url;
-  NS_ConvertASCIItoUCS2 styleClass(kAlertIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kAlertIconClass);
   block->SetString(eIconClass, styleClass.get());
+  block->SetString(eOpeningSound, NS_SYSSOUND_ALERT_DIALOG.get());
 
   rv = DoDialog(parent, block, kPromptURL);
 
@@ -142,6 +155,13 @@ nsPromptService::AlertCheck(nsIDOMWindow *parent,
                             const PRUnichar *checkMsg, PRBool *checkValue)
 
 {
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // checkValue is an inout parameter, so we don't have to set it
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -161,10 +181,11 @@ nsPromptService::AlertCheck(nsIDOMWindow *parent,
 
   block->SetString(eDialogTitle, dialogTitle);
 
-  NS_ConvertASCIItoUCS2 styleClass(kAlertIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kAlertIconClass);
   block->SetString(eIconClass, styleClass.get());
   block->SetString(eCheckboxMsg, checkMsg);
   block->SetInt(eCheckboxState, *checkValue);
+  block->SetString(eOpeningSound, NS_SYSSOUND_ALERT_DIALOG.get());
 
   rv = DoDialog(parent, block, kPromptURL);
   if (NS_FAILED(rv))
@@ -180,6 +201,14 @@ nsPromptService::Confirm(nsIDOMWindow *parent,
                    const PRUnichar *dialogTitle, const PRUnichar *text,
                    PRBool *_retval)
 {
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Default to cancel
+    *_retval = PR_FALSE;
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -200,9 +229,10 @@ nsPromptService::Confirm(nsIDOMWindow *parent,
   
   block->SetString(eDialogTitle, dialogTitle);
 
-  NS_ConvertASCIItoUCS2 styleClass(kQuestionIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kQuestionIconClass);
   block->SetString(eIconClass, styleClass.get());
-  
+  block->SetString(eOpeningSound, NS_SYSSOUND_CONFIRM_DIALOG.get());
+
   rv = DoDialog(parent, block, kPromptURL);
   if (NS_FAILED(rv))
     return rv;
@@ -220,6 +250,14 @@ nsPromptService::ConfirmCheck(nsIDOMWindow *parent,
                    const PRUnichar *checkMsg, PRBool *checkValue,
                    PRBool *_retval)
 {
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Default to cancel. checkValue is an inout parameter, so we don't have to set it
+    *_retval = PR_FALSE;
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -239,10 +277,11 @@ nsPromptService::ConfirmCheck(nsIDOMWindow *parent,
 
   block->SetString(eDialogTitle, dialogTitle);
 
-  NS_ConvertASCIItoUCS2 styleClass(kQuestionIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kQuestionIconClass);
   block->SetString(eIconClass, styleClass.get());
   block->SetString(eCheckboxMsg, checkMsg);
   block->SetInt(eCheckboxState, *checkValue);
+  block->SetString(eOpeningSound, NS_SYSSOUND_CONFIRM_DIALOG.get());
 
   rv = DoDialog(parent, block, kPromptURL);
   if (NS_FAILED(rv))
@@ -253,7 +292,7 @@ nsPromptService::ConfirmCheck(nsIDOMWindow *parent,
   *_retval = tempInt ? PR_FALSE : PR_TRUE;
 
   block->GetInt(eCheckboxState, & tempInt);
-  *checkValue = PRBool( tempInt );
+  *checkValue = !!tempInt;
   
   return rv;
 }
@@ -266,6 +305,16 @@ nsPromptService::ConfirmEx(nsIDOMWindow *parent,
                     const PRUnichar *checkMsg, PRBool *checkValue,
                     PRInt32 *buttonPressed)
 {
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Return 1 to match what happens when the dialog is closed by the window
+    // manager (This is indeed independent of what the default button is).
+    // checkValue is an inout parameter, so we don't have to set it.
+    *buttonPressed = 1;
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -332,8 +381,9 @@ nsPromptService::ConfirmEx(nsIDOMWindow *parent,
     buttonFlags >>= 8;
   }
   block->SetInt(eNumberButtons, numberButtons);
-  
-  block->SetString(eIconClass, NS_ConvertASCIItoUCS2(kQuestionIconClass).get());
+
+  block->SetString(eIconClass, NS_ConvertASCIItoUTF16(kQuestionIconClass).get());
+  block->SetString(eOpeningSound, NS_SYSSOUND_CONFIRM_DIALOG.get());
 
   if (checkMsg && checkValue) {
     block->SetString(eCheckboxMsg, checkMsg);
@@ -369,6 +419,15 @@ nsPromptService::Prompt(nsIDOMWindow *parent,
                         PRUnichar **value,
                         const PRUnichar *checkMsg, PRBool *checkValue, PRBool *_retval)
 {
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Default to cancel. value and checkValue are inout parameters, so we
+    // don't have to set them.
+    *_retval = PR_FALSE;
+    return NS_OK;
+  }
+
   NS_ENSURE_ARG(value);
   NS_ENSURE_ARG(_retval);
 
@@ -391,7 +450,7 @@ nsPromptService::Prompt(nsIDOMWindow *parent,
 
   block->SetString(eDialogTitle, dialogTitle);
 
-  NS_ConvertASCIItoUCS2 styleClass(kQuestionIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kQuestionIconClass);
   block->SetString(eIconClass, styleClass.get());
   block->SetInt(eNumberEditfields, 1);
   if (*value)
@@ -400,6 +459,7 @@ nsPromptService::Prompt(nsIDOMWindow *parent,
     block->SetString(eCheckboxMsg, checkMsg);
     block->SetInt(eCheckboxState, *checkValue);
   }
+  block->SetString(eOpeningSound, NS_SYSSOUND_PROMPT_DIALOG.get());
 
   rv = DoDialog(parent, block, kPromptURL);
   if (NS_FAILED(rv))
@@ -435,7 +495,16 @@ nsPromptService::PromptUsernameAndPassword(nsIDOMWindow *parent,
   NS_ENSURE_ARG(username);
   NS_ENSURE_ARG(password);
   NS_ENSURE_ARG(_retval);
-  
+
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Default to cancel
+    // username/password are inout, no need to set them
+    *_retval = PR_FALSE;
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -455,7 +524,7 @@ nsPromptService::PromptUsernameAndPassword(nsIDOMWindow *parent,
 
   block->SetString(eDialogTitle, dialogTitle);
 
-  NS_ConvertASCIItoUCS2 styleClass(kQuestionIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kAuthenticationIconClass);
   block->SetString(eIconClass, styleClass.get());
   block->SetInt( eNumberEditfields, 2 );
   if (*username)
@@ -466,7 +535,8 @@ nsPromptService::PromptUsernameAndPassword(nsIDOMWindow *parent,
     block->SetString(eCheckboxMsg, checkMsg);
     block->SetInt(eCheckboxState, *checkValue);
   }
-  
+  block->SetString(eOpeningSound, NS_SYSSOUND_PROMPT_DIALOG.get());
+
   rv = DoDialog(parent, block, kPromptURL);
   if (NS_FAILED(rv))
     return rv;
@@ -505,7 +575,16 @@ NS_IMETHODIMP nsPromptService::PromptPassword(nsIDOMWindow *parent,
 {
   NS_ENSURE_ARG(password);
   NS_ENSURE_ARG(_retval);
-	
+
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Default to cancel. password and checkValue are inout parameters, so we
+    // don't have to touch them.
+    *_retval = PR_FALSE;
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -526,7 +605,7 @@ NS_IMETHODIMP nsPromptService::PromptPassword(nsIDOMWindow *parent,
   block->SetString(eDialogTitle, dialogTitle);
 
   nsString url;
-  NS_ConvertASCIItoUCS2 styleClass(kQuestionIconClass);
+  NS_ConvertASCIItoUTF16 styleClass(kAuthenticationIconClass);
   block->SetString(eIconClass, styleClass.get());
   block->SetInt(eNumberEditfields, 1);
   block->SetInt(eEditField1Password, 1);
@@ -536,6 +615,7 @@ NS_IMETHODIMP nsPromptService::PromptPassword(nsIDOMWindow *parent,
     block->SetString(eCheckboxMsg, checkMsg);
     block->SetInt(eCheckboxState, *checkValue);
   }
+  block->SetString(eOpeningSound, NS_SYSSOUND_PROMPT_DIALOG.get());
 
   rv = DoDialog(parent, block, kPromptURL);
   if (NS_FAILED(rv))
@@ -560,12 +640,58 @@ NS_IMETHODIMP nsPromptService::PromptPassword(nsIDOMWindow *parent,
   return rv;
 }
 
+
+NS_IMETHODIMP
+nsPromptService::PromptAuth(nsIDOMWindow* aParent,
+                            nsIChannel* aChannel,
+                            PRUint32 aLevel,
+                            nsIAuthInformation* aAuthInfo,
+                            const PRUnichar* aCheckLabel,
+                            PRBool* aCheckValue,
+                            PRBool *retval)
+{
+  nsAutoWindowStateHelper windowStateHelper(aParent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    *retval = PR_FALSE;
+    return NS_OK;
+  }
+ 
+  return nsPrompt::PromptPasswordAdapter(this, aParent, aChannel,
+                                         aLevel, aAuthInfo,
+                                         aCheckLabel, aCheckValue,
+                                         retval);
+}
+
+NS_IMETHODIMP
+nsPromptService::AsyncPromptAuth(nsIDOMWindow* aParent,
+                                 nsIChannel* aChannel,
+                                 nsIAuthPromptCallback* aCallback,
+                                 nsISupports* aContext,
+                                 PRUint32 aLevel,
+                                 nsIAuthInformation* aAuthInfo,
+                                 const PRUnichar* aCheckLabel,
+                                 PRBool* aCheckValue,
+                                 nsICancelable** retval)
+{
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
 NS_IMETHODIMP
 nsPromptService::Select(nsIDOMWindow *parent, const PRUnichar *dialogTitle,
                    const PRUnichar* text, PRUint32 count,
                    const PRUnichar **selectList, PRInt32 *outSelection,
                    PRBool *_retval)
 {	
+  nsAutoWindowStateHelper windowStateHelper(parent);
+
+  if (!windowStateHelper.DefaultEnabled()) {
+    // Default to cancel and item 0
+    *outSelection = 0;
+    *_retval = PR_FALSE;
+    return NS_OK;
+  }
+
   nsresult rv;
   nsXPIDLString stringOwner;
  
@@ -620,10 +746,11 @@ nsPromptService::ShowNonBlockingAlert(nsIDOMWindow *aParent,
   if (!paramBlock)
     return NS_ERROR_FAILURE;
 
-  paramBlock->SetInt(nsPIPromptService::eNumberButtons, 1);
-  paramBlock->SetString(nsPIPromptService::eIconClass, NS_LITERAL_STRING("alert-icon").get());
-  paramBlock->SetString(nsPIPromptService::eDialogTitle, aDialogTitle);
-  paramBlock->SetString(nsPIPromptService::eMsg, aText);
+  paramBlock->SetInt(eNumberButtons, 1);
+  paramBlock->SetString(eIconClass, NS_LITERAL_STRING("alert-icon").get());
+  paramBlock->SetString(eDialogTitle, aDialogTitle);
+  paramBlock->SetString(eMsg, aText);
+  paramBlock->SetString(eOpeningSound, NS_SYSSOUND_ALERT_DIALOG.get());
 
   nsCOMPtr<nsIDOMWindow> dialog;
   mWatcher->OpenWindow(aParent, "chrome://global/content/commonDialog.xul",
@@ -666,13 +793,13 @@ nsPromptService::GetLocaleString(const char *aKey, PRUnichar **aResult)
 {
   nsresult rv;
 
-  nsCOMPtr<nsIStringBundleService> stringService = do_GetService(kStringBundleServiceCID);
+  nsCOMPtr<nsIStringBundleService> stringService = do_GetService(NS_STRINGBUNDLE_CONTRACTID);
   nsCOMPtr<nsIStringBundle> stringBundle;
  
   rv = stringService->CreateBundle(kCommonDialogsProperties, getter_AddRefs(stringBundle));
   if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
 
-  rv = stringBundle->GetStringFromName(NS_ConvertASCIItoUCS2(aKey).get(), aResult);
+  rv = stringBundle->GetStringFromName(NS_ConvertASCIItoUTF16(aKey).get(), aResult);
 
   return rv;
 }

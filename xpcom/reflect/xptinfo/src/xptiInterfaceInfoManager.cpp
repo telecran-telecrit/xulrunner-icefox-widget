@@ -69,8 +69,14 @@ xptiInterfaceInfoManager::GetInterfaceInfoManagerNoAddRef()
         }
 
         gInterfaceInfoManager = new xptiInterfaceInfoManager(searchPath);
-        if(gInterfaceInfoManager)
-            NS_ADDREF(gInterfaceInfoManager);
+        if(!gInterfaceInfoManager)
+        {
+            NS_ERROR("can't instantiate xptiInterfaceInfoManager");
+            return nsnull;
+        }
+
+        NS_ADDREF(gInterfaceInfoManager);
+
         if(!gInterfaceInfoManager->IsValid())
         {
             NS_RELEASE(gInterfaceInfoManager);
@@ -126,7 +132,7 @@ xptiInterfaceInfoManager::xptiInterfaceInfoManager(nsISupportsArray* aSearchPath
         mSearchPath(aSearchPath)
 {
     const char* statsFilename = PR_GetEnv("MOZILLA_XPTI_STATS");
-    if(statsFilename)
+    if(statsFilename && *statsFilename)
     {
         mStatsLogFile = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);         
         if(mStatsLogFile && 
@@ -142,7 +148,7 @@ xptiInterfaceInfoManager::xptiInterfaceInfoManager(nsISupportsArray* aSearchPath
     }
 
     const char* autoRegFilename = PR_GetEnv("MOZILLA_XPTI_REGLOG");
-    if(autoRegFilename)
+    if(autoRegFilename && *autoRegFilename)
     {
         mAutoRegLogFile = do_CreateInstance(NS_LOCAL_FILE_CONTRACTID);         
         if(mAutoRegLogFile && 
@@ -251,7 +257,7 @@ PRBool xptiInterfaceInfoManager::BuildFileSearchPath(nsISupportsArray** aPath)
     // Add the GRE's component directory to searchPath if the 
     // application is using an GRE.
     // An application indicates that it's using an GRE by returning
-    // a valid nsIFile via it's directory service provider interface.
+    // a valid nsIFile via its directory service provider interface.
     //
     // Please see http://www.mozilla.org/projects/embedding/MRE.html
     // for more info. on GREs
@@ -315,27 +321,32 @@ xptiInterfaceInfoManager::BuildFileList(nsISupportsArray* aSearchPath,
     if(NS_FAILED(aSearchPath->Count(&pathCount)))
         return PR_FALSE;
 
-    for(PRUint32 i = 0; i < pathCount; i++)
+    nsCOMPtr<nsILocalFile> dir;
+    nsCOMPtr<nsISimpleEnumerator> entries;
+    nsCOMPtr<nsISupports> sup;
+    nsCOMPtr<nsILocalFile> file;
+
+    // Iterate the paths backwards to avoid the
+    // insertions that would occurr if we preserved
+    // the order of the list.
+    for(PRUint32 i = pathCount; i; i--)
     {
-        nsCOMPtr<nsILocalFile> dir;
-        rv = xptiCloneElementAsLocalFile(aSearchPath, i, getter_AddRefs(dir));
+        rv = xptiCloneElementAsLocalFile(aSearchPath, (i - 1), getter_AddRefs(dir));
         if(NS_FAILED(rv) || !dir)
             return PR_FALSE;
 
-        nsCOMPtr<nsISimpleEnumerator> entries;
         rv = dir->GetDirectoryEntries(getter_AddRefs(entries));
         if(NS_FAILED(rv) || !entries)
             continue;
 
-        PRUint32 count = 0;
         PRBool hasMore;
         while(NS_SUCCEEDED(entries->HasMoreElements(&hasMore)) && hasMore)
         {
-            nsCOMPtr<nsISupports> sup;
             entries->GetNext(getter_AddRefs(sup));
             if(!sup)
                 return PR_FALSE;
-            nsCOMPtr<nsILocalFile> file = do_QueryInterface(sup);
+
+            file = do_QueryInterface(sup);
             if(!file)
                 return PR_FALSE;
 
@@ -354,13 +365,12 @@ xptiInterfaceInfoManager::BuildFileList(nsISupportsArray* aSearchPath,
 
             LOG_AUTOREG(("found file: %s\n", name.get()));
 
-            if(!fileList->InsertElementAt(file, count))
+            if(!fileList->AppendElement(file))
                 return PR_FALSE;
-            ++count;
         }
     }
 
-    NS_ADDREF(*aFileList = fileList); 
+    fileList.swap(*aFileList);
     return PR_TRUE;
 }
 
@@ -639,7 +649,7 @@ struct SortData
     xptiWorkingSet*   mWorkingSet;
 };
 
-PR_STATIC_CALLBACK(int)
+static int
 xptiSortFileList(const void * p1, const void *p2, void * closure)
 {
     nsILocalFile* pFile1 = *((nsILocalFile**) p1);
@@ -1348,7 +1358,7 @@ struct TwoWorkingSets
     xptiWorkingSet* aDestWorkingSet;
 };        
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_Merger(PLDHashTable *table, PLDHashEntryHdr *hdr,
             PRUint32 number, void *arg)
 {
@@ -1622,7 +1632,7 @@ xptiInterfaceInfoManager::WriteToLog(const char *fmt, ...)
     }
 }        
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_ResolvedFileNameLogger(PLDHashTable *table, PLDHashEntryHdr *hdr,
                             PRUint32 number, void *arg)
 {
@@ -1720,8 +1730,16 @@ EntryToInfo(xptiInterfaceEntry* entry, nsIInterfaceInfo **_retval)
         return rv;
 
     // Transfer the AddRef done by GetInterfaceInfo.
-    *_retval = NS_STATIC_CAST(nsIInterfaceInfo*, info);
+    *_retval = static_cast<nsIInterfaceInfo*>(info);
     return NS_OK;    
+}
+
+xptiInterfaceEntry*
+xptiInterfaceInfoManager::GetInterfaceEntryForIID(const nsIID *iid)
+{
+    xptiHashEntry *hashEntry = (xptiHashEntry*)
+        PL_DHashTableOperate(mWorkingSet.mIIDTable, iid, PL_DHASH_LOOKUP);
+    return PL_DHASH_ENTRY_IS_FREE(hashEntry) ? nsnull : hashEntry->value;
 }
 
 /* nsIInterfaceInfo getInfoForIID (in nsIIDPtr iid); */
@@ -1730,12 +1748,7 @@ NS_IMETHODIMP xptiInterfaceInfoManager::GetInfoForIID(const nsIID * iid, nsIInte
     NS_ASSERTION(iid, "bad param");
     NS_ASSERTION(_retval, "bad param");
 
-    xptiHashEntry* hashEntry = (xptiHashEntry*)
-        PL_DHashTableOperate(mWorkingSet.mIIDTable, iid, PL_DHASH_LOOKUP);
-
-    xptiInterfaceEntry* entry = 
-        PL_DHASH_ENTRY_IS_FREE(hashEntry) ? nsnull : hashEntry->value;
-
+    xptiInterfaceEntry* entry = GetInterfaceEntryForIID(iid);
     return EntryToInfo(entry, _retval);
 }
 
@@ -1796,7 +1809,7 @@ NS_IMETHODIMP xptiInterfaceInfoManager::GetNameForIID(const nsIID * iid, char **
     return entry->GetName(_retval);
 }
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_ArrayAppender(PLDHashTable *table, PLDHashEntryHdr *hdr,
                    PRUint32 number, void *arg)
 {
@@ -1834,7 +1847,7 @@ struct ArrayAndPrefix
     PRUint32          length;
 };
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_ArrayPrefixAppender(PLDHashTable *table, PLDHashEntryHdr *hdr,
                          PRUint32 number, void *arg)
 {
@@ -1980,7 +1993,7 @@ xptiAdditionalManagersEnumerator::xptiAdditionalManagersEnumerator()
 
 PRBool xptiAdditionalManagersEnumerator::AppendElement(nsIInterfaceInfoManager* element)
 {
-    if(!mArray.AppendElement(NS_STATIC_CAST(nsISupports*, element)))
+    if(!mArray.AppendElement(static_cast<nsISupports*>(element)))
         return PR_FALSE;
     mCount++;
     return PR_TRUE;
@@ -2013,8 +2026,8 @@ NS_IMETHODIMP xptiInterfaceInfoManager::AddAdditionalManager(nsIInterfaceInfoMan
 {
     nsCOMPtr<nsIWeakReference> weakRef = do_GetWeakReference(manager);
     nsISupports* ptrToAdd = weakRef ? 
-                    NS_STATIC_CAST(nsISupports*, weakRef) :
-                    NS_STATIC_CAST(nsISupports*, manager);
+                    static_cast<nsISupports*>(weakRef) :
+                    static_cast<nsISupports*>(manager);
     { // scoped lock...
         nsAutoLock lock(mAdditionalManagersLock);
         PRInt32 index;
@@ -2032,8 +2045,8 @@ NS_IMETHODIMP xptiInterfaceInfoManager::RemoveAdditionalManager(nsIInterfaceInfo
 {
     nsCOMPtr<nsIWeakReference> weakRef = do_GetWeakReference(manager);
     nsISupports* ptrToRemove = weakRef ? 
-                    NS_STATIC_CAST(nsISupports*, weakRef) :
-                    NS_STATIC_CAST(nsISupports*, manager);
+                    static_cast<nsISupports*>(weakRef) :
+                    static_cast<nsISupports*>(manager);
     { // scoped lock...
         nsAutoLock lock(mAdditionalManagersLock);
         if(!mAdditionalManagers.RemoveElement(ptrToRemove))
@@ -2098,7 +2111,7 @@ NS_IMETHODIMP xptiInterfaceInfoManager::EnumerateAdditionalManagers(nsISimpleEnu
             // an nsIInterfaceInfoManager into the array, so we can avoid an
             // extra QI here and just do a cast.
             if(!enumerator->AppendElement(
-                    NS_REINTERPRET_CAST(nsIInterfaceInfoManager*, raw.get())))
+                    reinterpret_cast<nsIInterfaceInfoManager*>(raw.get())))
                 return NS_ERROR_FAILURE;
         }
     }
@@ -2106,21 +2119,3 @@ NS_IMETHODIMP xptiInterfaceInfoManager::EnumerateAdditionalManagers(nsISimpleEnu
     NS_ADDREF(*_retval = enumerator);
     return NS_OK;
 }
-
-/***************************************************************************/
-
-XPTI_PUBLIC_API(nsIInterfaceInfoManager*)
-XPTI_GetInterfaceInfoManager()
-{
-    nsIInterfaceInfoManager* iim =
-        xptiInterfaceInfoManager::GetInterfaceInfoManagerNoAddRef();
-    NS_IF_ADDREF(iim);
-    return iim;
-}
-
-XPTI_PUBLIC_API(void)
-XPTI_FreeInterfaceInfoManager()
-{
-    xptiInterfaceInfoManager::FreeInterfaceInfoManager();
-}
-

@@ -35,112 +35,111 @@
  *
  * ***** END LICENSE BLOCK ***** */
 #include "nsPageContentFrame.h"
+#include "nsPageFrame.h"
+#include "nsPlaceholderFrame.h"
+#include "nsCSSFrameConstructor.h"
+#include "nsHTMLContainerFrame.h"
 #include "nsHTMLParts.h"
 #include "nsIContent.h"
 #include "nsPresContext.h"
 #include "nsIRenderingContext.h"
-#include "nsHTMLAtoms.h"
-#include "nsLayoutAtoms.h"
+#include "nsGkAtoms.h"
 #include "nsIPresShell.h"
 #include "nsIDeviceContext.h"
 #include "nsReadableUtils.h"
 #include "nsSimplePageSequence.h"
+#include "nsDisplayList.h"
 
-#include "nsIView.h"
-
-#if defined(DEBUG_rods) || defined(DEBUG_dcone)
-//#define DEBUG_PRINTING
-#endif
-
-
-nsresult
-NS_NewPageContentFrame(nsIPresShell* aPresShell, nsIFrame** aNewFrame)
+nsIFrame*
+NS_NewPageContentFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 {
-  NS_PRECONDITION(aNewFrame, "null OUT ptr");
-
-  nsPageContentFrame* it = new (aPresShell) nsPageContentFrame;
-  if (nsnull == it) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-  *aNewFrame = it;
-  return NS_OK;
+  return new (aPresShell) nsPageContentFrame(aContext);
 }
 
-nsPageContentFrame::nsPageContentFrame() :
-  mClipRect(-1, -1, -1, -1)
+/* virtual */ nsSize
+nsPageContentFrame::ComputeSize(nsIRenderingContext *aRenderingContext,
+                                nsSize aCBSize, nscoord aAvailableWidth,
+                                nsSize aMargin, nsSize aBorder, nsSize aPadding,
+                                PRBool aShrinkWrap)
 {
+  NS_ASSERTION(mPD, "Pages are supposed to have page data");
+  nscoord height = (!mPD || mPD->mReflowSize.height == NS_UNCONSTRAINEDSIZE)
+                   ? NS_UNCONSTRAINEDSIZE
+                   : (mPD->mReflowSize.height - mPD->mReflowMargin.TopBottom());
+  return nsSize(aAvailableWidth, height);
 }
 
-NS_IMETHODIMP nsPageContentFrame::Reflow(nsPresContext*   aPresContext,
-                                  nsHTMLReflowMetrics&     aDesiredSize,
-                                  const nsHTMLReflowState& aReflowState,
-                                  nsReflowStatus&          aStatus)
+NS_IMETHODIMP
+nsPageContentFrame::Reflow(nsPresContext*           aPresContext,
+                           nsHTMLReflowMetrics&     aDesiredSize,
+                           const nsHTMLReflowState& aReflowState,
+                           nsReflowStatus&          aStatus)
 {
-  DO_GLOBAL_REFLOW_COUNT("nsPageContentFrame", aReflowState.reason);
+  DO_GLOBAL_REFLOW_COUNT("nsPageContentFrame");
   DISPLAY_REFLOW(aPresContext, this, aReflowState, aDesiredSize, aStatus);
   aStatus = NS_FRAME_COMPLETE;  // initialize out parameter
+  nsresult rv = NS_OK;
 
-  if (eReflowReason_Incremental != aReflowState.reason) {
-    // Resize our frame allowing it only to be as big as we are
-    // XXX Pay attention to the page's border and padding...
-    if (mFrames.NotEmpty()) {
-      nsIFrame* frame = mFrames.FirstChild();
-      nsSize  maxSize(aReflowState.availableWidth, aReflowState.availableHeight);
-      nsHTMLReflowState kidReflowState(aPresContext, aReflowState, frame, maxSize);
+  if (GetPrevInFlow() && (GetStateBits() & NS_FRAME_FIRST_REFLOW)) {
+    nsresult rv = aPresContext->PresShell()->FrameConstructor()
+                    ->ReplicateFixedFrames(this);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
 
-      mPD->mPageContentSize  = aReflowState.availableWidth;
+  // A PageContentFrame must always have one child: the canvas frame.
+  // Resize our frame allowing it only to be as big as we are
+  // XXX Pay attention to the page's border and padding...
+  if (mFrames.NotEmpty()) {
+    nsIFrame* frame = mFrames.FirstChild();
+    nsSize  maxSize(aReflowState.availableWidth, aReflowState.availableHeight);
+    nsHTMLReflowState kidReflowState(aPresContext, aReflowState, frame, maxSize);
+    kidReflowState.SetComputedHeight(aReflowState.availableHeight);
 
-      // Reflow the page content area to get the child's desired size
-      ReflowChild(frame, aPresContext, aDesiredSize, kidReflowState, 0, 0, 0, aStatus);
+    mPD->mPageContentSize  = aReflowState.availableWidth;
 
-      // The document element's background should cover the entire canvas, so
-      // take into account the combined area and any space taken up by
-      // absolutely positioned elements
-      nsMargin padding(0,0,0,0);
+    // Reflow the page content area
+    rv = ReflowChild(frame, aPresContext, aDesiredSize, kidReflowState, 0, 0, 0, aStatus);
+    NS_ENSURE_SUCCESS(rv, rv);
 
-      // XXXbz this screws up percentage padding (sets padding to zero
-      // in the percentage padding case)
-      kidReflowState.mStylePadding->GetPadding(padding);
+    // The document element's background should cover the entire canvas, so
+    // take into account the combined area and any space taken up by
+    // absolutely positioned elements
+    nsMargin padding(0,0,0,0);
 
-      // First check the combined area
-      if (NS_FRAME_OUTSIDE_CHILDREN & frame->GetStateBits()) {
-        // The background covers the content area and padding area, so check
-        // for children sticking outside the child frame's padding edge
-        if (aDesiredSize.mOverflowArea.XMost() > aDesiredSize.width) {
-          mPD->mPageContentXMost =
-            aDesiredSize.mOverflowArea.XMost() +
-            kidReflowState.mStyleBorder->GetBorderWidth(NS_SIDE_RIGHT) +
-            padding.right;
-        }
+    // XXXbz this screws up percentage padding (sets padding to zero
+    // in the percentage padding case)
+    kidReflowState.mStylePadding->GetPadding(padding);
+
+    // First check the combined area
+    if (NS_FRAME_OUTSIDE_CHILDREN & frame->GetStateBits()) {
+      // The background covers the content area and padding area, so check
+      // for children sticking outside the child frame's padding edge
+      if (aDesiredSize.mOverflowArea.XMost() > aDesiredSize.width) {
+        mPD->mPageContentXMost =
+          aDesiredSize.mOverflowArea.XMost() +
+          kidReflowState.mStyleBorder->GetActualBorderWidth(NS_SIDE_RIGHT) +
+          padding.right;
       }
-
-      // Place and size the child
-      FinishReflowChild(frame, aPresContext, &kidReflowState, aDesiredSize, 0, 0, 0);
-
-      NS_ASSERTION(!NS_FRAME_IS_COMPLETE(aStatus) ||
-                   !frame->GetNextInFlow(), "bad child flow list");
-
-#ifdef DEBUG_PRINTING
-      nsRect r = frame->GetRect();
-      printf("PCF: Area Frame %p Bounds: %5d,%5d,%5d,%5d\n", frame, r.x, r.y, r.width, r.height);
-      nsIView* view = frame->GetView();
-      if (view) {
-        r = view->GetBounds();
-        printf("PCF: Area Frame View Bounds: %5d,%5d,%5d,%5d\n", r.x, r.y, r.width, r.height);
-      } else {
-        printf("PCF: Area Frame View Bounds: NO VIEW\n");
-      }
-#endif
     }
-    // Reflow our fixed frames 
-    mFixedContainer.Reflow(this, aPresContext, aReflowState, aReflowState.availableWidth, 
-                           aReflowState.availableHeight);
 
-    // Return our desired size
-    aDesiredSize.width = aReflowState.availableWidth;
-    if (aReflowState.availableHeight != NS_UNCONSTRAINEDSIZE) {
-      aDesiredSize.height = aReflowState.availableHeight;
-    }
+    // Place and size the child
+    FinishReflowChild(frame, aPresContext, &kidReflowState, aDesiredSize, 0, 0, 0);
+
+    NS_ASSERTION(aPresContext->IsDynamic() || !NS_FRAME_IS_FULLY_COMPLETE(aStatus) ||
+                  !frame->GetNextInFlow(), "bad child flow list");
+  }
+  // Reflow our fixed frames 
+  nsReflowStatus fixedStatus = NS_FRAME_COMPLETE;
+  mFixedContainer.Reflow(this, aPresContext, aReflowState, fixedStatus,
+                         aReflowState.availableWidth,
+                         aReflowState.availableHeight,
+                         PR_FALSE, PR_TRUE, PR_TRUE); // XXX could be optimized
+  NS_ASSERTION(NS_FRAME_IS_COMPLETE(fixedStatus), "fixed frames can be truncated, but not incomplete");
+
+  // Return our desired size
+  aDesiredSize.width = aReflowState.availableWidth;
+  if (aReflowState.availableHeight != NS_UNCONSTRAINEDSIZE) {
+    aDesiredSize.height = aReflowState.availableHeight;
   }
 
   NS_FRAME_SET_TRUNCATION(aStatus, aReflowState, aDesiredSize);
@@ -150,7 +149,7 @@ NS_IMETHODIMP nsPageContentFrame::Reflow(nsPresContext*   aPresContext,
 nsIAtom*
 nsPageContentFrame::GetType() const
 {
-  return nsLayoutAtoms::pageContentFrame; 
+  return nsGkAtoms::pageContentFrame; 
 }
 
 #ifdef DEBUG
@@ -166,45 +165,3 @@ nsPageContentFrame::IsContainingBlock() const
 {
   return PR_TRUE;
 }
-
-
-//------------------------------------------------------------------------------
-NS_IMETHODIMP
-nsPageContentFrame::Paint(nsPresContext*      aPresContext,
-                   nsIRenderingContext& aRenderingContext,
-                   const nsRect&        aDirtyRect,
-                   nsFramePaintLayer    aWhichLayer,
-                   PRUint32             aFlags)
-{
-  aRenderingContext.PushState();
-
-  nsRect rect;
-  if (mClipRect.width != -1 || mClipRect.height != -1) {
-    rect = mClipRect;
-  } else {
-    rect = mRect;
-    rect.x = 0;
-    rect.y = 0;
-  }
-
-  aRenderingContext.SetClipRect(rect, nsClipCombine_kReplace);
-
-  nsresult rv = nsContainerFrame::Paint(aPresContext, aRenderingContext, aDirtyRect, aWhichLayer);
-
-#if defined(DEBUG_rods) || defined(DEBUG_dcone)
-  if (NS_FRAME_PAINT_LAYER_BACKGROUND == aWhichLayer) {
-    nsRect r = mRect;
-    r.x = 0;
-    r.y = 0;
-    aRenderingContext.SetColor(NS_RGB(0, 0, 0));
-    aRenderingContext.DrawRect(r);
-  }
-#endif
-
-  aRenderingContext.PopState();
-
-  return rv;
-}
-
-
-

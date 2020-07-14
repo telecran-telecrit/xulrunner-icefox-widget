@@ -54,6 +54,7 @@
 #include "nsIDNSListener.h"
 #include "nsIDNSRecord.h"
 #include "nsICancelable.h"
+#include "nsIClassInfo.h"
 
 class nsSocketTransport;
 
@@ -131,12 +132,14 @@ private:
 class nsSocketTransport : public nsASocketHandler
                         , public nsISocketTransport
                         , public nsIDNSListener
+                        , public nsIClassInfo
 {
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSITRANSPORT
     NS_DECL_NSISOCKETTRANSPORT
     NS_DECL_NSIDNSLISTENER
+    NS_DECL_NSICLASSINFO
 
     nsSocketTransport();
 
@@ -199,7 +202,8 @@ private:
     PRUint16     mProxyPort;
     PRPackedBool mProxyTransparent;
     PRPackedBool mProxyTransparentResolvesHost;
-
+    PRUint32     mConnectionFlags;
+    
     PRUint16         SocketPort() { return (!mProxyHost.IsEmpty() && !mProxyTransparent) ? mProxyPort : mPort; }
     const nsCString &SocketHost() { return (!mProxyHost.IsEmpty() && !mProxyTransparent) ? mProxyHost : mHost; }
 

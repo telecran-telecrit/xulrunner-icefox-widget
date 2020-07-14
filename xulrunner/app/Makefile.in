@@ -47,8 +47,6 @@ VPATH		= @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
-MOZILLA_INTERNAL_API = 1
-
 DIRS		= profile
 
 PREF_JS_EXPORTS = $(srcdir)/xulrunner.js
@@ -59,12 +57,21 @@ DEFINES += -DAB_CD=$(AB_CD)
 ifeq ($(USE_SHORT_LIBNAME), 1)
 PROGRAM = xulrunner$(BIN_SUFFIX)
 else
+ifeq ($(OS_ARCH), BeOS)
+PROGRAM = xulrunner$(BIN_SUFFIX)
+else
 PROGRAM = xulrunner-bin$(BIN_SUFFIX)
 endif
+endif
+
 DEFINES += -DXULRUNNER_PROGNAME=\"xulrunner\"
 
 ifdef MOZ_JAVAXPCOM
 DEFINES += -DMOZ_JAVAXPCOM
+endif
+
+ifdef TARGET_XPCOM_ABI
+DEFINES += -DTARGET_XPCOM_ABI=\"$(TARGET_XPCOM_ABI)\"
 endif
 
 REQUIRES = \
@@ -77,7 +84,7 @@ REQUIRES = \
 
 CPPSRCS = nsXULRunnerApp.cpp
 
-ifeq ($(OS_ARCH),WINNT)
+ifneq (,$(filter WINNT WINCE,$(OS_ARCH)))
 CPPSRCS += nsRegisterGREWin.cpp
 else
 ifneq (,$(filter OS2 Darwin,$(OS_ARCH)))
@@ -92,26 +99,26 @@ LOCAL_INCLUDES += \
         -I$(topsrcdir)/toolkit/profile/src \
         $(NULL)
 
-ifdef BUILD_STATIC_LIBS
-STATIC_COMPONENTS_LINKER_PATH = -L$(DIST)/lib/components
-endif
-
 ifneq (,$(filter mac cocoa,$(MOZ_WIDGET_TOOLKIT)))
 TK_LIBS := -framework Cocoa $(TK_LIBS)
 endif
 
-LIBS = \
-	$(STATIC_COMPONENTS_LINKER_PATH) \
+ifndef MOZ_ENABLE_LIBXUL
+ifneq (,$(filter mac cocoa,$(MOZ_WIDGET_TOOLKIT)))
+LIBS += $(DIST)/bin/XUL
+else
+EXTRA_DSO_LIBS += xul
+endif
+endif
+
+LIBS += \
 	$(EXTRA_DSO_LIBS) \
 	$(MOZ_JS_LIBS) \
+	$(DIST)/lib/$(LIB_PREFIX)xpcomglue_s.$(LIB_SUFFIX) \
 	$(XPCOM_LIBS) \
 	$(NSPR_LIBS) \
 	$(TK_LIBS) \
 	$(NULL)
-
-ifndef MOZ_ENABLE_LIBXUL
-LIBS += $(DIST)/lib/$(LIB_PREFIX)xulapp_s.$(LIB_SUFFIX)
-endif
 
 # Add explicit X11 dependency when building against X11 toolkits
 ifneq (,$(filter gtk gtk2 xlib,$(MOZ_WIDGET_TOOLKIT)))
@@ -131,38 +138,29 @@ endif
 endif
 DEFINES += -DMOZ_WINCONSOLE=$(MOZ_WINCONSOLE)
 
+# This switches $(INSTALL) to copy mode, like $(SYSINSTALL), so things that
+# shouldn't get 755 perms need $(IFLAGS1) for either way of calling nsinstall.
 NSDISTMODE = copy
 
 include $(topsrcdir)/config/config.mk
-ifndef BUILD_STATIC_LIBS
 
-ifdef NS_TRACE_MALLOC
-EXTRA_DSO_LIBS += tracemalloc
-endif
-
+ifdef _MSC_VER
+# Always enter a Windows program through wmain, whether or not we're
+# a console application.
+ifdef WINCE
+WIN32_EXE_LDFLAGS += -ENTRY:mainWCRTStartup
 else
-include $(topsrcdir)/config/static-config.mk
-
-EXTRA_DEPS	+= \
-	$(STATIC_EXTRA_DEPS) \
-	$(NULL)
-DEFINES		+= $(STATIC_DEFINES)
-CPPSRCS		+= $(STATIC_CPPSRCS)
-EXTRA_DSO_LIBS	+= $(STATIC_EXTRA_DSO_LIBS)
-REQUIRES	+= $(STATIC_REQUIRES)
-EXTRA_LIBS	+= $(STATIC_EXTRA_LIBS)
+WIN32_EXE_LDFLAGS += -ENTRY:wmainCRTStartup
+endif
 endif
 
 ifeq ($(OS_ARCH),WINNT)
-OS_LIBS += $(call EXPAND_LIBNAME,comctl32 comdlg32 uuid shell32 ole32 oleaut32 version winspool gdi32)
+OS_LIBS += $(call EXPAND_LIBNAME,comctl32 comdlg32 uuid shell32 ole32 oleaut32 version winspool)
 RCINCLUDE = splash.rc
 ifndef GNU_CC
 RCFLAGS += -DMOZ_XULRUNNER -I$(srcdir)
 else
 RCFLAGS += -DMOZ_XULRUNNER --include-dir $(srcdir)
-endif
-ifdef BUILD_STATIC_LIBS
-RCFLAGS += -DMOZ_STATIC_BUILD
 endif
 ifdef DEBUG
 RCFLAGS += -DDEBUG
@@ -176,32 +174,17 @@ endif
 ifeq ($(OS_ARCH),OS2)
 RESFILE=splashos2.res
 RCFLAGS += -DMOZ_XULRUNNER
-ifdef BUILD_STATIC_LIBS
-EXE_DEF_FILE = xulrunner.def
-RCFLAGS += -DMOZ_STATIC_BUILD -i $(DIST)/include/widget
-endif
 ifdef DEBUG
 RCFLAGS += -DDEBUG
 endif
 RCFLAGS += -DXULRUNNER_ICO=\"$(DIST)/branding/xulrunner.ico\" -DDOCUMENT_ICO=\"$(DIST)/branding/document.ico\"
 endif
 
+LIBS += $(JEMALLOC_LIBS)
+
 include $(topsrcdir)/config/rules.mk
 
 DEFINES += -DXULRUNNER_ICO=\"$(DIST)/branding/xulrunner.ico\" -DDOCUMENT_ICO=\"$(DIST)/branding/document.ico\"
-
-ifdef BUILD_STATIC_LIBS
-include $(topsrcdir)/config/static-rules.mk
-endif
-
-ifneq (,$(filter mac cocoa,$(MOZ_WIDGET_TOOLKIT)))
-ifdef BUILD_STATIC_LIBS
-LIBS	+= -framework QuickTime -framework IOKit
-ifdef USE_PREBINDING
-BIN_FLAGS += -Wl,-headerpad -Wl,5a0c
-endif
-endif
-endif
 
 ifeq ($(MOZ_WIDGET_TOOLKIT),photon)
 LIBS += -lphexlib
@@ -223,26 +206,12 @@ LDFLAGS += /HEAP:0x40000
 endif
 endif
 
-ifeq ($(OS_ARCH),OS2)
-ifdef BUILD_STATIC_LIBS
-$(EXE_DEF_FILE):
-	rm -f $@
-	@echo NAME mozilla >$(EXE_DEF_FILE)
-	@echo IMPORTS >>$(EXE_DEF_FILE)
-	@echo 	WinQueryProperty		= PMMERGE.5450 >>$(EXE_DEF_FILE)
-	@echo 	WinRemoveProperty		= PMMERGE.5451 >>$(EXE_DEF_FILE)
-	@echo 	WinSetProperty			= PMMERGE.5452 >>$(EXE_DEF_FILE)
+ifneq (,$(filter-out OS2 WINCE WINNT Darwin BeOS,$(OS_ARCH)))
 
-LDFLAGS += -Zlinker /NOE
-endif
-endif
-
-ifneq (,$(filter-out OS2 WINNT Darwin,$(OS_ARCH)))
-
-xulrunner:: mozilla.in Makefile.in Makefile $(DEPTH)/config/autoconf.mk
-	cat $< | sed -e "s|%MOZAPPDIR%|$(mozappdir)|" \
+xulrunner:: $(topsrcdir)/build/unix/mozilla.in $(GLOBAL_DEPS)
+	cat $< | sed -e "s|%MOZAPPDIR%|$(installdir)|" \
                 -e "s|%MOZ_USER_DIR%|.mozilla/xulrunner|" \
-		-e "s|%MREDIR%|$(mredir)|" > $@
+                -e "s|%MOZ_APP_DISPLAYNAME%|$(MOZ_APP_DISPLAYNAME)|" > $@
 	chmod +x $@
 
 libs:: xulrunner
@@ -263,7 +232,7 @@ ICON_FILES	= \
 		$(NULL)
 
 libs:: $(ICON_FILES)
-	$(INSTALL) $^ $(DIST)/bin/icons
+	$(INSTALL) $(IFLAGS1) $^ $(DIST)/bin/icons
 
 install::
 	$(SYSINSTALL) $(IFLAGS1) $(ICON_FILES) $(DESTDIR)$(mozappdir)/icons
@@ -271,10 +240,9 @@ endif
 
 ifeq ($(MOZ_WIDGET_TOOLKIT),gtk2)
 libs::
-	$(INSTALL) $(DIST)/branding/default.xpm $(DIST)/bin/chrome/icons/default
-
-install::
-	$(SYSINSTALL) $(IFLAGS1) $(DIST)/branding/default.xpm $(DESTDIR)$(mozappdir)/icons
+	$(INSTALL) $(IFLAGS1) $(DIST)/branding/default16.png $(DIST)/bin/chrome/icons/default
+	$(INSTALL) $(IFLAGS1) $(DIST)/branding/default32.png $(DIST)/bin/chrome/icons/default
+	$(INSTALL) $(IFLAGS1) $(DIST)/branding/default48.png $(DIST)/bin/chrome/icons/default
 endif
 
 # XXX applications would need to supply this file
@@ -294,7 +262,9 @@ ifneq (,$(filter gtk gtk2,$(MOZ_WIDGET_TOOLKIT)))
 	cp $(srcdir)/document.png $(DIST)/branding/document.png
 endif
 ifeq ($(MOZ_WIDGET_TOOLKIT),gtk2)
-	cp $(srcdir)/default.xpm   $(DIST)/branding/default.xpm	
+	cp $(srcdir)/default16.png   $(DIST)/branding/default16.png
+	cp $(srcdir)/default32.png   $(DIST)/branding/default32.png
+	cp $(srcdir)/default48.png   $(DIST)/branding/default48.png
 endif
 ifeq ($(OS_ARCH),OS2)
 	cp $(srcdir)/xulrunner-os2.ico   $(DIST)/branding/xulrunner.ico
@@ -331,5 +301,5 @@ endif
 README_FILE = $(topsrcdir)/README.txt
 
 libs::
-	$(INSTALL) $(README_FILE) $(DIST)/bin
-	$(INSTALL) $(topsrcdir)/LICENSE	$(DIST)/bin
+	$(INSTALL) $(IFLAGS1) $(README_FILE) $(DIST)/bin
+	$(INSTALL) $(IFLAGS1) $(topsrcdir)/LICENSE	$(DIST)/bin

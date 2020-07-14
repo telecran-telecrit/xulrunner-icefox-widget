@@ -79,9 +79,18 @@ AddStyleSheetTxn::AddStyleSheetTxn()
 {
 }
 
-AddStyleSheetTxn::~AddStyleSheetTxn()
-{
-}
+NS_IMPL_CYCLE_COLLECTION_CLASS(AddStyleSheetTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(AddStyleSheetTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mSheet)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(AddStyleSheetTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mSheet)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(AddStyleSheetTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
 
 NS_IMETHODIMP
 AddStyleSheetTxn::Init(nsIEditor *aEditor, nsICSSStyleSheet *aSheet)
@@ -120,23 +129,6 @@ AddStyleSheetTxn::UndoTransaction()
 }
 
 NS_IMETHODIMP
-AddStyleSheetTxn::RedoTransaction()
-{
-   return DoTransaction();
-}
-
-NS_IMETHODIMP
-AddStyleSheetTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  // set out param default value
-  if (!aDidMerge)
-    return NS_ERROR_NULL_POINTER;
-    
-  *aDidMerge = PR_FALSE;
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 AddStyleSheetTxn::GetTxnDescription(nsAString& aString)
 {
   aString.AssignLiteral("AddStyleSheetTxn");
@@ -154,9 +146,18 @@ RemoveStyleSheetTxn::RemoveStyleSheetTxn()
 {
 }
 
-RemoveStyleSheetTxn::~RemoveStyleSheetTxn()
-{
-}
+NS_IMPL_CYCLE_COLLECTION_CLASS(RemoveStyleSheetTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(RemoveStyleSheetTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mSheet)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(RemoveStyleSheetTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mSheet)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(RemoveStyleSheetTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
 
 NS_IMETHODIMP
 RemoveStyleSheetTxn::Init(nsIEditor *aEditor, nsICSSStyleSheet *aSheet)
@@ -191,23 +192,6 @@ RemoveStyleSheetTxn::UndoTransaction()
     return NS_ERROR_NOT_INITIALIZED;
 
   AddStyleSheet(mEditor, mSheet);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-RemoveStyleSheetTxn::RedoTransaction()
-{
-   return DoTransaction();
-}
-
-NS_IMETHODIMP
-RemoveStyleSheetTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  // set out param default value
-  if (!aDidMerge)
-    return NS_ERROR_NULL_POINTER;
-    
-  *aDidMerge = PR_FALSE;
   return NS_OK;
 }
 

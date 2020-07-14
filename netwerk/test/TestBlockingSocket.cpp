@@ -42,7 +42,7 @@
 #include "nsIServiceManager.h"
 #include "nsIComponentManager.h"
 #include "nsCOMPtr.h"
-#include "nsString.h"
+#include "nsStringAPI.h"
 #include "nsILocalFile.h"
 #include "nsNetUtil.h"
 #include "prlog.h"
@@ -150,8 +150,10 @@ main(int argc, char* argv[])
         if (NS_FAILED(rv)) return rv;
 
         rv = RunBlockingTest(nsDependentCString(hostName), port, file);
+#if defined(PR_LOGGING)
         if (NS_FAILED(rv))
             LOG(("RunBlockingTest failed [rv=%x]\n", rv));
+#endif
 
         // give background threads a chance to finish whatever work they may
         // be doing.

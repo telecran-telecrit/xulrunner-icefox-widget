@@ -41,7 +41,8 @@
 #include "nscore.h"  // needed for 'nsnull'
 #include "nsToolkit.h"
 #include "nsGUIEvent.h"
-#include "plevent.h"
+#include "nsWidgetAtoms.h"
+//#include "plevent.h"
 
 // Static thread local storage index of the Toolkit
 // object associated with a given thread...
@@ -71,6 +72,8 @@ NS_IMPL_ISUPPORTS1(nsToolkit, nsIToolkit)
 //-------------------------------------------------------------------------
 NS_IMETHODIMP nsToolkit::Init(PRThread *aThread)
 {
+  nsWidgetAtoms::RegisterAtoms();
+
   return NS_OK;
 }
 
@@ -116,4 +119,19 @@ NS_METHOD NS_GetCurrentToolkit(nsIToolkit* *aResult)
     *aResult = toolkit;
   }
   return rv;
+}
+
+void nsToolkit::CreateSharedGC(void)
+{
+    if (mSharedGC)
+        return;
+
+    mSharedGC = new QPixmap();
+}
+
+Qt::HANDLE
+nsToolkit::GetSharedGC(void)
+{
+    // FIXME Not sure
+    return mSharedGC->handle();
 }

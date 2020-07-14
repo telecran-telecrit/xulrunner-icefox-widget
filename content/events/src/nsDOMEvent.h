@@ -48,20 +48,14 @@
 #include "nsPresContext.h"
 #include "nsPoint.h"
 #include "nsGUIEvent.h"
-#include "nsRecycled.h"
+#include "nsCycleCollectionParticipant.h"
 
 class nsIContent;
 class nsIScrollableView;
-
-/* Currently we use a single-object recycler (nsRecycledSingle).
- * With our current usage pattern, we almost never have more than
- * a single nsDOMEvent active in memory at a time under normal circumstances.
- */
  
 class nsDOMEvent : public nsIDOMEvent,
                    public nsIDOMNSEvent,
-                   public nsIPrivateDOMEvent,
-                   public nsRecycledSingle<nsDOMEvent>
+                   public nsIPrivateDOMEvent
 {
 public:
 
@@ -107,6 +101,11 @@ public:
     eDOMEvents_dragexit,
     eDOMEvents_dragdrop,
     eDOMEvents_draggesture,
+    eDOMEvents_drag,
+    eDOMEvents_dragend,
+    eDOMEvents_dragstart,
+    eDOMEvents_dragleave,
+    eDOMEvents_drop,
     eDOMEvents_resize,
     eDOMEvents_scroll,
     eDOMEvents_overflow,
@@ -123,23 +122,62 @@ public:
     eDOMEvents_DOMFocusIn,
     eDOMEvents_DOMFocusOut,
     eDOMEvents_pageshow,
-    eDOMEvents_pagehide
+    eDOMEvents_pagehide,
+    eDOMEvents_DOMMouseScroll,
+    eDOMEvents_MozMousePixelScroll,
+    eDOMEvents_offline,
+    eDOMEvents_online,
+    eDOMEvents_copy,
+    eDOMEvents_cut,
+    eDOMEvents_paste,
 #ifdef MOZ_SVG
-   ,
     eDOMEvents_SVGLoad,
     eDOMEvents_SVGUnload,
     eDOMEvents_SVGAbort,
     eDOMEvents_SVGError,
     eDOMEvents_SVGResize,
     eDOMEvents_SVGScroll,
-    eDOMEvents_SVGZoom
+    eDOMEvents_SVGZoom,
 #endif // MOZ_SVG
+#ifdef MOZ_MEDIA
+    eDOMEvents_loadstart,
+    eDOMEvents_progress,
+    eDOMEvents_suspend,
+    eDOMEvents_emptied,
+    eDOMEvents_stalled,
+    eDOMEvents_play,
+    eDOMEvents_pause,
+    eDOMEvents_loadedmetadata,
+    eDOMEvents_loadeddata,
+    eDOMEvents_waiting,
+    eDOMEvents_playing,
+    eDOMEvents_canplay,
+    eDOMEvents_canplaythrough,
+    eDOMEvents_seeking,
+    eDOMEvents_seeked,
+    eDOMEvents_timeupdate,
+    eDOMEvents_ended,
+    eDOMEvents_ratechange,
+    eDOMEvents_durationchange,
+    eDOMEvents_volumechange,
+#endif
+    eDOMEvents_afterpaint,
+    eDOMEvents_MozSwipeGesture,
+    eDOMEvents_MozMagnifyGestureStart,
+    eDOMEvents_MozMagnifyGestureUpdate,
+    eDOMEvents_MozMagnifyGesture,
+    eDOMEvents_MozRotateGestureStart,
+    eDOMEvents_MozRotateGestureUpdate,
+    eDOMEvents_MozRotateGesture,
+    eDOMEvents_MozTapGesture,
+    eDOMEvents_MozPressTapGesture
   };
 
   nsDOMEvent(nsPresContext* aPresContext, nsEvent* aEvent);
   virtual ~nsDOMEvent();
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsDOMEvent, nsIDOMEvent)
 
   // nsIDOMEvent Interface
   NS_DECL_NSIDOMEVENT
@@ -152,13 +190,10 @@ public:
   NS_IMETHOD    SetTarget(nsIDOMEventTarget* aTarget);
   NS_IMETHOD    SetCurrentTarget(nsIDOMEventTarget* aCurrentTarget);
   NS_IMETHOD    SetOriginalTarget(nsIDOMEventTarget* aOriginalTarget);
-  NS_IMETHOD    IsDispatchStopped(PRBool* aIsDispatchStopped);
-  NS_IMETHOD    GetInternalNSEvent(nsEvent** aNSEvent);
-  NS_IMETHOD    HasOriginalTarget(PRBool* aResult);
+  NS_IMETHOD_(PRBool)    IsDispatchStopped();
+  NS_IMETHOD_(nsEvent*)    GetInternalNSEvent();
+  NS_IMETHOD_(PRBool)    HasOriginalTarget();
   NS_IMETHOD    SetTrusted(PRBool aTrusted);
-
-  NS_IMETHOD    IsHandled(PRBool* aHandled);
-  NS_IMETHOD    SetHandled(PRBool aHandled);
 
   static PopupControlState GetEventPopupControlState(nsEvent *aEvent);
 
@@ -172,17 +207,14 @@ protected:
   nsresult SetEventType(const nsAString& aEventTypeArg);
   static const char* GetEventName(PRUint32 aEventType);
   already_AddRefed<nsIDOMEventTarget> GetTargetFromFrame();
+  nsresult ReportWrongPropertyAccessWarning(const char* aPropertyName);
 
-  nsEvent* mEvent;
-  nsCOMPtr<nsPresContext> mPresContext;
-  nsCOMPtr<nsIDOMEventTarget> mTarget;
-  nsCOMPtr<nsIDOMEventTarget> mCurrentTarget;
-  nsCOMPtr<nsIDOMEventTarget> mOriginalTarget;
-  nsCOMPtr<nsIDOMEventTarget> mExplicitOriginalTarget;
+  nsEvent*                    mEvent;
+  nsCOMPtr<nsPresContext>     mPresContext;
   nsCOMPtr<nsIDOMEventTarget> mTmpRealOriginalTarget;
-  PRPackedBool mEventIsInternal;
-
-  void* mScriptObject;
+  nsCOMPtr<nsIDOMEventTarget> mExplicitOriginalTarget;
+  PRPackedBool                mEventIsInternal;
+  PRPackedBool                mPrivateDataDuplicated;
 };
 
 #define NS_FORWARD_TO_NSDOMEVENT \

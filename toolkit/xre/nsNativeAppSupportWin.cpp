@@ -48,20 +48,17 @@
 #include "nsXPIDLString.h"
 #include "nsIComponentManager.h"
 #include "nsIServiceManager.h"
-#include "nsIDOMWindow.h"
 #include "nsIDOMChromeWindow.h"
 #include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
 #include "nsISupportsArray.h"
 #include "nsIWindowWatcher.h"
-#include "nsIDOMWindowInternal.h"
-#include "nsIScriptGlobalObject.h"
+#include "nsPIDOMWindow.h"
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeItem.h"
 #include "nsIBaseWindow.h"
 #include "nsIWidget.h"
 #include "nsIAppShellService.h"
-#include "nsIProfileInternal.h"
 #include "nsIXULWindow.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -70,18 +67,18 @@
 #include "nsNetUtil.h"
 #include "nsIObserver.h"
 #include "nsIObserverService.h"
-#ifdef MOZ_PHOENIX
-#include "nsIShellService.h"
-#endif
 #include "nsIDOMLocation.h"
 #include "nsIJSContextStack.h"
 #include "nsIWebNavigation.h"
 #include "nsIWindowMediator.h"
 #include "nsNativeCharsetUtils.h"
+#include "nsIAppStartup.h"
 
 #include <windows.h>
 #include <shellapi.h>
+#ifndef WINCE
 #include <ddeml.h>
+#endif
 #include <stdlib.h>
 #include <stdio.h>
 #include <io.h>
@@ -110,10 +107,12 @@ activateWindow( nsIDOMWindowInternal *win ) {
     // Try to get native window handle.
     HWND hwnd = hwndForDOMWindow( win );
     if ( hwnd ) {
+#ifndef WINCE  // Can't iconify windows on windows ce
         // Restore the window if it is minimized.
         if ( ::IsIconic( hwnd ) ) {
             ::ShowWindow( hwnd, SW_RESTORE );
         }
+#endif
         // Use the OS call, if possible.
         ::SetForegroundWindow( hwnd );
     } else {
@@ -130,11 +129,11 @@ activateWindow( nsIDOMWindowInternal *win ) {
 
 // Simple Win32 mutex wrapper.
 struct Mutex {
-    Mutex( const char *name )
+    Mutex( const PRUnichar *name )
         : mName( name ),
           mHandle( 0 ),
           mState( -1 ) {
-        mHandle = CreateMutex( 0, FALSE, mName.get() );
+        mHandle = CreateMutexW( 0, FALSE, mName.get() );
 #if MOZ_DEBUG_DDE
         printf( "CreateMutex error = 0x%08X\n", (int)GetLastError() );
 #endif
@@ -176,7 +175,7 @@ struct Mutex {
         }
     }
 private:
-    nsCString mName;
+    nsString  mName;
     HANDLE    mHandle;
     DWORD     mState;
 };
@@ -314,16 +313,18 @@ public:
     NS_IMETHOD Stop( PRBool *aResult );
     NS_IMETHOD Quit();
     NS_IMETHOD Enable();
-
+#ifndef WINCE
     // The "old" Start method (renamed).
     NS_IMETHOD StartDDE();
-
+#endif
     // Utility function to handle a Win32-specific command line
     // option: "-console", which dynamically creates a Windows
     // console.
     void CheckConsole();
 
 private:
+    static void HandleCommandLine(const char* aCmdLineString, nsIFile* aWorkingDir, PRUint32 aState);
+#ifndef WINCE
     static HDDEDATA CALLBACK HandleDDENotification( UINT     uType,
                                                     UINT     uFmt,
                                                     HCONV    hconv,
@@ -332,14 +333,14 @@ private:
                                                     HDDEDATA hdata,
                                                     ULONG    dwData1,
                                                     ULONG    dwData2 );
-    static void HandleCommandLine(const char* aCmdLineString, nsIFile* aWorkingDir, PRUint32 aState);
-    static void ParseDDEArg( HSZ args, int index, nsCString& string);
-    static void ParseDDEArg( const char* args, int index, nsCString& aString);
-    static void ActivateLastWindow();
+    static void ParseDDEArg( HSZ args, int index, nsString& string);
+    static void ParseDDEArg( const WCHAR* args, int index, nsString& aString);
     static HDDEDATA CreateDDEData( DWORD value );
     static HDDEDATA CreateDDEData( LPBYTE value, DWORD len );
     static PRBool   InitTopicStrings();
     static int      FindTopic( HSZ topic );
+#endif
+    static void ActivateLastWindow();
     static nsresult OpenWindow( const char *urlstr, const char *args );
     static nsresult OpenBrowserWindow();
     static nsresult ReParent( nsISupports *window, HWND newParent );
@@ -358,12 +359,12 @@ private:
         // Note: Insert new values above this line!!!!!
         topicCount // Count of the number of real topics
     };
-
+#ifndef WINCE
     static HSZ   mApplication, mTopics[ topicCount ];
+#endif
     static DWORD mInstance;
     static PRBool mCanHandleRequests;
-    static PRBool mSupportingDDEExec;
-    static char mMutexName[];
+    static PRUnichar mMutexName[];
     friend struct MessageWindow;
 }; // nsNativeAppSupportWin
 
@@ -382,6 +383,7 @@ nsNativeAppSupportWin::CheckConsole() {
              strcmp( "/console", gArgv[i] ) == 0 ) {
             // Users wants to make sure we have a console.
             // Try to allocate one.
+#ifndef WINCE
             BOOL rc = ::AllocConsole();
             if ( rc ) {
                 // Console allocated.  Fix it up so that output works in
@@ -428,7 +430,7 @@ nsNativeAppSupportWin::CheckConsole() {
                 // Failed.  Probably because there already is one.
                 // There's little we can do, in any case.
             }
-
+#endif
             // Remove the console argument from the command line.
             do {
                 gArgv[i] = gArgv[i + 1];
@@ -463,7 +465,8 @@ NS_CreateNativeAppSupport( nsINativeAppSupport **aResult ) {
 
 // Constants
 #define MOZ_DDE_APPLICATION    "Mozilla"
-#define MOZ_STARTUP_MUTEX_NAME "StartupMutex"
+#define MOZ_MUTEX_NAMESPACE    L"Local\\"
+#define MOZ_STARTUP_MUTEX_NAME L"StartupMutex"
 #define MOZ_DDE_START_TIMEOUT 30000
 #define MOZ_DDE_STOP_TIMEOUT  15000
 #define MOZ_DDE_EXEC_TIMEOUT  15000
@@ -479,13 +482,14 @@ const char * const topicNames[] = { "WWW_OpenURL",
 
 // Static member definitions.
 int   nsNativeAppSupportWin::mConversations = 0;
+#ifndef WINCE
 HSZ   nsNativeAppSupportWin::mApplication   = 0;
 HSZ   nsNativeAppSupportWin::mTopics[nsNativeAppSupportWin::topicCount] = { 0 };
+#endif
 DWORD nsNativeAppSupportWin::mInstance      = 0;
 PRBool nsNativeAppSupportWin::mCanHandleRequests   = PR_FALSE;
-PRBool nsNativeAppSupportWin::mSupportingDDEExec   = PR_FALSE;
 
-char nsNativeAppSupportWin::mMutexName[ 128 ] = { 0 };
+PRUnichar nsNativeAppSupportWin::mMutexName[ 128 ] = { 0 };
 
 
 // Message window encapsulation.
@@ -493,7 +497,7 @@ struct MessageWindow {
     // ctor/dtor are simplistic
     MessageWindow() {
         // Try to find window.
-        mHandle = ::FindWindow( className(), 0 );
+        mHandle = ::FindWindowW( className(), 0 );
     }
 
     // Act like an HWND.
@@ -502,15 +506,15 @@ struct MessageWindow {
     }
 
     // Class name: appName + "MessageWindow"
-    static const char *className() {
-        static char classNameBuffer[128];
-        static char *mClassName = 0;
+    static const PRUnichar *className() {
+        static PRUnichar classNameBuffer[128];
+        static PRUnichar *mClassName = 0;
         if ( !mClassName ) {
-            ::_snprintf( classNameBuffer,
-                         sizeof classNameBuffer,
-                         "%s%s",
-                         gAppData->name,
-                         "MessageWindow" );
+            ::_snwprintf(classNameBuffer,
+                         128,   // size of classNameBuffer in PRUnichars
+                         L"%s%s",
+                         NS_ConvertUTF8toUTF16(gAppData->name).get(),
+                         L"MessageWindow" );
             mClassName = classNameBuffer;
         }
         return mClassName;
@@ -518,7 +522,7 @@ struct MessageWindow {
 
     // Create: Register class and create window.
     NS_IMETHOD Create() {
-        WNDCLASS classStruct = { 0,                          // style
+        WNDCLASSW classStruct = { 0,                          // style
                                  &MessageWindow::WindowProc, // lpfnWndProc
                                  0,                          // cbClsExtra
                                  0,                          // cbWndExtra
@@ -530,10 +534,10 @@ struct MessageWindow {
                                  className() };              // lpszClassName
 
         // Register the window class.
-        NS_ENSURE_TRUE( ::RegisterClass( &classStruct ), NS_ERROR_FAILURE );
+        NS_ENSURE_TRUE( ::RegisterClassW( &classStruct ), NS_ERROR_FAILURE );
 
         // Create the window.
-        NS_ENSURE_TRUE( ( mHandle = ::CreateWindow( className(),
+        NS_ENSURE_TRUE( ( mHandle = ::CreateWindowW(className(),
                                                     0,          // title
                                                     WS_CAPTION, // style
                                                     0,0,0,0,    // x, y, cx, cy
@@ -569,29 +573,29 @@ struct MessageWindow {
         return retval;
     }
 
-    // SendRequest: Pass string via WM_COPYDATA to message window.
-    NS_IMETHOD SendRequest( const char *cmd ) {
-        // Construct a data buffer <commandline>\0<workingdir>\0
-        int cmdlen = strlen(cmd);
-        char* cmdbuf = (char*) malloc(cmdlen + MAX_PATH + 1);
-        if (!cmdbuf)
-            return NS_ERROR_OUT_OF_MEMORY;
+    // SendRequest: Pass the command line via WM_COPYDATA to message window.
+    NS_IMETHOD SendRequest() {
+        WCHAR *cmd = ::GetCommandLineW();
+        WCHAR cwd[MAX_PATH];
+        _wgetcwd(cwd, MAX_PATH);
 
-        strcpy(cmdbuf, cmd);
-        _getcwd(cmdbuf + cmdlen + 1, MAX_PATH);
+        // Construct a narrow UTF8 buffer <commandline>\0<workingdir>\0
+        NS_ConvertUTF16toUTF8 utf8buffer(cmd);
+        utf8buffer.Append('\0');
+        AppendUTF16toUTF8(cwd, utf8buffer);
+        utf8buffer.Append('\0');
 
         // We used to set dwData to zero, when we didn't send the working dir.
         // Now we're using it as a version number.
         COPYDATASTRUCT cds = {
             1,
-            cmdlen + strlen(cmdbuf + cmdlen + 1) + 2,
-            (void*) cmdbuf
+            utf8buffer.Length(),
+            (void*) utf8buffer.get()
         };
         // Bring the already running Mozilla process to the foreground.
         // nsWindow will restore the window (if minimized) and raise it.
         ::SetForegroundWindow( mHandle );
         ::SendMessage( mHandle, WM_COPYDATA, 0, (LPARAM)&cds );
-        free (cmdbuf);
         return NS_OK;
     }
 
@@ -599,7 +603,7 @@ struct MessageWindow {
     static long CALLBACK WindowProc( HWND msgWindow, UINT msg, WPARAM wp, LPARAM lp ) {
         if ( msg == WM_COPYDATA ) {
             if (!nsNativeAppSupportWin::mCanHandleRequests)
-                return 0;
+                return FALSE;
 
             // This is an incoming request.
             COPYDATASTRUCT *cds = (COPYDATASTRUCT*)lp;
@@ -621,9 +625,9 @@ struct MessageWindow {
                 printf( "Working dir: %s\n", wdpath);
 #endif
 
-                NS_NewNativeLocalFile(nsDependentCString(wdpath),
-                                      PR_FALSE,
-                                      getter_AddRefs(workingDir));
+                NS_NewLocalFile(NS_ConvertUTF8toUTF16(wdpath),
+                                PR_FALSE,
+                                getter_AddRefs(workingDir));
             }
             (void)nsNativeAppSupportWin::HandleCommandLine((char*)cds->lpData, workingDir, nsICommandLine::STATE_REMOTE_AUTO);
 
@@ -631,21 +635,6 @@ struct MessageWindow {
             nsCOMPtr<nsIDOMWindowInternal> win;
             GetMostRecentWindow( 0, getter_AddRefs( win ) );
             return win ? (long)hwndForDOMWindow( win ) : 0;
-        } else if ( msg == WM_QUERYENDSESSION ) {
-            if (!nsNativeAppSupportWin::mCanHandleRequests)
-                return 0;
-            // Invoke "-killAll" cmd line handler.  That will close all open windows,
-            // and display dialog asking whether to save/don't save/cancel.  If the
-            // user says cancel, then we pass that indicator along to the system
-            // in order to stop the system shutdown/logoff.
-            nsCOMPtr<nsICommandLineRunner> cmdLine
-                (do_CreateInstance("@mozilla.org/toolkit/command-line;1"));
-            char* argv[] = { "-killAll", 0 };
-            if (cmdLine &&
-                NS_SUCCEEDED(cmdLine->Init(1, argv, nsnull,
-                                           nsICommandLine::STATE_REMOTE_AUTO))) {
-                return cmdLine->Run() != NS_ERROR_ABORT;
-            }
         }
         return DefWindowProc( msgWindow, msg, wp, lp );
     }
@@ -684,7 +673,10 @@ nsNativeAppSupportWin::Start( PRBool *aResult ) {
     // Grab mutex first.
 
     // Build mutex name from app name.
-    ::_snprintf( mMutexName, sizeof mMutexName, "%s%s", gAppData->name, MOZ_STARTUP_MUTEX_NAME );
+    ::_snwprintf(mMutexName, sizeof mMutexName / sizeof(PRUnichar), L"%s%s%s", 
+                 MOZ_MUTEX_NAMESPACE,
+                 NS_ConvertUTF8toUTF16(gAppData->name).get(),
+                 MOZ_STARTUP_MUTEX_NAME );
     Mutex startupLock = Mutex( mMutexName );
 
     NS_ENSURE_TRUE( startupLock.Lock( MOZ_DDE_START_TIMEOUT ), NS_ERROR_FAILURE );
@@ -693,14 +685,15 @@ nsNativeAppSupportWin::Start( PRBool *aResult ) {
     MessageWindow msgWindow;
     if ( (HWND)msgWindow ) {
         // We are a client process.  Pass request to message window.
-        LPTSTR cmd = ::GetCommandLine();
-        rv = msgWindow.SendRequest( cmd );
+        rv = msgWindow.SendRequest();
     } else {
         // We will be server.
         rv = msgWindow.Create();
         if ( NS_SUCCEEDED( rv ) ) {
+#ifndef WINCE
             // Start up DDE server.
             this->StartDDE();
+#endif
             // Tell caller to spin message loop.
             *aResult = PR_TRUE;
         }
@@ -710,11 +703,11 @@ nsNativeAppSupportWin::Start( PRBool *aResult ) {
 
     return rv;
 }
-
+#ifndef WINCE
 PRBool
 nsNativeAppSupportWin::InitTopicStrings() {
     for ( int i = 0; i < topicCount; i++ ) {
-        if ( !( mTopics[ i ] = DdeCreateStringHandle( mInstance, NS_CONST_CAST(char *,topicNames[ i ]), CP_WINANSI ) ) ) {
+        if ( !( mTopics[ i ] = DdeCreateStringHandleA( mInstance, const_cast<char *>(topicNames[ i ]), CP_WINANSI ) ) ) {
             return PR_FALSE;
         }
     }
@@ -731,18 +724,6 @@ nsNativeAppSupportWin::FindTopic( HSZ topic ) {
     return -1;
 }
 
-// Utility function that determines if we're handling http Internet shortcuts.
-static PRBool isDefaultBrowser() 
-{
-#ifdef MOZ_PHOENIX
-  nsCOMPtr<nsIShellService> shell(do_GetService("@mozilla.org/browser/shell-service;1"));
-  PRBool isDefault;
-  shell->IsDefaultBrowser(PR_FALSE, &isDefault);
-  return isDefault;
-#else
-  return FALSE;
-#endif
-}
 
 // Start DDE server.
 //
@@ -766,7 +747,7 @@ nsNativeAppSupportWin::StartDDE() {
                     NS_ERROR_FAILURE );
 
     // Allocate DDE strings.
-    NS_ENSURE_TRUE( ( mApplication = DdeCreateStringHandle( mInstance, (char*) gAppData->name, CP_WINANSI ) ) && InitTopicStrings(),
+    NS_ENSURE_TRUE( ( mApplication = DdeCreateStringHandleA( mInstance, (char*) gAppData->name, CP_WINANSI ) ) && InitTopicStrings(),
                     NS_ERROR_FAILURE );
 
     // Next step is to register a DDE service.
@@ -778,7 +759,7 @@ nsNativeAppSupportWin::StartDDE() {
 
     return NS_OK;
 }
-
+#endif /* WINCE */
 // If no DDE conversations are pending, terminate DDE.
 NS_IMETHODIMP
 nsNativeAppSupportWin::Stop( PRBool *aResult ) {
@@ -840,6 +821,7 @@ nsNativeAppSupportWin::Quit() {
 
     if ( mInstance ) {
         // Unregister application name.
+#ifndef WINCE
         DdeNameService( mInstance, mApplication, 0, DNS_UNREGISTER );
         // Clean up strings.
         if ( mApplication ) {
@@ -853,6 +835,7 @@ nsNativeAppSupportWin::Quit() {
             }
         }
         DdeUninitialize( mInstance );
+#endif
         mInstance = 0;
 #if MOZ_DEBUG_DDE
     printf( "DDE server stopped\n" );
@@ -919,7 +902,7 @@ static nsCString hszValue( DWORD instance, HSZ hsz ) {
     result += "]";
     return result;
 }
-#else
+#elif !defined(WINCE)
 // These are purely a safety measure to avoid the infamous "won't
 // build non-debug" type Tinderbox flames.
 static nsCString uTypeDesc( UINT ) {
@@ -950,6 +933,7 @@ static void escapeQuotes( nsAString &aString ) {
     return;
 }
 
+#ifndef WINCE
 HDDEDATA CALLBACK
 nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction type
                                               UINT uFmt,        // clipboard data format
@@ -997,26 +981,26 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                     // Open a given URL...
 
                     // Get the URL from the first argument in the command.
-                    nsCAutoString url;
+                    nsAutoString url;
                     ParseDDEArg(hsz2, 0, url);
 
                     // Read the 3rd argument in the command to determine if a
                     // new window is to be used.
-                    nsCAutoString windowID;
+                    nsAutoString windowID;
                     ParseDDEArg(hsz2, 2, windowID);
                     // "" means to open the URL in a new window.
-                    if ( windowID.Equals( "" ) ) {
-                        url.Insert("mozilla -new-window ", 0);
+                    if ( windowID.IsEmpty() ) {
+                        url.Insert(NS_LITERAL_STRING("mozilla -new-window "), 0);
                     }
                     else {
-                        url.Insert("mozilla -url ", 0);
+                        url.Insert(NS_LITERAL_STRING("mozilla -url "), 0);
                     }
 
 #if MOZ_DEBUG_DDE
-                    printf( "Handling dde XTYP_REQUEST request: [%s]...\n", url.get() );
+                    printf( "Handling dde XTYP_REQUEST request: [%s]...\n", NS_ConvertUTF16toUTF8(url).get() );
 #endif
                     // Now handle it.
-                    HandleCommandLine(url.get(), nsnull, nsICommandLine::STATE_REMOTE_EXPLICIT);
+                    HandleCommandLine(NS_ConvertUTF16toUTF8(url).get(), nsnull, nsICommandLine::STATE_REMOTE_EXPLICIT);
 
                     // Return pseudo window ID.
                     result = CreateDDEData( 1 );
@@ -1048,7 +1032,7 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                             break;
                         }
                         // Convert that to internal interface.
-                        nsCOMPtr<nsIDOMWindowInternal> internalContent( do_QueryInterface( content ) );
+                        nsCOMPtr<nsPIDOMWindow> internalContent( do_QueryInterface( content ) );
                         if ( !internalContent ) {
                             break;
                         }
@@ -1066,14 +1050,11 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                         // Escape any double-quotes.
                         escapeQuotes( url );
 
-                        // Now for the title; first, get the "window" script global object.
-                        nsCOMPtr<nsIScriptGlobalObject> scrGlobalObj( do_QueryInterface( internalContent ) );
-                        if ( !scrGlobalObj ) {
-                            break;
-                        }
-                        // Then from its doc shell get the base window...
+                        // Now for the title...
+
+                        // Get the base window from the doc shell...
                         nsCOMPtr<nsIBaseWindow> baseWindow =
-                            do_QueryInterface( scrGlobalObj->GetDocShell() );
+                          do_QueryInterface( internalContent->GetDocShell() );
                         if ( !baseWindow ) {
                             break;
                         }
@@ -1117,12 +1098,12 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
                 }
                 case topicActivate: {
                     // Activate a Nav window...
-                    nsCAutoString windowID;
+                    nsAutoString windowID;
                     ParseDDEArg(hsz2, 0, windowID);
                     // 4294967295 is decimal for 0xFFFFFFFF which is also a
                     //   correct value to do that Activate last window stuff
-                    if ( windowID.Equals( "-1" ) ||
-                         windowID.Equals( "4294967295" ) ) {
+                    if ( windowID.EqualsLiteral( "-1" ) ||
+                         windowID.EqualsLiteral( "4294967295" ) ) {
                         // We only support activating the most recent window (or a new one).
                         ActivateLastWindow();
                         // Return pseudo window ID.
@@ -1171,26 +1152,26 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
             // Default is to open in current window.
             PRBool new_window = PR_FALSE;
 
-            nsCAutoString url;
-            ParseDDEArg((const char*) request, 0, url);
+            nsAutoString url;
+            ParseDDEArg((const WCHAR*) request, 0, url);
 
             // Read the 3rd argument in the command to determine if a
             // new window is to be used.
-            nsCAutoString windowID;
-            ParseDDEArg((const char*) request, 2, windowID);
+            nsAutoString windowID;
+            ParseDDEArg((const WCHAR*) request, 2, windowID);
 
             // "" means to open the URL in a new window.
-            if ( windowID.Equals( "" ) ) {
-                url.Insert("mozilla -new-window ", 0);
+            if ( windowID.IsEmpty() ) {
+                url.Insert(NS_LITERAL_STRING("mozilla -new-window "), 0);
             }
             else {
-                url.Insert("mozilla -url ", 0);
+                url.Insert(NS_LITERAL_STRING("mozilla -url "), 0);
             }
 #if MOZ_DEBUG_DDE
-            printf( "Handling dde XTYP_REQUEST request: [%s]...\n", url.get() );
+            printf( "Handling dde XTYP_REQUEST request: [%s]...\n", NS_ConvertUTF16toUTF8(url).get() );
 #endif
             // Now handle it.
-            HandleCommandLine(url.get(), nsnull, nsICommandLine::STATE_REMOTE_EXPLICIT);
+            HandleCommandLine(NS_ConvertUTF16toUTF8(url).get(), nsnull, nsICommandLine::STATE_REMOTE_EXPLICIT);
 
             // Release the data.
             DdeUnaccessData( hdata );
@@ -1205,14 +1186,14 @@ nsNativeAppSupportWin::HandleDDENotification( UINT uType,       // transaction t
 #endif
     return result;
 }
-
+#endif /* WINCE */
 // Utility function to advance to end of quoted string.
 // p+offset must point to the comma preceding the arg on entry.
 // On return, p+result points to the closing '"' (or end of the string
 // if the closing '"' is missing) if the arg is quoted.  If the arg
 // is not quoted, then p+result will point to the first character
 // of the arg.
-static PRInt32 advanceToEndOfQuotedArg( const char *p, PRInt32 offset, PRInt32 len ) {
+static PRInt32 advanceToEndOfQuotedArg( const WCHAR *p, PRInt32 offset, PRInt32 len ) {
     // Check whether the current arg is quoted.
     if ( p[++offset] == '"' ) {
         // Advance past the closing quote.
@@ -1227,17 +1208,17 @@ static PRInt32 advanceToEndOfQuotedArg( const char *p, PRInt32 offset, PRInt32 l
     return offset;
 }
 
-void nsNativeAppSupportWin::ParseDDEArg( const char* args, int index, nsCString& aString) {
+#ifndef WINCE
+void nsNativeAppSupportWin::ParseDDEArg( const WCHAR* args, int index, nsString& aString) {
     if ( args ) {
-        int argLen = strlen(args);
-        nsDependentCString temp(args, argLen);
+        nsDependentString temp(args);
 
         // offset points to the comma preceding the desired arg.
         PRInt32 offset = -1;
         // Skip commas till we get to the arg we want.
         while( index-- ) {
             // If this arg is quoted, then go to closing quote.
-            offset = advanceToEndOfQuotedArg( args, offset, argLen);
+            offset = advanceToEndOfQuotedArg( args, offset, temp.Length());
             // Find next comma.
             offset = temp.FindChar( ',', offset );
             if ( offset == kNotFound ) {
@@ -1254,12 +1235,12 @@ void nsNativeAppSupportWin::ParseDDEArg( const char* args, int index, nsCString&
         // deal with that before searching for the terminating comma.
         // We advance offset so it ends up pointing to the start of
         // the argument we want.
-        PRInt32 end = advanceToEndOfQuotedArg( args, offset++, argLen );
+        PRInt32 end = advanceToEndOfQuotedArg( args, offset++, temp.Length() );
         // Find next comma (or end of string).
         end = temp.FindChar( ',', end );
         if ( end == kNotFound ) {
             // Arg is the rest of the string.
-            end = argLen;
+            end = temp.Length();
         }
         // Extract result.
         aString.Assign( args + offset, end - offset );
@@ -1268,30 +1249,18 @@ void nsNativeAppSupportWin::ParseDDEArg( const char* args, int index, nsCString&
 }
 
 // Utility to parse out argument from a DDE item string.
-void nsNativeAppSupportWin::ParseDDEArg( HSZ args, int index, nsCString& aString) {
-    DWORD argLen = DdeQueryString( mInstance, args, NULL, NULL, CP_WINANSI );
+void nsNativeAppSupportWin::ParseDDEArg( HSZ args, int index, nsString& aString) {
+    DWORD argLen = DdeQueryStringW( mInstance, args, NULL, NULL, CP_WINUNICODE );
     // there wasn't any string, so return empty string
     if ( !argLen ) return;
-    nsCAutoString temp;
+    nsAutoString temp;
     // Ensure result's buffer is sufficiently big.
     temp.SetLength( argLen );
     // Now get the string contents.
-    DdeQueryString( mInstance, args, temp.BeginWriting(), temp.Length(), CP_WINANSI );
+    DdeQueryString( mInstance, args, temp.BeginWriting(), temp.Length(), CP_WINUNICODE );
     // Parse out the given arg.
     ParseDDEArg(temp.get(), index, aString);
     return;
-}
-
-void nsNativeAppSupportWin::ActivateLastWindow() {
-    nsCOMPtr<nsIDOMWindowInternal> navWin;
-    GetMostRecentWindow( NS_LITERAL_STRING("navigator:browser").get(), getter_AddRefs( navWin ) );
-    if ( navWin ) {
-        // Activate that window.
-        activateWindow( navWin );
-    } else {
-        // Need to create a Navigator window, then.
-        OpenBrowserWindow();
-    }
 }
 
 HDDEDATA nsNativeAppSupportWin::CreateDDEData( DWORD value ) {
@@ -1307,6 +1276,19 @@ HDDEDATA nsNativeAppSupportWin::CreateDDEData( LPBYTE value, DWORD len ) {
                                            CF_TEXT,
                                            0 );
     return result;
+}
+#endif /* WINCE */
+
+void nsNativeAppSupportWin::ActivateLastWindow() {
+    nsCOMPtr<nsIDOMWindowInternal> navWin;
+    GetMostRecentWindow( NS_LITERAL_STRING("navigator:browser").get(), getter_AddRefs( navWin ) );
+    if ( navWin ) {
+        // Activate that window.
+        activateWindow( navWin );
+    } else {
+        // Need to create a Navigator window, then.
+        OpenBrowserWindow();
+    }
 }
 
 void
@@ -1494,13 +1476,13 @@ nsNativeAppSupportWin::OpenWindow( const char*urlstr, const char *args ) {
 }
 
 HWND hwndForDOMWindow( nsISupports *window ) {
-    nsCOMPtr<nsIScriptGlobalObject> ppScriptGlobalObj( do_QueryInterface(window) );
-    if ( !ppScriptGlobalObj ) {
+    nsCOMPtr<nsPIDOMWindow> pidomwindow( do_QueryInterface(window) );
+    if ( !pidomwindow ) {
         return 0;
     }
 
     nsCOMPtr<nsIBaseWindow> ppBaseWindow =
-        do_QueryInterface( ppScriptGlobalObj->GetDocShell() );
+        do_QueryInterface( pidomwindow->GetDocShell() );
     if ( !ppBaseWindow ) {
         return 0;
     }

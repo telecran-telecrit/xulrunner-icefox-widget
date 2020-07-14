@@ -41,6 +41,7 @@
 #include "EditTxn.h"
 
 #include "nsIDOMNode.h"
+#include "nsIEditor.h"
 #include "nsCOMPtr.h"
 
 #define DELETE_ELEMENT_TXN_CID \
@@ -62,24 +63,18 @@ public:
   /** initialize the transaction.
     * @param aElement the node to delete
     */
-  NS_IMETHOD Init(nsIDOMNode *aElement, nsRangeUpdater *aRangeUpdater);
+  NS_IMETHOD Init(nsIEditor *aEditor, nsIDOMNode *aElement, nsRangeUpdater *aRangeUpdater);
 
 private:
   DeleteElementTxn();
 
 public:
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(DeleteElementTxn, EditTxn)
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr);
 
-  virtual ~DeleteElementTxn();
+  NS_DECL_EDITTXN
 
-  NS_IMETHOD DoTransaction(void);
-
-  NS_IMETHOD UndoTransaction(void);
-
-  NS_IMETHOD RedoTransaction(void);
-
-  NS_IMETHOD Merge(nsITransaction *aTransaction, PRBool *aDidMerge);
-
-  NS_IMETHOD GetTxnDescription(nsAString& aTxnDescription);
+  NS_IMETHOD RedoTransaction();
 
 protected:
   
@@ -91,6 +86,9 @@ protected:
 
   /** next sibling to remember for undo/redo purposes */
   nsCOMPtr<nsIDOMNode> mRefNode;
+
+  /** the editor for this transaction */
+  nsIEditor* mEditor;
 
   /** range updater object */
   nsRangeUpdater *mRangeUpdater;

@@ -22,6 +22,7 @@
  * Contributor(s):
  *  Darin Fisher <darin@meer.net>
  *  Daniel Veditz <dveditz@mozilla.com>
+ *  Jesper Kristensen <mail@jesperkristensen.dk>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -56,37 +57,29 @@ function checkCert(channel) {
     issuer = cert.issuer;
   }
 
-  if (!issuer || issuer.tokenName != "Builtin Object Token")
-    throw "cert issuer is not built-in";
+  var errorstring = "cert issuer is not built-in";
+  if (!issuer)
+    throw errorstring;
+
+  issuer = issuer.QueryInterface(Ci.nsIX509Cert3);
+  var tokenNames = issuer.getAllTokenNames({});
+
+  if (!tokenNames.some(isBuiltinToken))
+    throw errorstring;
+}
+
+function isBuiltinToken(tokenName) {
+  return tokenName == "Builtin Object Token";
 }
 
 /**
- * This class implements nsIBadCertListener.  It's job is to prevent "bad cert"
+ * This class implements nsIBadCertListener.  Its job is to prevent "bad cert"
  * security dialogs from being shown to the user.  It is better to simply fail
  * if the certificate is bad. See bug 304286.
  */
 function BadCertHandler() {
 }
 BadCertHandler.prototype = {
-
-  // nsIBadCertListener
-  confirmUnknownIssuer: function(socketInfo, cert, certAddType) {
-    LOG("EM BadCertHandler: Unknown issuer");
-    return false;
-  },
-
-  confirmMismatchDomain: function(socketInfo, targetURL, cert) {
-    LOG("EM BadCertHandler: Mismatched domain");
-    return false;
-  },
-
-  confirmCertExpired: function(socketInfo, cert) {
-    LOG("EM BadCertHandler: Expired certificate");
-    return false;
-  },
-
-  notifyCrlNextupdate: function(socketInfo, targetURL, cert) {
-  },
 
   // nsIChannelEventSink
   onChannelRedirect: function(oldChannel, newChannel, flags) {
@@ -95,20 +88,26 @@ BadCertHandler.prototype = {
     checkCert(oldChannel);
   },
 
+  // Suppress any certificate errors
+  notifyCertProblem: function(socketInfo, status, targetSite) {
+    return true;
+  },
+
+  // Suppress any ssl errors
+  notifySSLError: function(socketInfo, error, targetSite) {
+    return true;
+  },
+
   // nsIInterfaceRequestor
   getInterface: function(iid) {
-    if (iid.equals(Components.interfaces.nsIBadCertListener) ||
-        iid.equals(Components.interfaces.nsIChannelEventSink))
-      return this;
-
-    Components.returnCode = Components.results.NS_ERROR_NO_INTERFACE;
-    return null;
+    return this.QueryInterface(iid);
   },
 
   // nsISupports
   QueryInterface: function(iid) {
-    if (!iid.equals(Components.interfaces.nsIBadCertListener) &&
-        !iid.equals(Components.interfaces.nsIChannelEventSink) &&
+    if (!iid.equals(Components.interfaces.nsIChannelEventSink) &&
+        !iid.equals(Components.interfaces.nsIBadCertListener2) &&
+        !iid.equals(Components.interfaces.nsISSLErrorListener) &&
         !iid.equals(Components.interfaces.nsIInterfaceRequestor) &&
         !iid.equals(Components.interfaces.nsISupports))
       throw Components.results.NS_ERROR_NO_INTERFACE;

@@ -1,8 +1,0 @@
-D/components////
-D/idispatch////
-D/idl////
-D/js////
-/.cvsignore/1.2/Tue Mar 23 20:30:06 1999//TFIREFOX_2_0_0_3_RELEASE
-/Makefile.in/1.30/Tue Apr  5 12:35:52 2005//TFIREFOX_2_0_0_3_RELEASE
-/TestXPC.cpp/1.74/Wed Mar 30 11:35:00 2005//TFIREFOX_2_0_0_3_RELEASE
-D/mochitest////

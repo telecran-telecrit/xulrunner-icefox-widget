@@ -1,6 +1,11 @@
 <?xml version="1.0"?>
 
-<!DOCTYPE bindings SYSTEM "chrome://global/locale/preferences.dtd">
+<!DOCTYPE bindings [
+  <!ENTITY % preferencesDTD SYSTEM "chrome://global/locale/preferences.dtd">
+  %preferencesDTD;
+  <!ENTITY % globalKeysDTD SYSTEM "chrome://global/locale/globalKeys.dtd">
+  %globalKeysDTD;
+]>
 
 <bindings id="preferencesBindings"
           xmlns="http://www.mozilla.org/xbl"
@@ -52,7 +57,7 @@
             aPreference.dispatchEvent(event);
           }
           catch (e) {
-            dump(e);
+            Components.utils.reportError(e);
           }
         ]]>
         </body>
@@ -73,6 +78,22 @@
         Components.classes["@mozilla.org/preferences-service;1"]
                   .getService(Components.interfaces.nsIPrefBranchInternal);
       </field>
+      <property name="type" readonly="true">
+        <getter>
+          <![CDATA[
+            return document.documentElement.type || "";
+          ]]>
+        </getter>
+      </property>
+      <property name="instantApply" readonly="true">
+        <getter>
+          <![CDATA[
+            var doc = document.documentElement;
+            return this.type == "child" ? doc.instantApply
+                                        : doc.instantApply || this.rootBranch.getBoolPref("browser.preferences.instantApply");
+          ]]>
+        </getter>
+      </property>
     </implementation>
   </binding>
 
@@ -80,12 +101,17 @@
     <implementation>
       <constructor>
       <![CDATA[
+        // if the element has been inserted without the name attribute set,
+        // we have nothing to do here
+        if (!this.name)
+          return;
+
         this.preferences.rootBranchInternal
             .addObserver(this.name, this.preferences, false);
         // In non-instant apply mode, we must try and use the last saved state
         // from any previous opens of a child dialog instead of the value from
         // preferences, to pick up any edits a user may have made. 
-        if (document.documentElement.type == "child" && 
+        if (this.preferences.type == "child" && 
             !this.instantApply && window.opener) {
           var pdoc = window.opener.document;
 
@@ -114,7 +140,7 @@
       
       <property name="instantApply">
         <getter>
-          return this.getAttribute("instantApply") == "true" || document.documentElement.instantApply;
+          return this.getAttribute("instantApply") == "true" || this.preferences.instantApply;
         </getter>
       </property>
 
@@ -146,7 +172,7 @@
         <parameter name="aUpdate"/>
         <body>
         <![CDATA[
-          if (aUpdate && this.value != aValue) {
+          if (aUpdate && this.value !== aValue) {
             this._value = aValue;
             if (this.instantApply)
               this.valueFromPreferences = aValue;
@@ -226,13 +252,17 @@
 
       <property name="hasUserValue">
         <getter>
-          return this.preferences.rootBranch.prefHasUserValue(this.name);
+        <![CDATA[
+          return this.preferences.rootBranch.prefHasUserValue(this.name) &&
+                 this.value !== undefined;
+        ]]>
         </getter>
       </property>
       
       <method name="reset">
         <body>
-          this.preferences.rootBranch.clearUserPref(this.name);
+          // defer reset until preference update
+          this.value = undefined;
         </body>
       </method>
 
@@ -256,6 +286,18 @@
       
       <field name="batching">false</field>
       
+      <method name="_reportUnknownType">
+        <body>
+        <![CDATA[
+          var consoleService = Components.classes["@mozilla.org/consoleservice;1"]
+                                         .getService(Components.interfaces.nsIConsoleService);
+          var msg = "<preference> with id='" + this.id + "' and name='" + 
+                    this.name + "' has unknown type '" + this.type + "'.";
+          consoleService.logStringMessage(msg);
+        ]]>
+        </body>
+      </method>
+      
       <property name="valueFromPreferences">
         <getter>
         <![CDATA[
@@ -273,13 +315,22 @@
                          .data;
             case "string":
             case "unichar":
-              var pref = Components.classes["@mozilla.org/preferences;1"] 
-                                   .getService(Components.interfaces.nsIPref);
-              return pref.CopyUnicharPref(this.name);
+              return this._branch
+                         .getComplexValue(this.name, Components.interfaces.nsISupportsString)
+                         .data;
+            case "fontname":
+              var family = this._branch
+                               .getComplexValue(this.name, Components.interfaces.nsISupportsString)
+                               .data;
+              var fontEnumerator = Components.classes["@mozilla.org/gfx/fontenumerator;1"]
+                                             .createInstance(Components.interfaces.nsIFontEnumerator);
+              return fontEnumerator.getStandardFamilyName(family);
             case "file":
               var f = this._branch
                           .getComplexValue(this.name, Components.interfaces.nsILocalFile);
               return f;
+            default:
+              this._reportUnknownType();
             }
           }
           catch (e) { }
@@ -288,9 +339,16 @@
         </getter>
         <setter>
         <![CDATA[
+          // Exit early if nothing to do.
           if (this.readonly || this.valueFromPreferences == val)
             return val;
-            
+
+          // The special value undefined means 'reset preference to default'.
+          if (val === undefined) {
+            this.preferences.rootBranch.clearUserPref(this.name);
+            return val;
+          }
+
           // Force a resync of preferences with value.
           switch (this.type) {
           case "int":
@@ -308,9 +366,12 @@
             break;
           case "string":
           case "unichar":
-            var pref = Components.classes["@mozilla.org/preferences;1"] 
-                                 .getService(Components.interfaces.nsIPref);
-            pref.SetUnicharPref(this.name, val);
+          case "fontname":
+            var iss = Components.classes["@mozilla.org/supports-string;1"]
+                                .createInstance(Components.interfaces.nsISupportsString);
+            iss.data = val;
+            this.preferences.rootBranch
+                .setComplexValue(this.name, Components.interfaces.nsISupportsString, iss);
             break;
           case "file":
             var lf;
@@ -326,6 +387,8 @@
             this.preferences.rootBranch
                 .setComplexValue(this.name, Components.interfaces.nsILocalFile, lf);
             break;
+          default:
+            this._reportUnknownType();
           }
           if (!this.batching)
             this.preferences.service.savePrefFile(null);
@@ -343,7 +406,7 @@
 
           if (!this.isElementEditable(aElement))
             return;
-          
+
           var rv = undefined;
           if (aElement.hasAttribute("onsyncfrompreference")) {
             // Value changed, synthesize an event
@@ -352,14 +415,17 @@
               event.initEvent("syncfrompreference", true, true);
               var f = new Function ("event", 
                                     aElement.getAttribute("onsyncfrompreference"));
-              rv = f(event);
+              rv = f.call(aElement, event);
             }
             catch (e) {
-              dump(e);
+              Components.utils.reportError(e);
             }
           }
           var val = rv !== undefined ? rv : (this.instantApply ? this.valueFromPreferences : this.value);
-          
+          // if the preference is marked for reset, show default value in UI
+          if (val === undefined)
+            val = this.defaultValue;
+
           /**
            * Initialize a UI element property with a value. Handles the case 
            * where an element has not yet had a XBL binding attached for it and
@@ -373,7 +439,8 @@
             else
               element.setAttribute(attribute, value);
           }
-          if (aElement.localName == "checkbox")
+          if (aElement.localName == "checkbox" ||
+              aElement.localName == "listitem")
             setValue(aElement, "checked", val);
           else if (aElement.localName == "colorpicker")
             setValue(aElement, "color", val);
@@ -401,12 +468,12 @@
               event.initEvent("synctopreference", true, true);
               var f = new Function ("event", 
                                     aElement.getAttribute("onsynctopreference"));
-              var rv = f(event);
+              var rv = f.call(aElement, event);
               if (rv !== undefined) 
                 return rv;
             }
             catch (e) {
-              dump(e);
+              Components.utils.reportError(e);
             }
           }
           
@@ -421,7 +488,8 @@
               return element[attribute];
             return element.getAttribute(attribute);
           }
-          if (aElement.localName == "checkbox")
+          if (aElement.localName == "checkbox" ||
+              aElement.localName == "listitem")
             var value = getValue(aElement, "checked");
           else if (aElement.localName == "colorpicker")
             value = getValue(aElement, "color");
@@ -430,8 +498,7 @@
 
           switch (this.type) {
           case "int":
-            var intValue = parseInt(value, 10) + '';
-            return intValue != "NaN" ? intValue : 0;
+            return parseInt(value, 10) || 0;
           case "bool":
             return typeof(value) == "boolean" ? value : value == "true";
           }
@@ -490,16 +557,16 @@
     <content dlgbuttons="accept,cancel" persist="lastSelected screenX screenY"
              closebuttonlabel="&preferencesCloseButton.label;"
              closebuttonaccesskey="&preferencesCloseButton.accesskey;"
-             xmlns:xhtml2="http://www.w3.org/TR/xhtml2"
-             xmlns:wairole="http://www.w3.org/2005/01/wai-rdf/GUIRoleTaxonomy#"
-             xhtml2:role="wairole:dialog"
+             role="dialog"
 #ifdef XP_WIN
              title="&preferencesDefaultTitleWin.title;">
 #else
              title="&preferencesDefaultTitleMac.title;">
 #endif
-      <xul:radiogroup anonid="selector" orient="horizontal" class="paneSelector chromeclass-toolbar"
-                      xhtml2:role="wairole:list"/> <!-- Expose to accessibility APIs as a list -->
+      <xul:windowdragbox orient="vertical">
+        <xul:radiogroup anonid="selector" orient="horizontal" class="paneSelector chromeclass-toolbar"
+                        role="listbox"/> <!-- Expose to accessibility APIs as a listbox -->
+      </xul:windowdragbox>
       <xul:hbox flex="1" class="paneDeckContainer">
         <xul:deck anonid="paneDeck" flex="1">
           <children includes="prefpane"/>
@@ -533,7 +600,6 @@
     <implementation implements="nsITimerCallback">
       <constructor>
       <![CDATA[
-        this.setAttribute("animate", !this._shouldAnimate ? "off" : "on");
         if (this.type != "child") {
           var psvc = Components.classes["@mozilla.org/preferences-service;1"]
                                .getService(Components.interfaces.nsIPrefBranch);
@@ -556,6 +622,7 @@
 #endif
           }
         }
+        this.setAttribute("animated", this._shouldAnimate ? "true" : "false");
         var panes = this.preferencePanes;
 
         var lastPane = null;
@@ -612,6 +679,8 @@
       <property name="type" onget="return this.getAttribute('type');"/>
       <property name="_paneDeck"
                 onget="return document.getAnonymousElementByAttribute(this, 'anonid', 'paneDeck');"/>
+      <property name="_paneDeckContainer"
+                onget="return document.getAnonymousElementByAttribute(this, 'class', 'paneDeckContainer');"/>
       <property name="_selector"
                 onget="return document.getAnonymousElementByAttribute(this, 'anonid', 'selector');"/>
       <property name="lastSelected" 
@@ -622,7 +691,17 @@
           return val;
         </setter>          
       </property>
-      <field name="currentPane">null</field>
+      <property name="currentPane"
+                onset="return this._currentPane = val;">
+        <getter>
+          if (!this._currentPane)
+            this._currentPane = this.preferencePanes[0];
+          
+          return this._currentPane;
+        </getter> 
+      </property>
+      <field name="_currentPane">null</field>
+      
       
       <method name="_makePaneButton">
         <parameter name="aPaneElement"/>
@@ -646,6 +725,9 @@
         <parameter name="aPaneElement"/>
         <body>
         <![CDATA[
+          if (!aPaneElement)
+            return;
+
           this._selector.selectedItem = document.getAnonymousElementByAttribute(this, "pane", aPaneElement.id);
           if (!aPaneElement.loaded) {
             function OverlayLoadObserver(aPane)
@@ -690,7 +772,7 @@
             return !cancel;  
           }
           catch (e) { 
-            dump(e);
+            Components.utils.reportError(e);
           }
           return false;
         ]]>
@@ -707,41 +789,68 @@
           if (paneTitle != "")
             document.title = paneTitle;
 #endif
+          var helpButton = document.documentElement.getButton("help");
+          if (aPaneElement.helpTopic)
+            helpButton.hidden = false;
+          else
+            helpButton.hidden = true;
 
           // Find this pane's index in the deck and set the deck's 
           // selectedIndex to that value to switch to it.
           var prefpanes = this.preferencePanes;
           for (var i = 0; i < prefpanes.length; ++i) {
             if (prefpanes[i] == aPaneElement) {
-              this._paneDeck.setAttribute("selectedIndex", i);
+              this._paneDeck.selectedIndex = i;
               
               if (this.type != "child") {
-                // Don't let the new pane content flex to the current window
-                // height if we're animating
-                if (this._shouldAnimate)
+                if (aPaneElement.hasAttribute("flex") && this._shouldAnimate &&
+                    prefpanes.length > 1)
                   aPaneElement.removeAttribute("flex");
+                // Calling sizeToContent after the first prefpane is loaded
+                // will size the windows contents so style information is
+                // available to calculate correct sizing.
+                if (!this._initialized && prefpanes.length > 1) {
+                  if (this._shouldAnimate)
+                    this.style.minHeight = 0;
+                  window.sizeToContent();
+                }
 
                 var oldPane = this.lastSelected ? document.getElementById(this.lastSelected) : this.preferencePanes[0];
                 oldPane.selected = !(aPaneElement.selected = true);
-                if (!this._initialized || oldPane.id != aPaneElement.id) {
-                  this.lastSelected = aPaneElement.id;
-                  this.currentPane = aPaneElement;
-                  if (this._shouldAnimate) {
-                    aPaneElement.style.opacity = 0.0;
-                    this.animate(oldPane, aPaneElement);
+                this.lastSelected = aPaneElement.id;
+                this.currentPane = aPaneElement;
+                this._initialized = true;
+
+                // Only animate if we've switched between prefpanes
+                if (this._shouldAnimate && oldPane.id != aPaneElement.id) {
+                  aPaneElement.style.opacity = 0.0;
+                  this.animate(oldPane, aPaneElement);
+                }
+                else if (!this._shouldAnimate && prefpanes.length > 1) {
+                  var targetHeight = parseInt(window.getComputedStyle(this._paneDeckContainer, "").height);
+                  var verticalPadding = parseInt(window.getComputedStyle(aPaneElement, "").paddingTop);
+                  verticalPadding += parseInt(window.getComputedStyle(aPaneElement, "").paddingBottom);
+                  if (aPaneElement.contentHeight > targetHeight - verticalPadding) {
+                    // To workaround the bottom border of a groupbox from being
+                    // cutoff an hbox with a class of bottomBox may enclose it.
+                    // This needs to include its padding to resize properly.
+                    // See bug 394433
+                    var bottomPadding = 0;
+                    var bottomBox = aPaneElement.getElementsByAttribute("class", "bottomBox")[0];
+                    if (bottomBox)
+                      bottomPadding = parseInt(window.getComputedStyle(bottomBox, "").paddingBottom);
+                    window.innerHeight += bottomPadding + verticalPadding + aPaneElement.contentHeight - targetHeight;
                   }
-                  this._initialized = true;
+
+                  // XXX rstrong - extend the contents of the prefpane to
+                  // prevent elements from being cutoff (see bug 349098).
+                  if (aPaneElement.contentHeight + verticalPadding < targetHeight)
+                    aPaneElement._content.style.height = targetHeight - verticalPadding + "px";
                 }
               }
               break;
             }
           }
-
-          var helpButton = document.documentElement.getButton("help");
-          if (aPaneElement.hasAttribute("helpURI"))
-            helpButton.hidden = false;
-          else
-            helpButton.hidden = true;
         ]]>
         </body>
       </method>
@@ -918,67 +1027,8 @@
         ]]>
         </body>
       </method>
-      
-      // copied from contextHelp.js
-      // Locate existing help window for this helpFileURI.
-      <method name="locateHelpWindow">
-        <parameter name="helpFileURI"/>
-        <body>
-        <![CDATA[
-          const wm = Components.classes['@mozilla.org/appshell/window-mediator;1']
-                               .getService(Components.interfaces.nsIWindowMediator);
-          const iterator = wm.getEnumerator("mozilla:help");
-          var topWindow = null;
-          var aWindow;
-
-          // Loop through help windows looking for one with selected helpFileURI
-          while (iterator.hasMoreElements()) {
-            aWindow = iterator.getNext();
-            if (aWindow.getHelpFileURI() == helpFileURI)
-              topWindow = aWindow;
-          }
-          return topWindow;
-        ]]>
-        </body>
-      </method>
-      
-      // copied from contextHelp.js
-      // Opens up the Help Viewer with the specified topic and helpFileURI.
-      <method name="openHelp">
-        <parameter name="topic"/>
-        <parameter name="helpFileURI"/>
-        <body>
-        <![CDATA[
-          // Try to find previously opened help.
-          var topWindow = this.locateHelpWindow(helpFileURI);
-
-          if (topWindow) {
-          // Open topic in existing window.
-            topWindow.focus();
-            topWindow.displayTopic(topic);
-          }
-          else {
-          // Open topic in new window.
-            const params = Components.classes["@mozilla.org/embedcomp/dialogparam;1"]
-                                     .createInstance(Components.interfaces.nsIDialogParamBlock);
-            params.SetNumberStrings(2);
-            params.SetString(0, helpFileURI);
-            params.SetString(1, topic);
-            const ww = Components.classes["@mozilla.org/embedcomp/window-watcher;1"]
-                                 .getService(Components.interfaces.nsIWindowWatcher);
-            ww.openWindow(null, "chrome://help/content/help.xul", "_blank", "chrome,all,alwaysRaised,dialog=no", params);
-          }
-        ]]>
-        </body>
-      </method>
     </implementation>
     <handlers>
-      <handler event="dialoghelp">
-        // currentPane is set in _selectPane for prefwindows which aren't childs.
-        // So if there's no currentPane, just use the first pane.
-        var pane = this.currentPane ? this.currentPane : this.preferencePanes[0];
-        this.openHelp(pane.helpTopic, pane.getAttribute("helpURI"));
-      </handler>
       <handler event="dialogaccept">
       <![CDATA[
         if (!this._fireEvent("beforeaccept", this)) 
@@ -1051,13 +1101,34 @@
       <handler event="command">
         if (event.originalTarget.hasAttribute("pane")) {
           var pane = document.getElementById(event.originalTarget.getAttribute("pane"));
-          event.originalTarget.parentNode.parentNode.showPane(pane);
+          this.showPane(pane);
         }
       </handler>
 
       <handler event="keypress" key="&windowClose.key;" modifiers="accel" phase="capturing">
+      <![CDATA[
         if (this.instantApply)
           window.close();
+        event.stopPropagation();
+        event.preventDefault();
+      ]]>
+      </handler>
+
+      <handler event="keypress"
+#ifdef XP_MACOSX
+               key="&openHelpMac.commandkey;" modifiers="accel"
+#else
+               keycode="&openHelp.commandkey;"
+#endif
+               phase="capturing">
+      <![CDATA[
+        var helpButton = this.getButton("help");
+        if (helpButton.disabled || helpButton.hidden)
+          return;
+        this._fireEvent("dialoghelp", this);
+        event.stopPropagation();
+        event.preventDefault();
+      ]]>
       </handler>
     </handlers>
   </binding>
@@ -1227,12 +1298,11 @@
       <xul:image class="paneButtonIcon" xbl:inherits="src"/>
       <xul:label class="paneButtonLabel" xbl:inherits="value=label"/>
     </content>
-    <implementation implements="nsIAccessibleProvider">
-      <property name="accessible">
+    <implementation implements="nsIAccessible">
+      <property name="accessibleType" readonly="true">
         <getter>
           <![CDATA[
-            var accService = Components.classes["@mozilla.org/accessibilityService;1"].getService(Components.interfaces.nsIAccessibilityService);
-            return accService.createXULListitemAccessible(this);
+            return Components.interfaces.nsIAccessibleProvider.XULListitem;
           ]]>
         </getter>
       </property>
@@ -1264,7 +1334,7 @@
 #
 # Contributor(s):
 #   Ben Goodger <ben@mozilla.org>
-#   Josh Aas <joshmoz@gmail.com>
+#   Josh Aas <josh@mozilla.com>
 #
 # Alternatively, the contents of this file may be used under the terms of
 # either the GNU General Public License Version 2 or later (the "GPL"), or

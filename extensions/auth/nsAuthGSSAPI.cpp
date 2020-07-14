@@ -72,6 +72,10 @@ typedef KLStatus (*KLCacheHasValidTickets_type)(
     char **);
 #endif
 
+#if defined(HAVE_RES_NINIT)
+#include <resolv.h>
+#endif
+
 //-----------------------------------------------------------------------------
 
 // We define GSS_C_NT_HOSTBASED_SERVICE explicitly since it may be referenced
@@ -103,7 +107,7 @@ static const char *gssFuncStr[] = {
 
 static PRFuncPtr gssFunPtr[gssFuncItems]; 
 static PRBool    gssNativeImp = PR_TRUE;
-static PRBool    gssFunInit = PR_FALSE;
+static PRLibrary* gssLibrary = nsnull;
 
 #define gss_display_status_ptr      ((gss_display_status_type)*gssFunPtr[0])
 #define gss_init_sec_context_ptr    ((gss_init_sec_context_type)*gssFunPtr[1])
@@ -223,7 +227,7 @@ gssInit()
     }
 #endif
 
-    gssFunInit = PR_TRUE;
+    gssLibrary = lib;
     return NS_OK;
 }
 
@@ -242,7 +246,7 @@ LogGssError(OM_uint32 maj_stat, OM_uint32 min_stat, const char *prefix)
     nsCAutoString errorStr;
     errorStr.Assign(prefix);
 
-    if (!gssFunInit)
+    if (!gssLibrary)
         return;
 
     errorStr += ": ";
@@ -296,7 +300,7 @@ nsAuthGSSAPI::nsAuthGSSAPI(pType package)
 
     mComplete = PR_FALSE;
 
-    if (!gssFunInit && NS_FAILED(gssInit()))
+    if (!gssLibrary && NS_FAILED(gssInit()))
         return;
 
     mCtx = GSS_C_NO_CONTEXT;
@@ -340,7 +344,7 @@ nsAuthGSSAPI::nsAuthGSSAPI(pType package)
 void
 nsAuthGSSAPI::Reset()
 {
-    if (gssFunInit && mCtx != GSS_C_NO_CONTEXT) {
+    if (gssLibrary && mCtx != GSS_C_NO_CONTEXT) {
         OM_uint32 minor_status;
         gss_delete_sec_context_ptr(&minor_status, &mCtx, GSS_C_NO_BUFFER);
     }
@@ -348,7 +352,17 @@ nsAuthGSSAPI::Reset()
     mComplete = PR_FALSE;
 }
 
-NS_IMPL_ISUPPORTS1(nsAuthGSSAPI, nsIAuthModule)
+/* static */ void
+nsAuthGSSAPI::Shutdown()
+{
+    if (gssLibrary) {
+        PR_UnloadLibrary(gssLibrary);
+        gssLibrary = nsnull;
+    }
+}
+
+/* Limitations apply to this class's thread safety. See the header file */
+NS_IMPL_THREADSAFE_ISUPPORTS1(nsAuthGSSAPI, nsIAuthModule)
 
 NS_IMETHODIMP
 nsAuthGSSAPI::Init(const char *serviceName,
@@ -365,7 +379,7 @@ nsAuthGSSAPI::Init(const char *serviceName,
 
     LOG(("entering nsAuthGSSAPI::Init()\n"));
 
-    if (!gssFunInit)
+    if (!gssLibrary)
        return NS_ERROR_NOT_INITIALIZED;
 
     mServiceName = serviceName;
@@ -390,7 +404,7 @@ nsAuthGSSAPI::GetNextToken(const void *inToken,
 
     LOG(("entering nsAuthGSSAPI::GetNextToken()\n"));
 
-    if (!gssFunInit)
+    if (!gssLibrary)
        return NS_ERROR_NOT_INITIALIZED;
 
     // If they've called us again after we're complete, reset to start afresh.
@@ -406,6 +420,9 @@ nsAuthGSSAPI::GetNextToken(const void *inToken,
     input_token.value = (void *)mServiceName.get();
     input_token.length = mServiceName.Length() + 1;
 
+#if defined(HAVE_RES_NINIT)
+    res_ninit(&_res);
+#endif
     major_status = gss_import_name_ptr(&minor_status,
                                    &input_token,
                                    &gss_c_nt_hostbased_service,
@@ -436,12 +453,14 @@ nsAuthGSSAPI::GetNextToken(const void *inToken,
     // Suppress Kerberos prompts to get credentials.  See bug 240643.
     // We can only use Mac OS X specific kerb functions if we are using 
     // the native lib
-
-    KLBoolean found;
-    if (gssNativeImp &&
-         (KLCacheHasValidTickets_ptr(NULL, kerberosVersion_V5, &found, NULL,
-                                NULL)
-         != klNoErr || !found))
+    KLBoolean found;    
+    PRBool doingMailTask = mServiceName.Find("imap@") ||
+                           mServiceName.Find("pop@") ||
+                           mServiceName.Find("smtp@") ||
+                           mServiceName.Find("ldap@");
+    
+    if (!doingMailTask && (gssNativeImp &&
+         (KLCacheHasValidTickets_ptr(NULL, kerberosVersion_V5, &found, NULL, NULL) != klNoErr || !found)))
     {
         major_status = GSS_S_FAILURE;
         minor_status = 0;

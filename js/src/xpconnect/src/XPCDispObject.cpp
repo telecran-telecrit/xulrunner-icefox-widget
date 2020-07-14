@@ -60,7 +60,7 @@ XPCDispObject::WrapIDispatch(IDispatch *pDispatch, XPCCallContext &ccx,
     // Wrap the desired COM object
     nsCOMPtr<nsIXPConnectJSObjectHolder> holder;
     nsresult rv = ccx.GetXPConnect()->WrapNative(
-        ccx, obj, NS_REINTERPRET_CAST(nsISupports*, pDispatch), NSID_IDISPATCH,
+        ccx, obj, reinterpret_cast<nsISupports*>(pDispatch), NSID_IDISPATCH,
         getter_AddRefs(holder));
     if(NS_FAILED(rv) || !holder)
     {
@@ -230,7 +230,7 @@ JSBool XPCDispObject::Dispatch(XPCCallContext& ccx, IDispatch * disp,
                         jsval * argv = ccx.GetArgv();
                         // Out, in/out parameters must be objects
                         if(!JSVAL_IS_OBJECT(argv[index]) ||
-                            !OBJ_SET_PROPERTY(ccx, JSVAL_TO_OBJECT(argv[index]),
+                            !JS_SetPropertyById(ccx, JSVAL_TO_OBJECT(argv[index]),
                                 rt->GetStringID(XPCJSRuntime::IDX_VALUE), &val))
                             return ThrowBadParam(NS_ERROR_XPC_CANT_SET_OUT_VAL, index, ccx);
                     }
@@ -274,7 +274,7 @@ JSBool XPCDispObject::Invoke(XPCCallContext & ccx, CallMode mode)
     }
 
     // TODO: Remove type cast and change GetIDispatchMember to use the correct type
-    XPCDispInterface::Member* member = NS_REINTERPRET_CAST(XPCDispInterface::Member*,ccx.GetIDispatchMember());
+    XPCDispInterface::Member* member = reinterpret_cast<XPCDispInterface::Member*>(ccx.GetIDispatchMember());
     XPCJSRuntime* rt = ccx.GetRuntime();
     XPCContext* xpcc = ccx.GetXPCContext();
     XPCPerThreadData* tls = ccx.GetThreadData();
@@ -322,8 +322,8 @@ JSBool XPCDispObject::Invoke(XPCCallContext & ccx, CallMode mode)
         return JS_FALSE;
     }
 
-    IDispatch * pObj = NS_REINTERPRET_CAST(IDispatch*,
-                                            ccx.GetTearOff()->GetNative());
+    IDispatch * pObj = reinterpret_cast<IDispatch*>
+                                       (ccx.GetTearOff()->GetNative());
     PRUint32 args = member->GetParamCount();
     uintN err;
     // Make sure setter has one argument
@@ -357,9 +357,8 @@ JSBool XPCDispObject::Invoke(XPCCallContext & ccx, CallMode mode)
                 if(paramInfo.IsOut())
                 {
                     if(JSVAL_IS_PRIMITIVE(val) ||
-                        !OBJ_GET_PROPERTY(ccx, JSVAL_TO_OBJECT(val),
-                                          rt->GetStringID(XPCJSRuntime::IDX_VALUE),
-                                          &val))
+                        !JS_GetPropertyById(ccx, JSVAL_TO_OBJECT(val),
+                            rt->GetStringID(XPCJSRuntime::IDX_VALUE), &val))
                     {
                         delete params;
                         return ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, index, ccx);
@@ -423,12 +422,12 @@ JSBool GetMember(XPCCallContext& ccx, JSObject* funobj, XPCNativeInterface*& ifa
         return JS_FALSE;
     if(!JSVAL_IS_INT(val))
         return JS_FALSE;
-    iface = NS_REINTERPRET_CAST(XPCNativeInterface*,JSVAL_TO_PRIVATE(val));
+    iface = reinterpret_cast<XPCNativeInterface*>(JSVAL_TO_PRIVATE(val));
     if(!JS_GetReservedSlot(ccx, funobj, 0, &val))
         return JS_FALSE;
     if(!JSVAL_IS_INT(val))
         return JS_FALSE;
-    member = NS_REINTERPRET_CAST(XPCDispInterface::Member*,JSVAL_TO_PRIVATE(val));
+    member = reinterpret_cast<XPCDispInterface::Member*>(JSVAL_TO_PRIVATE(val));
     return JS_TRUE;
 }
 
@@ -458,7 +457,7 @@ JSBool GetMember(XPCCallContext& ccx, JSObject* funobj, XPCNativeInterface*& ifa
  * @param vp The return value
  * @return Returns JS_TRUE if the operation succeeded
  */
-JSBool JS_DLL_CALLBACK
+JSBool
 XPC_IDispatch_CallMethod(JSContext* cx, JSObject* obj, uintN argc,
                          jsval* argv, jsval* vp)
 {
@@ -492,7 +491,7 @@ XPC_IDispatch_CallMethod(JSContext* cx, JSObject* obj, uintN argc,
  * @param vp The return value
  * @return Returns JS_TRUE if the operation succeeded
  */
-JSBool JS_DLL_CALLBACK
+JSBool
 XPC_IDispatch_GetterSetter(JSContext *cx, JSObject *obj, uintN argc,
                            jsval *argv, jsval *vp)
 {

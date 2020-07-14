@@ -9,22 +9,9 @@
     <resources>
       <stylesheet src="chrome://global/skin/toolbar.css"/>
     </resources>
-    <implementation implements="nsIAccessibleProvider">
-      <property name="accessible">
-        <getter>
-          <![CDATA[
-            var accService = Components.classes["@mozilla.org/accessibilityService;1"].getService(Components.interfaces.nsIAccessibilityService);
-            if (this.localName == "toolbarseparator")
-              return accService.createXULToolbarSeparatorAccessible(this);
-            else
-              return accService.createXULToolbarAccessible(this);
-          ]]>
-        </getter>
-      </property>
-    </implementation>
   </binding>
   
-  <binding id="toolbox" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base">  
+  <binding id="toolbox" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base">
     <implementation>
       <field name="palette">
         null
@@ -38,6 +25,11 @@
         0
       </field>
       
+      <!-- Set by customizeToolbar.js -->
+      <field name="customizing">
+        false
+      </field>
+
       <constructor>
         <![CDATA[
           // Look to see if there is a toolbarset.
@@ -83,7 +75,12 @@
   </binding>
   
   <binding id="toolbar" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base">
-    <implementation>
+    <implementation implements="nsIAccessibleProvider">
+      <property name="accessibleType" readonly="true">
+        <getter>
+          return Components.interfaces.nsIAccessibleProvider.XULToolbar;
+        </getter>
+      </property>
       <field name="firstPermanentChild">
         null
       </field>
@@ -164,30 +161,36 @@
         
         <setter>
           <![CDATA[
+            var palette = this.parentNode.palette;
             // Remove all items before the first permanent child and after the last permanent child.
-            while (this.lastChild) {
-              if (this.lastChild == this.lastPermanentChild ||
-                  (this.lastChild.localName == "toolbarpaletteitem" &&
-                  this.lastChild.firstChild == this.lastPermanentChild))
-                break;
-              this.removeChild(this.lastChild);
+            while (this.lastChild != this.lastPermanentChild) {
+              switch (this.lastChild.localName) {
+                case "toolbarseparator":
+                case "toolbarspring":
+                case "toolbarspacer":
+                  this.removeChild(this.lastChild);
+                  break;
+                default:
+                  palette.appendChild(this.lastChild);
+              }
             }
 
-            while (this.firstChild) {
-              if (this.firstChild == this.firstPermanentChild ||
-                  (this.firstChild.localName == "toolbarpaletteitem" &&
-                  this.firstChild.firstChild == this.firstPermanentChild))
-                break;
-              this.removeChild(this.firstChild);
+            while (this.firstChild != this.firstPermanentChild) {
+              switch (this.firstChild.localName) {
+                case "toolbarseparator":
+                case "toolbarspring":
+                case "toolbarspacer":
+                  this.removeChild(this.firstChild);
+                  break;
+                default:
+                  palette.appendChild(this.firstChild);
+              }
             }
 
             var firstChildID = this.firstPermanentChild ? this.firstPermanentChild.id : "";
             var lastChildID = this.lastPermanentChild ? this.lastPermanentChild.id : "";
 
-            if (val == "__empty")
-              return;
-
-            if (val) {
+            if (val && val != "__empty") {
               var itemIds = val.split(",");
               var before = true;
               for (var i = 0; i < itemIds.length; i++) {
@@ -197,6 +200,8 @@
                   this.insertItem(itemIds[i], null, null, before);
               }
             }
+
+            return val;
           ]]>
         </setter>
       </property>
@@ -217,32 +222,32 @@
                                                  "toolbarseparator");
               uniqueId = (new Date()).getTime()+this.childNodes.length;
               newItem.id = "separator" + uniqueId;
+              newItem.className = "chromeclass-toolbar-additional";
             } else if (aId == "spring") {
               newItem = document.createElementNS("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul",
                                                  "toolbarspring");
               uniqueId = (new Date()).getTime()+this.childNodes.length;
               newItem.flex = 1;
               newItem.id = "spring" + uniqueId;
+              newItem.className = "chromeclass-toolbar-additional";
             } else if (aId == "spacer") {
               newItem = document.createElementNS("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul",
                                                  "toolbarspacer");
               uniqueId = (new Date()).getTime()+this.childNodes.length;
               newItem.id = "spacer" + uniqueId;
-            } else {
-              // Attempt to locate an item with a matching id within palette.
-              var paletteItem = this.parentNode.palette.firstChild;
-              while (paletteItem) {
-                var paletteId = paletteItem.id;
-                if (paletteId == aId) {
-                  newItem = paletteItem.cloneNode(true);
-                  break;
-                }
-                paletteItem = paletteItem.nextSibling;
+              newItem.className = "chromeclass-toolbar-additional";
+            } else if (this.parentNode.localName == "toolbox") {
+              // Attempt to locate an item with a matching id within document.
+              newItem = document.getElementById(aId);
+              if (!newItem || newItem.parentNode.parentNode != this.parentNode) {
+                // Attempt to locate an item with a matching id within palette.
+                // The palette does not live in the document by default.
+                newItem = this.parentNode.palette
+                              .getElementsByAttribute("id", aId).item(0);
+                if (!newItem || newItem.parentNode != this.parentNode.palette)
+                  return false;
               }
             }
-            
-            if (!newItem)
-              return false;
 
             var insertItem = newItem;
             
@@ -267,13 +272,27 @@
     </implementation>
   </binding>
 
+  <binding id="toolbar-drag"
+           extends="chrome://global/content/bindings/toolbar.xml#toolbar">
+    <implementation>
+      <constructor>
+        try {
+          Components.utils.import("resource://gre/modules/WindowDraggingUtils.jsm");
+          let draggableThis = new WindowDraggingElement(this, window);
+          draggableThis.mouseDownCheck = function(e) {
+            return !this.parentNode.customizing; // Don't move while customizing.
+          }
+        } catch (e) {}
+      </constructor>
+    </implementation>
+  </binding>
+
   <binding id="menubar" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base" display="xul:menubar">
     <implementation implements="nsIAccessibleProvider">
-      <property name="accessible">
+      <property name="accessibleType" readonly="true">
         <getter>
           <![CDATA[
-            var accService = Components.classes["@mozilla.org/accessibilityService;1"].getService(Components.interfaces.nsIAccessibilityService);
-            return accService.createXULMenubarAccessible(this);
+            return Components.interfaces.nsIAccessibleProvider.XULMenubar;
           ]]>
         </getter>
        </property>
@@ -281,8 +300,8 @@
        <field name="_statusbar">null</field>
        <field name="_originalStatusText">null</field>
        <property name="statusbar" onget="return this.getAttribute('statusbar');"
-                                  onset="return this.setAttribute('statusbar', val)"/>
-       <method name="updateStatusText">
+                                  onset="this.setAttribute('statusbar', val); return val;"/>
+       <method name="_updateStatusText">
           <parameter name="itemText"/>
           <body>
            <![CDATA[
@@ -314,12 +333,20 @@
             this._statusbar.label = this._originalStatusText;
           ]]>
         </handler>
-        <handler event="DOMMenuItemActive">this.updateStatusText(event.target.statusText);</handler>
-        <handler event="DOMMenuItemInactive">this.updateStatusText("");</handler>
+        <handler event="DOMMenuItemActive">this._updateStatusText(event.target.statusText);</handler>
+        <handler event="DOMMenuItemInactive">this._updateStatusText("");</handler>
     </handlers>
   </binding>
 
-  <binding id="toolbardecoration" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base"/>
+  <binding id="toolbardecoration" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base">
+    <implementation implements="nsIAccessibleProvider">
+      <property name="accessibleType" readonly="true">
+        <getter>
+          return Components.interfaces.nsIAccessibleProvider.XULToolbarSeparator;
+        </getter>
+      </property>
+    </implementation>
+  </binding>
 
   <binding id="toolbarpaletteitem" extends="chrome://global/content/bindings/toolbar.xml#toolbar-base" display="xul:button">
     <content>

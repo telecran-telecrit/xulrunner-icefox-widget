@@ -47,6 +47,8 @@
 
 /**
  * Valid mask values for nsEscape
+ * Note: these values are copied in nsINetUtil.idl. Any changes should be kept
+ * in sync.
  */
 typedef enum {
  	url_All       = 0         /**< %-escape every byte uncondtionally */
@@ -97,6 +99,9 @@ nsEscapeHTML2(const PRUnichar *aSourceBuffer,
 
 /**
  * NS_EscapeURL/NS_UnescapeURL constants for |flags| parameter:
+ *
+ * Note: These values are copied to nsINetUtil.idl
+ *       Any changes should be kept in sync
  */
 enum EscapeMask {
   /** url components **/
@@ -117,7 +122,7 @@ enum EscapeMask {
   esc_OnlyASCII      = PR_BIT(11), /* causes non-ascii octets to be skipped */
   esc_OnlyNonASCII   = PR_BIT(12), /* causes _graphic_ ascii octets (0x20-0x7E) 
                                     * to be skipped when escaping. causes all
-                                    * ascii octets to be skipped when unescaping */
+                                    * ascii octets (<= 0x7F) to be skipped when unescaping */
   esc_AlwaysCopy     = PR_BIT(13), /* copy input to result buf even if escaping is unnecessary */
   esc_Colon          = PR_BIT(14), /* forces escape of colon */
   esc_SkipControl    = PR_BIT(15)  /* skips C0 and DEL from unescaping */
@@ -178,42 +183,6 @@ NS_UnescapeURL(const nsCSubstring &str, PRUint32 flags, nsCSubstring &result) {
         return result;
     return str;
 }
-
-// nsACString is nsCSubstring when MOZ_V1_STRING_ABI is undefined.
-#ifdef MOZ_V1_STRING_ABI
-inline const nsACString &
-NS_EscapeURL(const nsACString &str, PRUint32 flags, nsACString &result) {
-    // The iterator version of BeginReading provides us with both the data
-    // pointer and the length with only one function call.
-    nsACString::const_iterator iter;
-    str.BeginReading(iter);
-    if (NS_EscapeURL(iter.get(), iter.size_forward(), flags, result))
-        return result;
-    return str;
-}
-inline const nsACString &
-NS_EscapeURL(const nsCSubstring &str, PRUint32 flags, nsACString &result) {
-    if (NS_EscapeURL(str.Data(), str.Length(), flags, result))
-        return result;
-    return str;
-}
-inline const nsACString &
-NS_UnescapeURL(const nsACString &str, PRUint32 flags, nsACString &result) {
-    // The iterator version of BeginReading provides us with both the data
-    // pointer and the length with only one function call.
-    nsACString::const_iterator iter;
-    str.BeginReading(iter);
-    if (NS_UnescapeURL(iter.get(), iter.size_forward(), flags, result))
-        return result;
-    return str;
-}
-inline const nsACString &
-NS_UnescapeURL(const nsCSubstring &str, PRUint32 flags, nsACString &result) {
-    if (NS_UnescapeURL(str.Data(), str.Length(), flags, result))
-        return result;
-    return str;
-}
-#endif  // MOZ_V1_STRING_ABI
 
 /**
  * CString version of nsEscape. Returns true on success, false

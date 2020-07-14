@@ -50,8 +50,6 @@ SHORT_LIBNAME  = gkparser
 GRE_MODULE	= 1
 LIBXUL_LIBRARY = 1
 
-PACKAGE_FILE = parser.pkg
-
 REQUIRES	= xpcom \
 		  string \
 		  necko \
@@ -66,15 +64,19 @@ REQUIRES	= xpcom \
 		  nkcache \
 		  intl \
 		  xpconnect \
+		  layout \
+		  widget \
+		  caps \
+		  js \
 		  $(NULL)
 
 SHARED_LIBRARY_LIBS = \
-		$(DIST)/lib/$(LIB_PREFIX)expat_s.$(LIB_SUFFIX) \
+		$(DEPTH)/parser/expat/lib/$(LIB_PREFIX)mozexpat_s.$(LIB_SUFFIX) \
 		$(DEPTH)/parser/xml/src/$(LIB_PREFIX)saxp.$(LIB_SUFFIX) \
 		$(NULL)
 
 ifdef MOZ_PERF_METRICS
-EXTRA_DSO_LIBS	+= mozutil_s
+SHARED_LIBRARY_LIBS +=	$(DEPTH)/modules/libutil/src/$(LIB_PREFIX)mozutil_s.$(LIB_SUFFIX)
 endif
 
 CPPSRCS = \
@@ -84,7 +86,6 @@ CPPSRCS = \
 		nsElementTable.cpp  \
 		nsExpatDriver.cpp   \
 		CNavDTD.cpp         \
-		COtherDTD.cpp       \
 		nsHTMLEntities.cpp  \
 		nsHTMLTags.cpp      \
 		nsHTMLTokens.cpp    \
@@ -118,3 +119,5 @@ EXTRA_DSO_LDOPTS += \
 		$(NULL)
 
 include $(topsrcdir)/config/rules.mk
+
+LOCAL_INCLUDES += -I$(topsrcdir)/xpcom/io

@@ -37,7 +37,7 @@
 /*
  * CMS recipient list functions
  *
- * $Id: cmsreclist.c,v 1.4.2.1 2006/07/17 21:57:12 alexei.volkov.bugs%sun.com Exp $
+ * $Id: cmsreclist.c,v 1.5 2006/07/17 21:57:35 alexei.volkov.bugs%sun.com Exp $
  */
 
 #include "cmslocal.h"

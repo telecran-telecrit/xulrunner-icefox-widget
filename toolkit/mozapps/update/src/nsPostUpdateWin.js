@@ -46,8 +46,7 @@ const URI_BRAND_PROPERTIES     = "chrome://branding/locale/brand.properties";
 
 const KEY_APPDIR          = "XCurProcD";
 const KEY_TMPDIR          = "TmpD";
-const KEY_LOCALDATA       = "DefProfLRt";
-const KEY_PROGRAMFILES    = "ProgF";
+const KEY_UPDROOT         = "UpdRootD";
 const KEY_UAPPDATA        = "UAppData";
 
 // see prio.h
@@ -83,15 +82,6 @@ function getFile(key) {
       Components.classes["@mozilla.org/file/directory_service;1"].
       getService(Components.interfaces.nsIProperties);
   return dirSvc.get(key, Components.interfaces.nsIFile);
-}
-
-/**
- * Return the full path given a relative path and a base directory.
- */
-function getFileRelativeTo(dir, relPath) {
-  var file = dir.clone().QueryInterface(Components.interfaces.nsILocalFile);
-  file.setRelativeDescriptor(dir, relPath);
-  return file;
 }
 
 /**
@@ -187,29 +177,19 @@ InstallLogWriter.prototype = {
 
     // See the local appdata first if app dir is under Program Files.
     var file = null;
-    var updRoot = getFile(KEY_APPDIR); 
-    var fileLocator = Components.classes["@mozilla.org/file/directory_service;1"]
-                                .getService(Components.interfaces.nsIProperties);
-    // Fallback to previous behavior since getting ProgF
-    // (e.g. KEY_PROGRAMFILES) may fail on Win9x.
+    var updRoot;
     try {
-      var programFilesDir = fileLocator.get(KEY_PROGRAMFILES,
-          Components.interfaces.nsILocalFile);
-      if (programFilesDir.contains(updRoot, true)) {
-        var relativePath = updRoot.QueryInterface(Components.interfaces.nsILocalFile).
-            getRelativeDescriptor(programFilesDir);
-        var userLocalDir = fileLocator.get(KEY_LOCALDATA,
-            Components.interfaces.nsILocalFile).parent;
-        updRoot.setRelativeDescriptor(userLocalDir, relativePath);
-        file = appendUpdateLogPath(updRoot);
-
-        // When updating from Fx 2.0.0.1 to 2.0.0.3 (or later) on Vista,
-        // we will have to see also user app data (see bug 351949).
-        if (!file)
-          file = appendUpdateLogPath(getFile(KEY_UAPPDATA));
-      }
+      updRoot = getFile(KEY_UPDROOT);
+    } catch (e) {
     }
-    catch (e) {}
+    if (updRoot) {
+      file = appendUpdateLogPath(updRoot);
+
+      // When updating from Fx 2.0.0.1 to 2.0.0.3 (or later) on Vista,
+      // we will have to see also user app data (see bug 351949).
+      if (!file)
+        file = appendUpdateLogPath(getFile(KEY_UAPPDATA));
+    }
 
     // See the app dir if not found or app dir is out of Program Files.
     if (!file)
@@ -540,23 +520,27 @@ function haveOldInstall(key, brandFullName, version) {
 
 function checkRegistry()
 {
-  // XXX todo
-  // this is firefox specific
-  // figure out what to do about tbird and sunbird, etc   
   LOG("checkRegistry");
 
   var result = false;
-  try {
-    var key = new RegKey();
-    key.open(RegKey.prototype.ROOT_KEY_CLASSES_ROOT, "FirefoxHTML\\shell\\open\\command", key.ACCESS_READ);
-    var commandKey = key.readStringValue("");
-    LOG("commandKey = " + commandKey);
-    // if "-requestPending" is not found, we need to do the cleanup
-    result = (commandKey.indexOf("-requestPending") == -1);
-  } catch (e) {
-    LOG("failed to open command key for FirefoxHTML: " + e);
+  
+  // Firefox is the only toolkit app that needs to do this. 
+  // return false for other applications.
+  var app = Components.classes["@mozilla.org/xre/app-info;1"].
+            getService(Components.interfaces.nsIXULAppInfo);
+  if (app.name == "Firefox") {          
+    try {
+      var key = new RegKey();
+      key.open(RegKey.prototype.ROOT_KEY_CLASSES_ROOT, "FirefoxHTML\\shell\\open\\command", key.ACCESS_READ);
+      var commandKey = key.readStringValue("");
+      LOG("commandKey = " + commandKey);
+      // if "-requestPending" is not found, we need to do the cleanup
+      result = (commandKey.indexOf("-requestPending") == -1);
+    } catch (e) {
+      LOG("failed to open command key for FirefoxHTML: " + e);
+    }
+    key.close();
   }
-  key.close();
   return result;
 }
 
@@ -605,6 +589,16 @@ nsPostUpdateWin.prototype = {
   },
 
   run: function() {
+    // When uninstall/uninstall.update exists the uninstaller has already
+    // updated the uninstall.log with the files added by software update.
+    var updateUninstallFile = getFile(KEY_APPDIR); 
+    updateUninstallFile.append("uninstall");
+    updateUninstallFile.append("uninstall.update");
+    if (updateUninstallFile.exists()) {
+      LOG("nothing to do, uninstall.log has already been updated"); 
+      return;
+    }
+
     try {
       installLogWriter = new InstallLogWriter();
       try {
@@ -627,20 +621,7 @@ nsPostUpdateWin.prototype = {
       getService(Components.interfaces.nsIStringBundleService);
     var brandBundle = sbs.createBundle(URI_BRAND_PROPERTIES);
 
-    var vendorShortName;
-    try {
-      // The Thunderbird vendorShortName is "Mozilla Thunderbird", but we
-      // just want "Thunderbird", so allow it to be overridden in prefs.
-
-      var prefs =
-        Components.classes["@mozilla.org/preferences-service;1"].
-        getService(Components.interfaces.nsIPrefBranch);
-
-      vendorShortName = prefs.getCharPref("app.update.vendorName.override");
-    }
-    catch (e) {
-      vendorShortName = brandBundle.GetStringFromName("vendorShortName");
-    }
+    var vendorShortName = brandBundle.GetStringFromName("vendorShortName");
     var brandFullName = brandBundle.GetStringFromName("brandFullName");
 
     if (!gCopiedLog && 

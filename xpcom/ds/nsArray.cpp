@@ -39,6 +39,7 @@
 #include "nsArray.h"
 #include "nsArrayEnumerator.h"
 #include "nsWeakReference.h"
+#include "nsThreadUtils.h"
 
 // used by IndexOf()
 struct findIndexOfClosure
@@ -48,16 +49,40 @@ struct findIndexOfClosure
     PRUint32 resultIndex;
 };
 
-PR_STATIC_CALLBACK(PRBool) FindElementCallback(void* aElement, void* aClosure);
+static PRBool FindElementCallback(void* aElement, void* aClosure);
 
+NS_INTERFACE_MAP_BEGIN(nsArray)
+  NS_INTERFACE_MAP_ENTRY(nsIArray)
+  NS_INTERFACE_MAP_ENTRY(nsIMutableArray)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIMutableArray)
+NS_INTERFACE_MAP_END
 
-NS_IMPL_ISUPPORTS2(nsArray, nsIArray, nsIMutableArray)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsArrayCC)
+  NS_INTERFACE_MAP_ENTRY(nsIArray)
+  NS_INTERFACE_MAP_ENTRY(nsIMutableArray)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIMutableArray)
+NS_INTERFACE_MAP_END
 
 nsArray::~nsArray()
 {
     Clear();
 }
-    
+
+
+NS_IMPL_ADDREF(nsArray)
+NS_IMPL_RELEASE(nsArray)
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(nsArrayCC)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(nsArrayCC)
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsArrayCC)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsArrayCC)
+    tmp->Clear();
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsArrayCC)
+    NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMARRAY(mArray)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
 NS_IMETHODIMP
 nsArray::GetLength(PRUint32* aLength)
 {
@@ -70,11 +95,11 @@ nsArray::QueryElementAt(PRUint32 aIndex,
                         const nsIID& aIID,
                         void ** aResult)
 {
-    nsISupports * obj = mArray.ObjectAt(aIndex);
-    if (!obj) return NS_ERROR_UNEXPECTED;
+    nsISupports * obj = mArray.SafeObjectAt(aIndex);
+    if (!obj) return NS_ERROR_ILLEGAL_VALUE;
 
-    // no need to worry about a leak here, because ObjectAt() doesn't
-    // addref its result
+    // no need to worry about a leak here, because SafeObjectAt() 
+    // doesn't addref its result
     return obj->QueryInterface(aIID, aResult);
 }
 
@@ -102,7 +127,7 @@ nsArray::IndexOf(PRUint32 aStartIndex, nsISupports* aElement,
 NS_IMETHODIMP
 nsArray::Enumerate(nsISimpleEnumerator **aResult)
 {
-    return NS_NewArrayEnumerator(aResult, NS_STATIC_CAST(nsIArray*, this));
+    return NS_NewArrayEnumerator(aResult, static_cast<nsIArray*>(this));
 }
 
 // nsIMutableArray implementation
@@ -113,8 +138,8 @@ nsArray::AppendElement(nsISupports* aElement, PRBool aWeak)
     PRBool result;
     if (aWeak) {
         nsCOMPtr<nsISupports> elementRef =
-            getter_AddRefs(NS_STATIC_CAST(nsISupports*,
-                                          NS_GetWeakReference(aElement)));
+            getter_AddRefs(static_cast<nsISupports*>
+                                      (NS_GetWeakReference(aElement)));
         NS_ASSERTION(elementRef, "AppendElement: Trying to use weak references on an object that doesn't support it");
         if (!elementRef)
             return NS_ERROR_FAILURE;
@@ -141,8 +166,8 @@ nsArray::InsertElementAt(nsISupports* aElement, PRUint32 aIndex, PRBool aWeak)
     nsCOMPtr<nsISupports> elementRef;
     if (aWeak) {
         elementRef =
-            getter_AddRefs(NS_STATIC_CAST(nsISupports*,
-                                          NS_GetWeakReference(aElement)));
+            getter_AddRefs(static_cast<nsISupports*>
+                                      (NS_GetWeakReference(aElement)));
         NS_ASSERTION(elementRef, "InsertElementAt: Trying to use weak references on an object that doesn't support it");
         if (!elementRef)
             return NS_ERROR_FAILURE;
@@ -159,8 +184,8 @@ nsArray::ReplaceElementAt(nsISupports* aElement, PRUint32 aIndex, PRBool aWeak)
     nsCOMPtr<nsISupports> elementRef;
     if (aWeak) {
         elementRef =
-            getter_AddRefs(NS_STATIC_CAST(nsISupports*,
-                                          NS_GetWeakReference(aElement)));
+            getter_AddRefs(static_cast<nsISupports*>
+                                      (NS_GetWeakReference(aElement)));
         NS_ASSERTION(elementRef, "ReplaceElementAt: Trying to use weak references on an object that doesn't support it");
         if (!elementRef)
             return NS_ERROR_FAILURE;
@@ -185,10 +210,10 @@ PRBool
 FindElementCallback(void *aElement, void* aClosure)
 {
     findIndexOfClosure* closure =
-        NS_STATIC_CAST(findIndexOfClosure*, aClosure);
+        static_cast<findIndexOfClosure*>(aClosure);
 
     nsISupports* element =
-        NS_STATIC_CAST(nsISupports*, aElement);
+        static_cast<nsISupports*>(aElement);
     
     // don't start searching until we're past the startIndex
     if (closure->resultIndex >= closure->startIndex &&
@@ -200,45 +225,13 @@ FindElementCallback(void *aElement, void* aClosure)
     return PR_TRUE;
 }
 
-//
-// do_QueryElementAt helper stuff
-//
-nsresult
-nsQueryArrayElementAt::operator()(const nsIID& aIID, void** aResult) const
-  {
-    nsresult status = mArray
-        ? mArray->QueryElementAt(mIndex, aIID, aResult)
-        : NS_ERROR_NULL_POINTER;
+NS_METHOD nsArrayConstructor(nsISupports *aOuter, const nsIID& aIID, void **aResult) {
+    if (aOuter)
+        return NS_ERROR_NO_AGGREGATION;
 
-    if (mErrorPtr)
-      *mErrorPtr = status;
+    nsCOMPtr<nsIArray> inst = NS_IsMainThread() ? new nsArrayCC : new nsArray;
+    if (!inst)
+        return NS_ERROR_OUT_OF_MEMORY;
 
-    return status;
-  }
-
-//
-// exported constructor routines
-//
-nsresult
-NS_NewArray(nsIMutableArray** aResult)
-{
-    nsArray* arr = new nsArray;
-    if (!arr) return NS_ERROR_OUT_OF_MEMORY;
-
-    *aResult = NS_STATIC_CAST(nsIMutableArray*,arr);
-    NS_ADDREF(*aResult);
-    
-    return NS_OK;
-}
-
-nsresult
-NS_NewArray(nsIMutableArray** aResult, const nsCOMArray_base& aBaseArray)
-{
-    nsArray* arr = new nsArray(aBaseArray);
-    if (!arr) return NS_ERROR_OUT_OF_MEMORY;
-    
-    *aResult = NS_STATIC_CAST(nsIMutableArray*, arr);
-    NS_ADDREF(*aResult);
-
-    return NS_OK;
+    return inst->QueryInterface(aIID, aResult); 
 }

@@ -89,29 +89,26 @@ CurrentAppDirMatchesPersistentDescriptor(xptiInterfaceInfoManager* aMgr,
     return NS_SUCCEEDED(rv) && matches;
 }
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 xpti_InterfaceWriter(PLDHashTable *table, PLDHashEntryHdr *hdr,
                      PRUint32 number, void *arg)
 {
     xptiInterfaceEntry* entry = ((xptiHashEntry*)hdr)->value;
     PRFileDesc* fd = (PRFileDesc*)  arg;
 
-    char* iidStr = entry->GetTheIID()->ToString();
-    if(!iidStr)
-        return PL_DHASH_STOP;
+    char iidStr[NSID_LENGTH];
+    entry->GetTheIID()->ToProvidedString(iidStr);
 
     const xptiTypelib& typelib = entry->GetTypelibRecord();
 
-    PRBool success =  PR_fprintf(fd, "%d,%s,%s,%d,%d,%d\n",
-                                 (int) number,
-                                 entry->GetTheName(),
-                                 iidStr,
-                                 (int) typelib.GetFileIndex(),
-                                 (int) (typelib.IsZip() ? 
-                                 typelib.GetZipItemIndex() : -1),
-                                 (int) entry->GetScriptableFlag());
-
-    nsCRT::free(iidStr);
+    PRBool success =  !!PR_fprintf(fd, "%d,%s,%s,%d,%d,%d\n",
+                                   (int) number,
+                                   entry->GetTheName(),
+                                   iidStr,
+                                   (int) typelib.GetFileIndex(),
+                                   (int) (typelib.IsZip() ? 
+                                   typelib.GetZipItemIndex() : -1),
+                                   (int) entry->GetScriptableFlag());
 
     return success ? PL_DHASH_NEXT : PL_DHASH_STOP;
 }
@@ -297,19 +294,6 @@ ReadManifestIntoMemory(xptiInterfaceInfoManager* aMgr,
     nsCOMPtr<nsILocalFile> aFile;
     if(!aMgr->GetCloneOfManifestLocation(getter_AddRefs(aFile)) || !aFile)
         return nsnull;
-
-#ifdef DEBUG
-    {
-        static PRBool shown = PR_FALSE;
-        
-        nsCAutoString path;
-        if(!shown && NS_SUCCEEDED(aFile->GetNativePath(path)) && !path.IsEmpty())
-        {
-            printf("Type Manifest File: %s\n", path.get());
-            shown = PR_TRUE;        
-        } 
-    }            
-#endif
 
     if(NS_FAILED(aFile->GetFileSize(&fileSize)) || !(flen = nsInt64(fileSize)))
         return nsnull;

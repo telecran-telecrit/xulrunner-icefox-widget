@@ -38,7 +38,7 @@
 #ifndef nsSliderFrame_h__
 #define nsSliderFrame_h__
 
-
+#include "nsRepeatService.h"
 #include "nsBoxFrame.h"
 #include "prtypes.h"
 #include "nsIAtom.h"
@@ -47,16 +47,13 @@
 #include "nsIDOMMouseListener.h"
 
 class nsString;
-class nsIScrollbarListener;
 class nsISupportsArray;
 class nsITimer;
 class nsSliderFrame;
 
-nsresult NS_NewSliderFrame(nsIPresShell* aPresShell, nsIFrame** aResult) ;
+nsIFrame* NS_NewSliderFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
-
-class nsSliderMediator : public nsIDOMMouseListener, 
-                         public nsITimerCallback
+class nsSliderMediator : public nsIDOMMouseListener
 {
 public:
 
@@ -114,18 +111,14 @@ public:
   NS_IMETHOD MouseOut(nsIDOMEvent* aMouseEvent) { return NS_OK; }
 
   NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) { return NS_OK; }
-
-  NS_DECL_NSITIMERCALLBACK
-
-
-}; // class nsSliderFrame
+};
 
 class nsSliderFrame : public nsBoxFrame
 {
 public:
   friend class nsSliderMediator;
 
-  nsSliderFrame(nsIPresShell* aShell);
+  nsSliderFrame(nsIPresShell* aShell, nsStyleContext* aContext);
   virtual ~nsSliderFrame();
 
 #ifdef DEBUG
@@ -135,9 +128,9 @@ public:
 #endif
 
   // nsIBox
-  NS_IMETHOD GetPrefSize(nsBoxLayoutState& aBoxLayoutState, nsSize& aSize);
-  NS_IMETHOD GetMinSize(nsBoxLayoutState& aBoxLayoutState, nsSize& aSize);
-  NS_IMETHOD GetMaxSize(nsBoxLayoutState& aBoxLayoutState, nsSize& aSize);
+  virtual nsSize GetPrefSize(nsBoxLayoutState& aBoxLayoutState);
+  virtual nsSize GetMinSize(nsBoxLayoutState& aBoxLayoutState);
+  virtual nsSize GetMaxSize(nsBoxLayoutState& aBoxLayoutState);
   NS_IMETHOD DoLayout(nsBoxLayoutState& aBoxLayoutState);
 
   // nsIFrame overrides
@@ -151,25 +144,22 @@ public:
   NS_IMETHOD  RemoveFrame(nsIAtom*        aListName,
                           nsIFrame*       aOldFrame);
 
-  NS_IMETHOD Destroy(nsPresContext* aPresContext);
+  virtual void Destroy();
 
-  NS_IMETHOD Paint(nsPresContext*      aPresContext,
-                   nsIRenderingContext& aRenderingContext,
-                   const nsRect&        aDirtyRect,
-                   nsFramePaintLayer    aWhichLayer,
-                   PRUint32             aFlags = 0);
+  NS_IMETHOD BuildDisplayListForChildren(nsDisplayListBuilder*   aBuilder,
+                                         const nsRect&           aDirtyRect,
+                                         const nsDisplayListSet& aLists);
+
+  NS_IMETHOD BuildDisplayList(nsDisplayListBuilder*   aBuilder,
+                              const nsRect&           aDirtyRect,
+                              const nsDisplayListSet& aLists);
  
-  NS_IMETHOD AttributeChanged(nsIContent* aChild,
-                              PRInt32 aNameSpaceID,
+  NS_IMETHOD AttributeChanged(PRInt32 aNameSpaceID,
                               nsIAtom* aAttribute,
                               PRInt32 aModType);
 
-  virtual nsresult CurrentPositionChanged(nsPresContext* aPresContext);
-
-  NS_IMETHOD  Init(nsPresContext*  aPresContext,
-                   nsIContent*      aContent,
+  NS_IMETHOD  Init(nsIContent*      aContent,
                    nsIFrame*        aParent,
-                   nsStyleContext*  aContext,
                    nsIFrame*        asPrevInFlow);
 
 
@@ -177,13 +167,10 @@ public:
                          nsGUIEvent* aEvent,
                          nsEventStatus* aEventStatus);
 
-  NS_IMETHOD GetFrameForPoint(const nsPoint& aPoint,
-                              nsFramePaintLayer aWhichLayer,    
-                              nsIFrame**     aFrame);
-
-  NS_IMETHOD SetInitialChildList(nsPresContext* aPresContext,
-                                 nsIAtom*        aListName,
+  NS_IMETHOD SetInitialChildList(nsIAtom*        aListName,
                                  nsIFrame*       aChildList);
+
+  virtual nsIAtom* GetType() const;
 
   NS_IMETHOD MouseDown(nsIDOMEvent* aMouseEvent);
   NS_IMETHOD MouseUp(nsIDOMEvent* aMouseEvent);
@@ -191,13 +178,12 @@ public:
   NS_IMETHOD HandleEvent(nsIDOMEvent* aEvent) { return NS_OK; }
 
   static PRInt32 GetCurrentPosition(nsIContent* content);
+  static PRInt32 GetMinPosition(nsIContent* content);
   static PRInt32 GetMaxPosition(nsIContent* content);
   static PRInt32 GetIncrement(nsIContent* content);
   static PRInt32 GetPageIncrement(nsIContent* content);
   static PRInt32 GetIntegerAttribute(nsIContent* content, nsIAtom* atom, PRInt32 defaultValue);
   void EnsureOrient();
-
-  void SetScrollbarListener(nsIScrollbarListener* aListener);
 
   virtual nsIView* GetMouseCapturer() const { return GetView(); }
 
@@ -217,22 +203,36 @@ public:
                            nsGUIEvent *    aEvent,
                            nsEventStatus*  aEventStatus);
 
-  NS_IMETHOD_(void) Notify(nsITimer *timer);
- 
 private:
 
+  PRBool GetScrollToClick();
   nsIBox* GetScrollbar();
 
-  void PageUpDown(nsIFrame* aThumbFrame, nscoord change);
-  void SetCurrentPosition(nsIContent* scrollbar, nsIFrame* aThumbFrame, nscoord pos, PRBool aIsSmooth);
+  void PageUpDown(nscoord change);
+  void SetCurrentThumbPosition(nsIContent* aScrollbar, nscoord aNewPos, PRBool aIsSmooth,
+                               PRBool aImmediateRedraw, PRBool aMaySnap);
+  void SetCurrentPosition(nsIContent* aScrollbar, PRInt32 aNewPos, PRBool aIsSmooth,
+                          PRBool aImmediateRedraw);
+  void SetCurrentPositionInternal(nsIContent* aScrollbar, PRInt32 pos,
+                                  PRBool aIsSmooth, PRBool aImmediateRedraw);
+  nsresult CurrentPositionChanged(nsPresContext* aPresContext,
+                                  PRBool aImmediateRedraw);
   void DragThumb(PRBool aGrabMouseEvents);
   void AddListener();
   void RemoveListener();
   PRBool isDraggingThumb();
 
-  // Convert aEvent->point into our coordinate system
-  nsPoint EventPointInOurCoords(nsEvent* aEvent);
-
+  void StartRepeat() {
+    nsRepeatService::GetInstance()->Start(Notify, this);
+  }
+  void StopRepeat() {
+    nsRepeatService::GetInstance()->Stop(Notify, this);
+  }
+  void Notify();
+  static void Notify(void* aData) {
+    (static_cast<nsSliderFrame*>(aData))->Notify();
+  }
+ 
   float mRatio;
 
   nscoord mDragStart;
@@ -240,13 +240,14 @@ private:
 
   PRInt32 mCurPos;
 
-  nsIScrollbarListener* mScrollbarListener;
-
   nscoord mChange;
   nsPoint mDestinationPoint;
-  nsSliderMediator* mMediator;
+  nsRefPtr<nsSliderMediator> mMediator;
 
-  PRPackedBool mRedrawImmediate;
+  // true if an attribute change has been caused by the user manipulating the
+  // slider. This allows notifications to tell how a slider's current position
+  // was changed.
+  PRBool mUserChanged;
 
   static PRBool gMiddlePref;
   static PRInt32 gSnapMultiplier;

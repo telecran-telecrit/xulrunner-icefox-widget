@@ -60,10 +60,6 @@ ifeq (,$(filter-out _WIN%,$(NS_USE_GCC)_$(OS_TARGET)))
 USE_NT_C_SYNTAX=1
 endif
 
-ifdef XP_OS2_VACPP
-USE_NT_C_SYNTAX=1
-endif
-
 #
 # IMPORTS will always be associated with a component.  Therefore,
 # the "import" rule will always change directory to the top-level
@@ -75,7 +71,7 @@ endif
 
 import::
 	@echo "== import.pl =="
-	@perl -I$(CORE_DEPTH)/coreconf $(CORE_DEPTH)/coreconf/import.pl \
+	@$(PERL) -I$(CORE_DEPTH)/coreconf $(CORE_DEPTH)/coreconf/import.pl \
 		"RELEASE_TREE=$(RELEASE_TREE)"   \
 		"IMPORTS=$(IMPORTS)"             \
 		"VERSION=$(VERSION)" \
@@ -159,7 +155,7 @@ release:: release_clean release_export release_classes release_policy release_md
 
 release_cpdistdir::
 	@echo "== cpdist.pl =="
-	@perl -I$(CORE_DEPTH)/coreconf $(CORE_DEPTH)/coreconf/cpdist.pl \
+	@$(PERL) -I$(CORE_DEPTH)/coreconf $(CORE_DEPTH)/coreconf/cpdist.pl \
 		"RELEASE_TREE=$(RELEASE_TREE)" \
 		"CORE_DEPTH=$(CORE_DEPTH)" \
 		"MODULE=${MODULE}" \
@@ -185,7 +181,7 @@ release_cpdistdir::
 
 release_jars::
 	@echo "== release.pl =="
-	@perl -I$(CORE_DEPTH)/coreconf $(CORE_DEPTH)/coreconf/release.pl \
+	@$(PERL) -I$(CORE_DEPTH)/coreconf $(CORE_DEPTH)/coreconf/release.pl \
 		"RELEASE_TREE=$(RELEASE_TREE)" \
 		"PLATFORM=$(PLATFORM)" \
 		"OS_ARCH=$(OS_ARCH)" \
@@ -274,17 +270,10 @@ alltags:
 	find . -name dist -prune -o \( -name '*.[hc]' -o -name '*.cp' -o -name '*.cpp' \) -print | xargs etags -a
 	find . -name dist -prune -o \( -name '*.[hc]' -o -name '*.cp' -o -name '*.cpp' \) -print | xargs ctags -a
 
-ifdef XP_OS2_VACPP
-# list of libs (such as -lnspr4) do not work for our compiler
-# change it to be $(DIST)/lib/nspr4.lib
-EXTRA_SHARED_LIBS := $(filter-out -L%,$(EXTRA_SHARED_LIBS))
-EXTRA_SHARED_LIBS := $(patsubst -l%,$(DIST)/lib/%.$(LIB_SUFFIX),$(EXTRA_SHARED_LIBS))
-endif
-
 $(PROGRAM): $(OBJS) $(EXTRA_LIBS)
 	@$(MAKE_OBJDIR)
 ifeq (,$(filter-out _WIN%,$(NS_USE_GCC)_$(OS_TARGET)))
-	$(MKPROG) $(subst /,\\,$(OBJS)) -Fe$@ -link $(LDFLAGS) $(subst /,\\,$(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS))
+	$(MKPROG) $(subst /,\\,$(OBJS)) -Fe$@ -link $(LDFLAGS) $(subst /,\\,$(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS)) $(EXTRA_EXE_LD_FLAGS)
 ifdef MT
 	if test -f $@.manifest; then \
 		$(MT) -NOLOGO -MANIFEST $@.manifest -OUTPUTRESOURCE:$@\;1; \
@@ -292,11 +281,7 @@ ifdef MT
 	fi
 endif	# MSVC with manifest tool
 else
-ifdef XP_OS2_VACPP
-	$(MKPROG) -Fe$@ $(CFLAGS) $(OBJS) $(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS)
-else
 	$(MKPROG) -o $@ $(CFLAGS) $(OBJS) $(LDFLAGS) $(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS)
-endif
 endif
 
 get_objs:
@@ -353,11 +338,7 @@ ifdef MT
 endif	# MSVC with manifest tool
 endif
 else
-ifdef XP_OS2_VACPP
-	$(MKSHLIB) $(DLLFLAGS) $(LDFLAGS) $(OBJS) $(SUB_SHLOBJS) $(LD_LIBS) $(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS)
-else
 	$(MKSHLIB) -o $@ $(OBJS) $(SUB_SHLOBJS) $(LD_LIBS) $(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS)
-endif
 	chmod +x $@
 ifeq ($(OS_TARGET),Darwin)
 ifdef MAPFILE
@@ -388,7 +369,7 @@ $(OBJDIR)/$(PROG_PREFIX)%$(PROG_SUFFIX): $(OBJDIR)/$(PROG_PREFIX)%$(OBJ_SUFFIX)
 	@$(MAKE_OBJDIR)
 ifeq (,$(filter-out _WIN%,$(NS_USE_GCC)_$(OS_TARGET)))
 	$(MKPROG) $< -Fe$@ -link \
-	$(LDFLAGS) $(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS)
+	$(LDFLAGS) $(EXTRA_LIBS) $(EXTRA_SHARED_LIBS) $(OS_LIBS) $(EXTRA_EXE_LD_FLAGS)
 ifdef MT
 	if test -f $@.manifest; then \
 		$(MT) -NOLOGO -MANIFEST $@.manifest -OUTPUTRESOURCE:$@\;1; \
@@ -429,7 +410,8 @@ PWD := $(shell pwd)
 endif
 endif
 
-core_abspath = $(if $(findstring :,$(1)),$(1),$(if $(filter /%,$(1)),$(1),$(PWD)/$(1)))
+# The quotes allow absolute paths to contain spaces.
+core_abspath = "$(if $(findstring :,$(1)),$(1),$(if $(filter /%,$(1)),$(1),$(PWD)/$(1)))"
 
 $(OBJDIR)/$(PROG_PREFIX)%$(OBJ_SUFFIX): %.c
 	@$(MAKE_OBJDIR)
@@ -454,21 +436,15 @@ else
 endif
 endif
 
-ifndef XP_OS2_VACPP
 ifneq (,$(filter-out _WIN%,$(NS_USE_GCC)_$(OS_TARGET)))
 $(OBJDIR)/$(PROG_PREFIX)%$(OBJ_SUFFIX): %.s
 	@$(MAKE_OBJDIR)
 	$(AS) -o $@ $(ASFLAGS) -c $<
 endif
-endif
 
 $(OBJDIR)/$(PROG_PREFIX)%$(OBJ_SUFFIX): %.asm
 	@$(MAKE_OBJDIR)
-ifdef XP_OS2_VACPP
-	$(AS) -Fdo:$(OBJDIR) $(ASFLAGS) $(subst /,\\,$<)
-else
 	$(AS) -Fo$@ $(ASFLAGS) -c $<
-endif
 
 $(OBJDIR)/$(PROG_PREFIX)%$(OBJ_SUFFIX): %.S
 	@$(MAKE_OBJDIR)
@@ -584,7 +560,7 @@ ifdef NETLIBDEPTH
 	CORE_DEPTH := $(NETLIBDEPTH)
 endif
 
-JAVA_EXPORT_SRCS=$(shell perl $(CORE_DEPTH)/coreconf/outofdate.pl $(PERLARG)	-d $(JAVA_DESTPATH)/$(PACKAGE) $(JSRCS) $(PRIVATE_JSRCS))
+JAVA_EXPORT_SRCS=$(shell $(PERL) $(CORE_DEPTH)/coreconf/outofdate.pl $(PERLARG)	-d $(JAVA_DESTPATH)/$(PACKAGE) $(JSRCS) $(PRIVATE_JSRCS))
 
 export:: $(JAVA_DESTPATH) $(JAVA_DESTPATH)/$(PACKAGE)
 ifneq ($(JAVA_EXPORT_SRCS),)
@@ -627,7 +603,7 @@ export:: $(JAVA_DESTPATH) $(JAVA_DESTPATH)/$(PACKAGE)
 		if test -d $$d; then						\
 			set $(EXIT_ON_ERROR);					\
 			files=`echo $$d/*.java`;				\
-			list=`perl $(CORE_DEPTH)/coreconf/outofdate.pl $(PERLARG)	\
+			list=`$(PERL) $(CORE_DEPTH)/coreconf/outofdate.pl $(PERLARG)	\
 				    -d $(JAVA_DESTPATH)/$(PACKAGE) $$files`;	\
 			if test "$${list}x" != "x"; then			\
 			    echo Building all java files in $$d;		\
@@ -756,7 +732,7 @@ export::
 		$(JAVAH) -jni -d $(JNI_GEN_DIR) $(JNI_GEN);				\
 	else										\
 		echo "Checking for out of date header files" ;                          \
-		perl $(CORE_DEPTH)/coreconf/jniregen.pl $(PERLARG)			\
+		$(PERL) $(CORE_DEPTH)/coreconf/jniregen.pl $(PERLARG)			\
 		 -d $(JAVA_DESTPATH) -j "$(JAVAH) -jni -d $(JNI_GEN_DIR)" $(JNI_GEN);\
 	fi
 endif
@@ -855,7 +831,7 @@ TESTS_DIR = $(RESULTS_DIR)/$(RESULTS_SUBDIR)/$(OS_TARGET)$(OS_RELEASE)$(CPU_TAG)
 ifneq ($(REGRESSION_SPEC),)
 
 ifneq ($(BUILD_OPT),)
-REGDATE = $(subst \ ,, $(shell perl  $(CORE_DEPTH)/$(MODULE)/scripts/now))
+REGDATE = $(subst \ ,, $(shell $(PERL)  $(CORE_DEPTH)/$(MODULE)/scripts/now))
 endif
 
 tests:: $(REGRESSION_SPEC) 
@@ -899,7 +875,7 @@ endif
 
 -include $(DEPENDENCIES)
 
-ifneq (,$(filter-out OpenVMS OS2 WIN%,$(OS_TARGET)))
+ifneq (,$(filter-out OS2 WIN%,$(OS_TARGET)))
 # Can't use sed because of its 4000-char line length limit, so resort to perl
 PERL_DEPENDENCIES_PROGRAM =                                                   \
 	    open(MD, "< $(DEPENDENCIES)");                                    \
@@ -931,7 +907,7 @@ PERL_DEPENDENCIES_PROGRAM =                                                   \
 	    }
 
 .DEFAULT:
-	@perl -e '$(PERL_DEPENDENCIES_PROGRAM)'
+	@$(PERL) -e '$(PERL_DEPENDENCIES_PROGRAM)'
 endif
 
 #############################################################################
@@ -946,7 +922,7 @@ $(MKDEPENDENCIES)::
 	@$(MAKE_OBJDIR)
 	touch $(MKDEPENDENCIES) 
 	chmod u+w $(MKDEPENDENCIES) 
-#on NT, the preceeding touch command creates a read-only file !?!?!
+#on NT, the preceding touch command creates a read-only file !?!?!
 #which is why we have to explicitly chmod it.
 	$(MKDEPEND) -p$(OBJDIR_NAME)/ -o'$(OBJ_SUFFIX)' -f$(MKDEPENDENCIES) \
 $(NOMD_CFLAGS) $(YOPT) $(CSRCS) $(CPPSRCS) $(ASFILES)
@@ -971,6 +947,29 @@ else
 depend::
 endif
 
+#
+# HACK ALERT
+#
+# The only purpose of this rule is to pass Mozilla's Tinderbox depend
+# builds (http://tinderbox.mozilla.org/showbuilds.cgi).  Mozilla's
+# Tinderbox builds NSS continuously as part of the Mozilla client.
+# Because NSS's make depend is not implemented, whenever we change
+# an NSS header file, the depend build does not recompile the NSS
+# files that depend on the header.
+#
+# This rule makes all the objects depend on a dummy header file.
+# Check in a change to this dummy header file to force the depend
+# build to recompile everything.
+#
+# This rule should be removed when make depend is implemented.
+#
+
+DUMMY_DEPEND = $(CORE_DEPTH)/coreconf/coreconf.dep
+
+$(filter $(OBJDIR)/%$(OBJ_SUFFIX),$(OBJS)): $(OBJDIR)/%$(OBJ_SUFFIX): $(DUMMY_DEPEND)
+
+# END OF HACK
+
 ################################################################################
 # Special gmake rules.
 ################################################################################
@@ -980,7 +979,7 @@ endif
 # hundreds of built-in suffix rules for stuff we don't need.
 #
 .SUFFIXES:
-.SUFFIXES: .out .a .ln .o .obj .c .cc .C .cpp .y .l .s .S .h .sh .i .pl .class .java .html .asm
+.SUFFIXES: .out .a .ln .o .obj .c .cc .C .cpp .y .l .s .S .h .sh .i .pl .class .java .html .asm .dep
 
 #
 # Don't delete these files if we get killed.

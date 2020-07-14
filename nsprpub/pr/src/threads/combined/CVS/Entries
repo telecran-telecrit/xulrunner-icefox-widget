@@ -1,9 +1,0 @@
-/.cvsignore/1.2/Sat May 12 04:56:56 2001//TNSPR_4_6_5_RTM
-/Makefile.in/1.12/Sun Apr 25 15:01:02 2004//TNSPR_4_6_5_RTM
-/prucpu.c/3.14/Sun Apr 25 15:01:02 2004//TNSPR_4_6_5_RTM
-/prucv.c/3.8/Sun Apr 25 15:01:02 2004//TNSPR_4_6_5_RTM
-/prulock.c/3.12/Sun Apr 25 15:01:02 2004//TNSPR_4_6_5_RTM
-/prustack.c/3.8/Sun Apr 25 15:01:02 2004//TNSPR_4_6_5_RTM
-/pruthr.c/3.36/Sun Apr 25 15:01:02 2004//TNSPR_4_6_5_RTM
-/README/3.1/Sat Mar 28 03:38:00 1998//TNSPR_4_6_5_RTM
-D

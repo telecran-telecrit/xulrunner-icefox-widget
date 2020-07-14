@@ -35,6 +35,9 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/* atom list for CSS pseudo-classes */
+
 #ifndef nsCSSPseudoClasses_h___
 #define nsCSSPseudoClasses_h___
 
@@ -50,6 +53,8 @@ public:
   static void AddRefAtoms();
 
   static PRBool IsPseudoClass(nsIAtom *aAtom);
+  static PRBool HasStringArg(nsIAtom* aAtom);
+  static PRBool HasNthPairArg(nsIAtom* aAtom);
 
 #define CSS_PSEUDO_CLASS(_name, _value) static nsICSSPseudoClass* _name;
 #include "nsCSSPseudoClassList.h"

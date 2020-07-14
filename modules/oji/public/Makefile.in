@@ -48,7 +48,6 @@ GRE_MODULE	= 1
 XPIDLSRCS	= \
 		nsIJVMManager.idl \
 		nsIJVMPluginInstance.idl \
-		nsIJVMAuthTools.idl \
 		nsIJVMConfigManager.idl \
 		$(NULL)
 
@@ -64,7 +63,7 @@ EXPORTS		= \
 		nsISymantecDebugger.h \
 		nsISecureEnv.h \
 		ProxyJNI.h \
-		nsIThreadManager.h \
+		nsIJVMThreadManager.h \
 		nsILiveConnectManager.h \
 		$(NULL)
 

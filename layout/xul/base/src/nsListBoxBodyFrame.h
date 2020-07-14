@@ -48,37 +48,53 @@
 #include "nsIReflowCallback.h"
 #include "nsPresContext.h"
 #include "nsBoxLayoutState.h"
+#include "nsThreadUtils.h"
+#include "nsPIBoxObject.h"
 
-class nsCSSFrameConstructor;
+#define NS_LISTBOXBODYFRAME_IID \
+{ 0x6e0acf13, 0x0b07, 0x481d, \
+  { 0xa3, 0x39, 0x4c, 0xb6, 0x44, 0xbc, 0x1b, 0xd8 } }
+
 class nsListScrollSmoother;
-nsresult NS_NewListBoxBodyFrame(nsIPresShell* aPresShell, 
-                                nsIFrame** aNewFrame, 
-                                PRBool aIsRoot = PR_FALSE,
-                                nsIBoxLayout* aLayoutManager = nsnull);
+nsIFrame* NS_NewListBoxBodyFrame(nsIPresShell* aPresShell,
+                                 nsStyleContext* aContext,
+                                 PRBool aIsRoot = PR_FALSE,
+                                 nsIBoxLayout* aLayoutManager = nsnull);
 
 class nsListBoxBodyFrame : public nsBoxFrame,
-                           public nsIListBoxObject,
                            public nsIScrollbarMediator,
                            public nsIReflowCallback
 {
-  nsListBoxBodyFrame(nsIPresShell* aPresShell, PRBool aIsRoot = nsnull, nsIBoxLayout* aLayoutManager = nsnull);
+  nsListBoxBodyFrame(nsIPresShell* aPresShell, nsStyleContext* aContext, PRBool aIsRoot = nsnull, nsIBoxLayout* aLayoutManager = nsnull);
   virtual ~nsListBoxBodyFrame();
 
 public:
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSILISTBOXOBJECT
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_LISTBOXBODYFRAME_IID)
 
-  friend nsresult NS_NewListBoxBodyFrame(nsIPresShell* aPresShell, 
-                                         nsIFrame** aNewFrame, 
-                                         PRBool aIsRoot,
-                                         nsIBoxLayout* aLayoutManager);
+  NS_DECL_ISUPPORTS
+
+  // non-virtual nsIListBoxObject
+  nsresult GetRowCount(PRInt32 *aResult);
+  nsresult GetNumberOfVisibleRows(PRInt32 *aResult);
+  nsresult GetIndexOfFirstVisibleRow(PRInt32 *aResult);
+  nsresult EnsureIndexIsVisible(PRInt32 aRowIndex);
+  nsresult ScrollToIndex(PRInt32 aRowIndex);
+  nsresult ScrollByLines(PRInt32 aNumLines);
+  nsresult GetItemAtIndex(PRInt32 aIndex, nsIDOMElement **aResult);
+  nsresult GetIndexOfItem(nsIDOMElement *aItem, PRInt32 *aResult);
+
+  friend nsIFrame* NS_NewListBoxBodyFrame(nsIPresShell* aPresShell,
+                                          nsStyleContext* aContext,
+                                          PRBool aIsRoot,
+                                          nsIBoxLayout* aLayoutManager);
   
   // nsIFrame
-  NS_IMETHOD Init(nsPresContext* aPresContext, nsIContent* aContent,
-                  nsIFrame* aParent, nsStyleContext* aContext, nsIFrame* aPrevInFlow);
-  NS_IMETHOD Destroy(nsPresContext* aPresContext);
-  NS_IMETHOD AttributeChanged(nsIContent* aChild, PRInt32 aNameSpaceID,
-                              nsIAtom* aAttribute, PRInt32 aModType);
+  NS_IMETHOD Init(nsIContent*     aContent,
+                  nsIFrame*       aParent, 
+                  nsIFrame*       aPrevInFlow);
+  virtual void Destroy();
+
+  NS_IMETHOD AttributeChanged(PRInt32 aNameSpaceID, nsIAtom* aAttribute, PRInt32 aModType);
 
   // nsIScrollbarMediator
   NS_IMETHOD PositionChanged(nsISupports* aScrollbar, PRInt32 aOldIndex, PRInt32& aNewIndex);
@@ -86,18 +102,19 @@ public:
   NS_IMETHOD VisibilityChanged(nsISupports* aScrollbar, PRBool aVisible);
 
   // nsIReflowCallback
-  NS_IMETHOD ReflowFinished(nsIPresShell* aPresShell, PRBool* aFlushFlag);
+  virtual PRBool ReflowFinished();
+  virtual void ReflowCallbackCanceled();
 
   // nsIBox
   NS_IMETHOD DoLayout(nsBoxLayoutState& aBoxLayoutState);
-  NS_IMETHOD NeedsRecalc();
+  virtual void MarkIntrinsicWidthsDirty();
 
   virtual nsSize GetMinSizeForScrollArea(nsBoxLayoutState& aBoxLayoutState);
-  NS_IMETHOD GetPrefSize(nsBoxLayoutState& aBoxLayoutState, nsSize& aSize);
+  virtual nsSize GetPrefSize(nsBoxLayoutState& aBoxLayoutState);
 
   // size calculation 
   PRInt32 GetRowCount();
-  PRInt32 GetRowHeightTwips() { return mRowHeight; }
+  PRInt32 GetRowHeightAppUnits() { return mRowHeight; }
   PRInt32 GetFixedRowSize();
   void SetRowHeight(PRInt32 aRowHeight);
   nscoord GetYPosition();
@@ -105,8 +122,13 @@ public:
   nscoord ComputeIntrinsicWidth(nsBoxLayoutState& aBoxLayoutState);
 
   // scrolling
-  NS_IMETHOD InternalPositionChangedCallback();
-  NS_IMETHOD InternalPositionChanged(PRBool aUp, PRInt32 aDelta);
+  nsresult InternalPositionChangedCallback();
+  nsresult InternalPositionChanged(PRBool aUp, PRInt32 aDelta);
+  // Process pending position changed events, then do the position change.
+  // This can wipe out the frametree.
+  nsresult DoInternalPositionChangedSync(PRBool aUp, PRInt32 aDelta);
+  // Actually do the internal position change.  This can wipe out the frametree
+  nsresult DoInternalPositionChanged(PRBool aUp, PRInt32 aDelta);
   nsListScrollSmoother* GetSmoother();
   void VerticalScroll(PRInt32 aDelta);
 
@@ -131,23 +153,53 @@ public:
 
   void PostReflowCallback();
 
-  void InitGroup(nsCSSFrameConstructor* aFC, nsPresContext* aContext) 
+  PRBool SetBoxObject(nsPIBoxObject* aBoxObject)
   {
-    mFrameConstructor = aFC;
-    mPresContext = aContext;
+    NS_ENSURE_TRUE(!mBoxObject, PR_FALSE);
+    mBoxObject = aBoxObject;
+    return PR_TRUE;
   }
 
+  virtual PRBool SupportsOrdinalsInChildren();
+
 protected:
+  class nsPositionChangedEvent;
+  friend class nsPositionChangedEvent;
+
+  class nsPositionChangedEvent : public nsRunnable
+  {
+  public:
+    nsPositionChangedEvent(nsListBoxBodyFrame* aFrame,
+                           PRBool aUp, PRInt32 aDelta) :
+      mFrame(aFrame), mUp(aUp), mDelta(aDelta)
+    {}
+  
+    NS_IMETHOD Run()
+    {
+      if (!mFrame) {
+        return NS_OK;
+      }
+
+      mFrame->mPendingPositionChangeEvents.RemoveElement(this);
+
+      return mFrame->DoInternalPositionChanged(mUp, mDelta);
+    }
+
+    void Revoke() {
+      mFrame = nsnull;
+    }
+
+    nsListBoxBodyFrame* mFrame;
+    PRBool mUp;
+    PRInt32 mDelta;
+  };
+
   void ComputeTotalRowCount();
   void RemoveChildFrame(nsBoxLayoutState &aState, nsIFrame *aChild);
 
-  // We don't own this. (No addref/release allowed, punk.)
-  nsCSSFrameConstructor* mFrameConstructor;
-  nsPresContext* mPresContext;
-
   // row height
   PRInt32 mRowCount;
-  PRInt32 mRowHeight;
+  nscoord mRowHeight;
   PRPackedBool mRowHeightWasSet;
   nscoord mAvailableHeight;
   nscoord mStringWidth;
@@ -159,7 +211,6 @@ protected:
   PRInt32 mRowsToPrepend;
 
   // scrolling
-  nscoord mOnePixel;
   PRInt32 mCurrentIndex; // Row-based
   PRInt32 mOldIndex; 
   PRPackedBool mScrolling;
@@ -168,7 +219,13 @@ protected:
   nsListScrollSmoother* mScrollSmoother;
   PRInt32 mTimePerRow;
 
+  nsTArray< nsRefPtr<nsPositionChangedEvent> > mPendingPositionChangeEvents;
+
   PRPackedBool mReflowCallbackPosted;
+
+  nsCOMPtr<nsPIBoxObject> mBoxObject;
 }; 
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsListBoxBodyFrame, NS_LISTBOXBODYFRAME_IID)
 
 #endif // nsListBoxBodyFrame_h

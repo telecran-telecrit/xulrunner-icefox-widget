@@ -42,55 +42,112 @@
 
 #include "xpcprivate.h"
 
-NS_IMPL_ISUPPORTS2_CI(XPCVariant, XPCVariant, nsIVariant)
+NS_IMPL_CYCLE_COLLECTION_CLASS(XPCVariant)
 
-XPCVariant::XPCVariant()
-    : mJSVal(JSVAL_VOID)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(XPCVariant)
+  NS_INTERFACE_MAP_ENTRY(XPCVariant)
+  NS_INTERFACE_MAP_ENTRY(nsIVariant)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+  NS_IMPL_QUERY_CLASSINFO(XPCVariant)
+NS_INTERFACE_MAP_END
+NS_IMPL_CI_INTERFACE_GETTER2(XPCVariant, XPCVariant, nsIVariant)
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(XPCVariant)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(XPCVariant)
+
+XPCVariant::XPCVariant(XPCCallContext& ccx, jsval aJSVal)
+    : mJSVal(aJSVal)
 {
     nsVariant::Initialize(&mData);
-}
-
-XPCVariant::~XPCVariant()
-{
-    nsVariant::Cleanup(&mData);
-    
-    if(JSVAL_IS_GCTHING(mJSVal))
+    if(!JSVAL_IS_PRIMITIVE(mJSVal))
     {
-        JSRuntime* rt;
-        nsIJSRuntimeService* rtsrvc = nsXPConnect::GetJSRuntimeService();
+        // If the incoming object is an XPCWrappedNative, then it could be a
+        // double-wrapped object, and we should return the double-wrapped
+        // object back out to script.
 
-        if(rtsrvc && NS_SUCCEEDED(rtsrvc->GetRuntime(&rt)))
-            JS_RemoveRootRT(rt, &mJSVal);
+        JSObject* proto;
+        XPCWrappedNative* wn =
+            XPCWrappedNative::GetWrappedNativeOfJSObject(ccx,
+                                                         JSVAL_TO_OBJECT(mJSVal),
+                                                         nsnull,
+                                                         &proto);
+        mReturnRawObject = !wn && !proto;
     }
+    else
+        mReturnRawObject = JS_FALSE;
 }
+
+XPCTraceableVariant::~XPCTraceableVariant()
+{
+    NS_ASSERTION(JSVAL_IS_GCTHING(mJSVal), "Must be traceable or unlinked");
+
+    // If mJSVal is JSVAL_STRING, we don't need to clean anything up;
+    // simply removing the string from the root set is good.
+    if(!JSVAL_IS_STRING(mJSVal))
+        nsVariant::Cleanup(&mData);
+
+    if(!JSVAL_IS_NULL(mJSVal))
+        RemoveFromRootSet(nsXPConnect::GetRuntimeInstance()->GetJSRuntime());
+}
+
+void XPCTraceableVariant::TraceJS(JSTracer* trc)
+{
+    NS_ASSERTION(JSVAL_IS_TRACEABLE(mJSVal), "Must be traceable");
+    JS_SET_TRACING_DETAILS(trc, PrintTraceName, this, 0);
+    JS_CallTracer(trc, JSVAL_TO_TRACEABLE(mJSVal), JSVAL_TRACE_KIND(mJSVal));
+}
+
+#ifdef DEBUG
+// static
+void
+XPCTraceableVariant::PrintTraceName(JSTracer* trc, char *buf, size_t bufsize)
+{
+    JS_snprintf(buf, bufsize, "XPCVariant[0x%p].mJSVal", trc->debugPrintArg);
+}
+#endif
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(XPCVariant)
+    if(JSVAL_IS_OBJECT(tmp->mJSVal))
+        cb.NoteScriptChild(nsIProgrammingLanguage::JAVASCRIPT,
+                           JSVAL_TO_OBJECT(tmp->mJSVal));
+
+    nsVariant::Traverse(tmp->mData, cb);
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(XPCVariant)
+    // We're sharing mJSVal's buffer, clear the pointer to it
+    // so Cleanup() won't try to delete it
+    if(JSVAL_IS_STRING(tmp->mJSVal))
+        tmp->mData.u.wstr.mWStringValue = nsnull;
+    nsVariant::Cleanup(&tmp->mData);
+
+    if(JSVAL_IS_TRACEABLE(tmp->mJSVal))
+    {
+        XPCTraceableVariant *v = static_cast<XPCTraceableVariant*>(tmp);
+        v->RemoveFromRootSet(nsXPConnect::GetRuntimeInstance()->GetJSRuntime());
+    }
+    tmp->mJSVal = JSVAL_NULL;
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 // static 
 XPCVariant* XPCVariant::newVariant(XPCCallContext& ccx, jsval aJSVal)
 {
-    XPCVariant* variant = new XPCVariant();
+    XPCVariant* variant;
+
+    if(!JSVAL_IS_TRACEABLE(aJSVal))
+        variant = new XPCVariant(ccx, aJSVal);
+    else
+        variant = new XPCTraceableVariant(ccx, aJSVal);
+
     if(!variant)
         return nsnull;
-    
     NS_ADDREF(variant);
 
-    variant->mJSVal = aJSVal;
-
-    if(JSVAL_IS_GCTHING(variant->mJSVal))
-    {
-        JSRuntime* rt;
-        if(NS_FAILED(ccx.GetRuntime()->GetJSRuntimeService()->GetRuntime(&rt))||
-           !JS_AddNamedRootRT(rt, &variant->mJSVal, "XPCVariant::mJSVal"))
-        {
-            NS_RELEASE(variant); // Also sets variant to nsnull.
-        }
-    }
-
-    if(variant && !variant->InitializeData(ccx))
+    if(!variant->InitializeData(ccx))
         NS_RELEASE(variant);     // Also sets variant to nsnull.
 
     return variant;
 }
-
 
 // Helper class to give us a namespace for the table based code below.
 class XPCArrayHomogenizer
@@ -249,14 +306,31 @@ JSBool XPCVariant::InitializeData(XPCCallContext& ccx)
         return NS_SUCCEEDED(nsVariant::SetFromBool(&mData, 
                                                    JSVAL_TO_BOOLEAN(mJSVal)));
     if(JSVAL_IS_VOID(mJSVal))
-        return NS_SUCCEEDED(nsVariant::SetToEmpty(&mData));
+        return NS_SUCCEEDED(nsVariant::SetToVoid(&mData));
     if(JSVAL_IS_NULL(mJSVal))
         return NS_SUCCEEDED(nsVariant::SetToEmpty(&mData));
     if(JSVAL_IS_STRING(mJSVal))
     {
-        return NS_SUCCEEDED(nsVariant::SetFromWStringWithSize(&mData, 
-                    (PRUint32)JS_GetStringLength(JSVAL_TO_STRING(mJSVal)),
-                    (PRUnichar*)JS_GetStringChars(JSVAL_TO_STRING(mJSVal))));
+        // Make our string immutable.  This will also ensure null-termination,
+        // which nsVariant assumes for its PRUnichar* stuff.
+        JSString* str = JSVAL_TO_STRING(mJSVal);
+        if(!JS_MakeStringImmutable(ccx, str))
+            return JS_FALSE;
+
+        // Don't use nsVariant::SetFromWStringWithSize, because that will copy
+        // the data.  Just handle this ourselves.  Note that it's ok to not
+        // copy because we added mJSVal as a GC root.
+        NS_ASSERTION(mData.mType == nsIDataType::VTYPE_EMPTY,
+                     "Why do we already have data?");
+
+        mData.u.wstr.mWStringValue = 
+            reinterpret_cast<PRUnichar*>(JS_GetStringChars(str));
+        // Use C-style cast, because reinterpret cast from size_t to
+        // PRUint32 is not valid on some platforms.
+        mData.u.wstr.mWStringLength = (PRUint32)JS_GetStringLength(str);
+        mData.mType = nsIDataType::VTYPE_WSTRING_SIZE_IS;
+        
+        return JS_TRUE;
     }
 
     // leaving only JSObject...
@@ -266,14 +340,9 @@ JSBool XPCVariant::InitializeData(XPCCallContext& ccx)
 
     // Let's see if it is a xpcJSID.
 
-    // XXX It might be nice to have a non-allocing version of xpc_JSObjectToID.
-    nsID* id = xpc_JSObjectToID(ccx, jsobj);
+    const nsID* id = xpc_JSObjectToID(ccx, jsobj);
     if(id)
-    {
-        JSBool success = NS_SUCCEEDED(nsVariant::SetFromID(&mData, *id));
-        nsMemory::Free((char*)id);
-        return success;
-    }
+        return NS_SUCCEEDED(nsVariant::SetFromID(&mData, *id));
     
     // Let's see if it is a js array object.
 
@@ -339,11 +408,21 @@ XPCVariant::VariantDataToJS(XPCCallContext& ccx,
         jsval realVal = xpcvariant->GetJSVal();
         if(JSVAL_IS_PRIMITIVE(realVal) || 
            type == nsIDataType::VTYPE_ARRAY ||
+           type == nsIDataType::VTYPE_EMPTY_ARRAY ||
            type == nsIDataType::VTYPE_ID)
         {
             // Not a JSObject (or is a JSArray or is a JSObject representing 
             // an nsID),.
             // So, just pass through the underlying data.
+            *pJSVal = realVal;
+            return JS_TRUE;
+        }
+
+        if(xpcvariant->mReturnRawObject)
+        {
+            NS_ASSERTION(type == nsIDataType::VTYPE_INTERFACE ||
+                         type == nsIDataType::VTYPE_INTERFACE_IS,
+                         "Weird variant");
             *pJSVal = realVal;
             return JS_TRUE;
         }
@@ -445,6 +524,7 @@ XPCVariant::VariantDataToJS(XPCCallContext& ccx,
                                                       (char**)&xpctvar.val.p)))
                 return JS_FALSE;
             xpctvar.type = (uint8)(TD_PSTRING_SIZE_IS | XPT_TDP_POINTER);
+            xpctvar.SetValIsAllocated();
             break;
         case nsIDataType::VTYPE_WCHAR_STR:        
             if(NS_FAILED(variant->GetAsWString((PRUnichar**)&xpctvar.val.p)))
@@ -457,6 +537,7 @@ XPCVariant::VariantDataToJS(XPCCallContext& ccx,
                                                       (PRUnichar**)&xpctvar.val.p)))
                 return JS_FALSE;
             xpctvar.type = (uint8)(TD_PWSTRING_SIZE_IS | XPT_TDP_POINTER);
+            xpctvar.SetValIsAllocated();
             break;
         case nsIDataType::VTYPE_INTERFACE:        
         case nsIDataType::VTYPE_INTERFACE_IS:        
@@ -564,8 +645,10 @@ VARIANT_DONE:
             return JS_TRUE;
         }
         case nsIDataType::VTYPE_VOID:        
-        case nsIDataType::VTYPE_EMPTY:
             *pJSVal = JSVAL_VOID;
+            return JS_TRUE;
+        case nsIDataType::VTYPE_EMPTY:
+            *pJSVal = JSVAL_NULL;
             return JS_TRUE;
         default:
             NS_ERROR("bad type in variant!");

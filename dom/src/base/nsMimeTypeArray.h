@@ -1,4 +1,5 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=2 sw=2 et tw=79: */
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -42,71 +43,99 @@
 #include "nsIDOMMimeType.h"
 #include "nsString.h"
 #include "nsCOMPtr.h"
+#include "nsCOMArray.h"
 
 class nsIDOMNavigator;
 
+// NB: Due to weak references, nsNavigator has intimate knowledge of our
+// members.
 class nsMimeTypeArray : public nsIDOMMimeTypeArray
 {
 public:
-	nsMimeTypeArray(nsIDOMNavigator* navigator);
-	virtual ~nsMimeTypeArray();
+  nsMimeTypeArray(nsIDOMNavigator* navigator);
+  virtual ~nsMimeTypeArray();
 
-	NS_DECL_ISUPPORTS
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIDOMMIMETYPEARRAY
 
-	NS_IMETHOD GetLength(PRUint32* aLength);
-	NS_IMETHOD Item(PRUint32 aIndex, nsIDOMMimeType** aReturn);
-	NS_IMETHOD NamedItem(const nsAString& aName, nsIDOMMimeType** aReturn);
-	nsresult   Refresh();
+  nsresult Refresh();
+
+  nsIDOMMimeType* GetItemAt(PRUint32 aIndex, nsresult* aResult);
+  nsIDOMMimeType* GetNamedItem(const nsAString& aName, nsresult* aResult);
+
+  static nsMimeTypeArray* FromSupports(nsISupports* aSupports)
+  {
+#ifdef DEBUG
+    {
+      nsCOMPtr<nsIDOMMimeTypeArray> array_qi = do_QueryInterface(aSupports);
+
+      // If this assertion fires the QI implementation for the object in
+      // question doesn't use the nsIDOMMimeTypeArray pointer as the nsISupports
+      // pointer. That must be fixed, or we'll crash...
+      NS_ASSERTION(array_qi == static_cast<nsIDOMMimeTypeArray*>(aSupports),
+                   "Uh, fix QI!");
+    }
+#endif
+
+    return static_cast<nsMimeTypeArray*>(aSupports);
+  }
+
+  void Invalidate()
+  {
+    // NB: This will cause GetMimeTypes to fail from now on.
+    mNavigator = nsnull;
+    Clear();
+  }
 
 private:
   nsresult GetMimeTypes();
   void     Clear();
 
 protected:
-	nsIDOMNavigator* mNavigator;
-	PRUint32 mMimeTypeCount;
-	nsIDOMMimeType** mMimeTypeArray;
+  nsIDOMNavigator* mNavigator;
+  // Number of mimetypes handled by plugins.
+  PRUint32 mPluginMimeTypeCount;
+  // mMimeTypeArray contains all mimetypes handled by plugins
+  // (mPluginMimeTypeCount) and any mimetypes that we handle internally and
+  // have been looked up before. The number of items in mMimeTypeArray should
+  // thus always be equal to or higher than mPluginMimeTypeCount.
+  nsCOMArray<nsIDOMMimeType> mMimeTypeArray;
+  PRBool mInited;
 };
 
 class nsMimeType : public nsIDOMMimeType
 {
 public:
-	nsMimeType(nsIDOMPlugin* aPlugin, nsIDOMMimeType* aMimeType);
-	virtual ~nsMimeType();
+  nsMimeType(nsIDOMPlugin* aPlugin, nsIDOMMimeType* aMimeType);
+  virtual ~nsMimeType();
 
-	NS_DECL_ISUPPORTS
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIDOMMIMETYPE
 
-	NS_IMETHOD GetDescription(nsAString& aDescription);
-	NS_IMETHOD GetEnabledPlugin(nsIDOMPlugin** aEnabledPlugin);
-	NS_IMETHOD GetSuffixes(nsAString& aSuffixes);
-	NS_IMETHOD GetType(nsAString& aType);
+  void DetachPlugin() { mPlugin = nsnull; }
 
 protected:
-	nsIDOMPlugin* mPlugin;
-	nsCOMPtr<nsIDOMMimeType> mMimeType;
+  nsIDOMPlugin* mPlugin;
+  nsCOMPtr<nsIDOMMimeType> mMimeType;
 };
 
 class nsHelperMimeType : public nsIDOMMimeType
 {
 public:
-	nsHelperMimeType(const nsAString& aType)
-		: mType(aType)
-	{
-  }
-
-	virtual ~nsHelperMimeType()
+  nsHelperMimeType(const nsAString& aType)
+    : mType(aType)
   {
   }
 
-	NS_DECL_ISUPPORTS
+  virtual ~nsHelperMimeType()
+  {
+  }
 
-	NS_IMETHOD GetDescription(nsAString& aDescription);
-	NS_IMETHOD GetEnabledPlugin(nsIDOMPlugin** aEnabledPlugin);
-	NS_IMETHOD GetSuffixes(nsAString& aSuffixes);
-	NS_IMETHOD GetType(nsAString& aType);
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIDOMMIMETYPE 
   
 private:
-	nsString mType;
+  nsString mType;
 };
 
 #endif /* nsMimeTypeArray_h___ */

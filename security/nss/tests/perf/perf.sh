@@ -1,4 +1,4 @@
-#! /bin/sh  
+#! /bin/bash  
 #
 # ***** BEGIN LICENSE BLOCK *****
 # Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -17,7 +17,7 @@
 #
 # The Initial Developer of the Original Code is
 # Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1994-2000
+# Portions created by the Initial Developer are Copyright (C) 1994-2009
 # the Initial Developer. All Rights Reserved.
 #
 # Contributor(s):
@@ -68,7 +68,7 @@ perf_init()
 
 perf_init
 cd ${PERFDIR}
-RSAPERF_OUT=`rsaperf -i 300 -s -n none`
+RSAPERF_OUT=`${BINDIR}/rsaperf -i 300 -s -n none`
 RSAPERF_OUT=`echo $RSAPERF_OUT | sed \
                 -e "s/^/RSAPERF: $OBJDIR /" \
                 -e 's/microseconds/us/' \

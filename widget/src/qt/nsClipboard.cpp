@@ -39,22 +39,15 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+#include <QApplication>
+#include <QMimeData>
+#include <QString>
+#include <QStringList>
+
 #include "nsClipboard.h"
-#include "nsMime.h"
-#include "nsCOMPtr.h"
-#include "nsCRT.h"
-#include "nsString.h"
-#include "nsISupportsArray.h"
-#include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
 #include "nsXPIDLString.h"
 #include "nsPrimitiveHelpers.h"
-#include "nsIComponentManager.h"
-#include "nsWidgetsCID.h"
-
-#include <qapplication.h>
-#include <qclipboard.h>
-#include <qdragobject.h>
 
 NS_IMPL_ISUPPORTS1(nsClipboard, nsIClipboard)
 
@@ -63,15 +56,13 @@ NS_IMPL_ISUPPORTS1(nsClipboard, nsIClipboard)
 // nsClipboard constructor
 //
 //-------------------------------------------------------------------------
-nsClipboard::nsClipboard()
-    : nsIClipboard(),
-      mIgnoreEmptyNotification(PR_FALSE),
-      mSelectionOwner(nsnull),
-      mGlobalOwner(nsnull),
-      mSelectionTransferable(nsnull),
-      mGlobalTransferable(nsnull)
+nsClipboard::nsClipboard() : nsIClipboard(),
+                             mSelectionOwner(nsnull),
+                             mGlobalOwner(nsnull),
+                             mSelectionTransferable(nsnull),
+                             mGlobalTransferable(nsnull)
 {
-    qDebug("###############################################################s");
+    // No implementation needed
 }
 
 //-------------------------------------------------------------------------
@@ -84,180 +75,208 @@ nsClipboard::~nsClipboard()
 }
 
 
+// nsClipboard::SetNativeClipboardData ie. Copy
+
 NS_IMETHODIMP
-nsClipboard::SetNativeClipboardData(PRInt32 aWhichClipboard)
+nsClipboard::SetNativeClipboardData( nsITransferable *aTransferable,
+                                     QClipboard::Mode clipboardMode )
 {
-    qDebug("SetNativeClipboardData");
-    mIgnoreEmptyNotification = PR_TRUE;
-
-    nsCOMPtr<nsITransferable> transferable(
-        getter_AddRefs(GetTransferable(aWhichClipboard)));
-
-    // make sure we have a good transferable
-    if (nsnull == transferable) {
-        qDebug("nsClipboard::SetNativeClipboardData(): no transferable!\n");
+    if (nsnull == aTransferable)
+    {
+        qDebug("nsClipboard::SetNativeClipboardData(): no transferable!");
         return NS_ERROR_FAILURE;
     }
+
     // get flavor list that includes all flavors that can be written (including
     // ones obtained through conversion)
     nsCOMPtr<nsISupportsArray> flavorList;
-    nsresult errCode = transferable->FlavorsTransferableCanExport(
-        getter_AddRefs(flavorList));
+    nsresult errCode = aTransferable->FlavorsTransferableCanExport( getter_AddRefs(flavorList) );
 
-    if (NS_FAILED(errCode)) {
-        qDebug("nsClipboard::SetNativeClipboardData(): no FlavorsTransferable !\n");
+    if (NS_FAILED(errCode))
+    {
+        qDebug("nsClipboard::SetNativeClipboardData(): no FlavorsTransferable !");
         return NS_ERROR_FAILURE;
     }
+
     QClipboard *cb = QApplication::clipboard();
-    nsMimeStore *mimeStore =  new nsMimeStore();
-    PRUint32 cnt;
+    PRUint32 flavorCount = 0;
+    flavorList->Count(&flavorCount);
 
-    flavorList->Count(&cnt);
-    for (PRUint32 i = 0; i < cnt; ++i) {
+    for (PRUint32 i = 0; i < flavorCount; ++i)
+    {
         nsCOMPtr<nsISupports> genericFlavor;
-
         flavorList->GetElementAt(i,getter_AddRefs(genericFlavor));
-
         nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface(genericFlavor));
-
-        if (currentFlavor) {
+        
+        if (currentFlavor)
+        {
+            // flavorStr is the mime type
             nsXPIDLCString flavorStr;
-
             currentFlavor->ToString(getter_Copies(flavorStr));
 
-            // add these types as selection targets
-            PRUint32   len;
+            // Clip is the data which will be sent to the clipboard
             nsCOMPtr<nsISupports> clip;
+            // len is the length of the data
+            PRUint32 len;
 
-            transferable->GetTransferData(flavorStr,getter_AddRefs(clip),&len);
+            // Unicode text?
+            if (!strcmp(flavorStr.get(), kUnicodeMime))
+            {
+                aTransferable->GetTransferData(flavorStr,getter_AddRefs(clip),&len);
+                nsCOMPtr<nsISupportsString> wideString;
+                wideString = do_QueryInterface(clip);
+                if (!wideString)
+                {
+                    return NS_ERROR_FAILURE;
+                }
 
-            nsCOMPtr<nsISupportsString> wideString;
-            wideString = do_QueryInterface(clip);
-            if (!wideString)
-                return NS_ERROR_FAILURE;
+                nsAutoString utf16string;
+                wideString->GetData(utf16string);
+                QString str = QString::fromUtf16(utf16string.get());
 
-            nsAutoString ucs2string;
-            wideString->GetData(ucs2string);
-            QString str = QString::fromUcs2(ucs2string.get());
-            qDebug("HERE %s '%s'", flavorStr.get(), str.latin1());
+                // Set the date to the clipboard
+                cb->setText(str, clipboardMode);
+                break;
+            }
 
-            mimeStore->AddFlavorData(flavorStr,str.utf8());
+            if ( !strcmp(flavorStr.get(), kNativeImageMime)
+              || !strcmp(flavorStr.get(), kPNGImageMime)
+              || !strcmp(flavorStr.get(), kJPEGImageMime)
+              || !strcmp(flavorStr.get(), kGIFImageMime))
+            {
+                qDebug("nsClipboard::SetNativeClipboardData(): Copying image data not implemented!");
+            }
         }
     }
-    cb->setData(mimeStore);
-    mIgnoreEmptyNotification = PR_FALSE;
+
     return NS_OK;
 }
 
+// nsClipboard::GetNativeClipboardData ie. Paste
+//
 NS_IMETHODIMP
 nsClipboard::GetNativeClipboardData(nsITransferable *aTransferable,
-                                    PRInt32 aWhichClipboard)
+                                    QClipboard::Mode clipboardMode)
 {
-    qDebug("GetNativeClipboardData");
-    // make sure we have a good transferable
-    if (nsnull == aTransferable) {
-        qDebug("  GetNativeClipboardData: Transferable is null!\n");
+    if (nsnull == aTransferable)
+    {
+        qDebug("  GetNativeClipboardData: Transferable is null!");
         return NS_ERROR_FAILURE;
     }
+
     // get flavor list that includes all acceptable flavors (including
     // ones obtained through conversion)
     nsCOMPtr<nsISupportsArray> flavorList;
     nsresult errCode = aTransferable->FlavorsTransferableCanImport(
         getter_AddRefs(flavorList));
 
-    if (NS_FAILED(errCode)) {
-        qDebug("nsClipboard::GetNativeClipboardData(): no FlavorsTransferable %i !\n",
+    if (NS_FAILED(errCode))
+    {
+        qDebug("nsClipboard::GetNativeClipboardData(): no FlavorsTransferable %i !",
                errCode);
         return NS_ERROR_FAILURE;
     }
+
     QClipboard *cb = QApplication::clipboard();
-    QMimeSource *ms = cb->data();
+    const QMimeData *mimeData = cb->mimeData(clipboardMode);
 
-    // Walk through flavors and see which flavor matches the one being pasted:
-    PRUint32 cnt;
-
-    flavorList->Count(&cnt);
-
+    // Walk through flavors and see which flavor matches the one being pasted
+    PRUint32 flavorCount;
+    flavorList->Count(&flavorCount);
     nsCAutoString foundFlavor;
-    for (PRUint32 i = 0; i < cnt; ++i) {
+
+    for (PRUint32 i = 0; i < flavorCount; ++i)
+    {
         nsCOMPtr<nsISupports> genericFlavor;
-
         flavorList->GetElementAt(i,getter_AddRefs(genericFlavor));
-        nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface(
-                                                       genericFlavor));
+        nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface( genericFlavor) );
 
-        if (currentFlavor) {
+        if (currentFlavor)
+        {
             nsXPIDLCString flavorStr;
-
             currentFlavor->ToString(getter_Copies(flavorStr));
-            foundFlavor = nsCAutoString(flavorStr);
 
-            if (ms->provides((const char*)flavorStr)) {
-                QByteArray ba = ms->encodedData((const char*)flavorStr);
-                nsCOMPtr<nsISupports> genericDataWrapper;
-                PRUint32 len = (PRUint32)ba.count();
+            // Ok, so which flavor the data being pasted could be?
+            // Text?
+            if (!strcmp(flavorStr.get(), kUnicodeMime)) 
+            {
+                if (mimeData->hasText())
+                {
+                    // Clipboard has text and flavor accepts text, so lets
+                    // handle the data as text
+                    foundFlavor = nsCAutoString(flavorStr);
 
-                nsPrimitiveHelpers::CreatePrimitiveForData(
-                    foundFlavor.get(),
-                    (void*)ba.data(),len,
-                    getter_AddRefs(genericDataWrapper));
+                    // Get the text data from clipboard
+                    QString text = mimeData->text();
+                    const QChar *unicode = text.unicode();
+                    // Is there a more correct way to get the size in UTF16?
+                    PRUint32 len = (PRUint32) 2*text.size();
 
-                aTransferable->SetTransferData(foundFlavor.get(),
-                                               genericDataWrapper,len);
+                    // And then to genericDataWrapper
+                    nsCOMPtr<nsISupports> genericDataWrapper;
+                    nsPrimitiveHelpers::CreatePrimitiveForData(
+                        foundFlavor.get(),
+                        (void*)unicode,
+                        len,
+                        getter_AddRefs(genericDataWrapper));
+
+                    // Data is good, set it to the transferable
+                    aTransferable->SetTransferData(foundFlavor.get(),
+                                                   genericDataWrapper,len);
+                    // And thats all
+                    break;
+                }
+            }
+
+            // Image?
+            if (!strcmp(flavorStr.get(), kJPEGImageMime)
+             || !strcmp(flavorStr.get(), kPNGImageMime)
+             || !strcmp(flavorStr.get(), kGIFImageMime))
+            {
+                qDebug("nsClipboard::GetNativeClipboardData(): Pasting image data not implemented!");
+                break;
             }
         }
     }
+
     return NS_OK;
 }
 
-/* inline */
-nsITransferable *
-nsClipboard::GetTransferable(PRInt32 aWhichClipboard)
-{
-    qDebug("GetTransferable");
-    nsITransferable *retval;
-
-    if (aWhichClipboard == kSelectionClipboard)
-        retval = mSelectionTransferable.get();
-    else
-        retval = mGlobalTransferable.get();
-
-    return retval;
-}
-
-//-------------------------------------------------------------------------
 NS_IMETHODIMP
-nsClipboard::HasDataMatchingFlavors(nsISupportsArray *aFlavorList,
-                                    PRInt32 aWhichClipboard,
-                                    PRBool           *_retval)
+nsClipboard::HasDataMatchingFlavors(const char** aFlavorList, PRUint32 aLength,
+                                    PRInt32 aWhichClipboard, PRBool *_retval)
 {
-    qDebug("HasDataMatchingFlavors");
     *_retval = PR_FALSE;
     if (aWhichClipboard != kGlobalClipboard)
         return NS_OK;
 
+    // Which kind of data in the clipboard
     QClipboard *cb = QApplication::clipboard();
-    QMimeSource *ms = cb->data();
-    PRUint32 cnt;
+    const QMimeData *mimeData = cb->mimeData();
+    const char *flavor=NULL;
+    QStringList formats = mimeData->formats();
+    // Temp QString for comparison
+    QString utf8text("text/plain;charset=utf-8");
+    // And is there matching flavor?
+    for (PRUint32 i = 0; i < aLength; ++i)
+    {
+        flavor = aFlavorList[i];
+        if (flavor)
+        {
+            QString qflavor(flavor);
 
-    aFlavorList->Count(&cnt);
-    for (PRUint32 i = 0;i < cnt; ++i) {
-        nsCOMPtr<nsISupports> genericFlavor;
-
-        aFlavorList->GetElementAt(i,getter_AddRefs(genericFlavor));
-
-        nsCOMPtr<nsISupportsCString> currentFlavor(do_QueryInterface(genericFlavor));
-        if (currentFlavor) {
-            nsXPIDLCString flavorStr;
-
-            currentFlavor->ToString(getter_Copies(flavorStr));
-
-            if (strcmp(flavorStr,kTextMime) == 0)
+            if (strcmp(flavor,kTextMime) == 0)
+            {
                 NS_WARNING("DO NOT USE THE text/plain DATA FLAVOR ANY MORE. USE text/unicode INSTEAD");
+            }
 
-            if (ms->provides((const char*)flavorStr)) {
+            // QClipboard says it has text/plain;charset=utf-8 data, mozilla wants to
+            // know if the data is text/unicode -> interpret text/plain;charset=utf-8 to text/unicode
+            if (formats.contains(qflavor) ||
+                ((strcmp(flavor, kUnicodeMime) == 0) && formats.contains(utf8text)))
+            {
+                // A match has been found, return'
                 *_retval = PR_TRUE;
-                qDebug("GetFormat %s\n",(const char*)flavorStr);
                 break;
             }
         }
@@ -270,46 +289,76 @@ nsClipboard::HasDataMatchingFlavors(nsISupportsArray *aFlavorList,
  */
 NS_IMETHODIMP
 nsClipboard::SetData(nsITransferable *aTransferable,
-                     nsIClipboardOwner *anOwner,
+                     nsIClipboardOwner *aOwner,
                      PRInt32 aWhichClipboard)
 {
-    qDebug("SetData");
-    if ((aTransferable == mGlobalTransferable.get()
-         && anOwner == mGlobalOwner.get()
-         && aWhichClipboard == kGlobalClipboard)
-        || (aTransferable == mSelectionTransferable.get()
-            && anOwner == mSelectionOwner.get()
-            && aWhichClipboard == kSelectionClipboard)) {
+    // See if we can short cut
+    if (
+        (aWhichClipboard == kGlobalClipboard
+           && aTransferable == mGlobalTransferable.get()
+           && aOwner == mGlobalOwner.get()
+        )
+       ||
+        (aWhichClipboard == kSelectionClipboard
+         && aTransferable == mSelectionTransferable.get()
+         && aOwner == mSelectionOwner.get()
+        )
+       )
+    {
         return NS_OK;
     }
+
+    nsresult rv;
+    if (!mPrivacyHandler) {
+      rv = NS_NewClipboardPrivacyHandler(getter_AddRefs(mPrivacyHandler));
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+    rv = mPrivacyHandler.PrepareDataForClipboard(aTransferable);
+    NS_ENSURE_SUCCESS(rv, rv);
+
     EmptyClipboard(aWhichClipboard);
 
-    switch (aWhichClipboard) {
-    case kSelectionClipboard:
-        mSelectionOwner = anOwner;
-        mSelectionTransferable = aTransferable;
-        break;
+    QClipboard::Mode mode;
 
-    case kGlobalClipboard:
-        mGlobalOwner = anOwner;
+    if (kGlobalClipboard == aWhichClipboard)
+    {
+        mGlobalOwner = aOwner;
         mGlobalTransferable = aTransferable;
-        break;
+
+        mode = QClipboard::Clipboard;
     }
-    QApplication::clipboard()->clear();
-    return SetNativeClipboardData(aWhichClipboard);
+    else
+    {
+        mSelectionOwner = aOwner;
+        mSelectionTransferable = aTransferable;
+
+        mode = QClipboard::Selection;
+    }
+    return SetNativeClipboardData( aTransferable, mode );
 }
 
 /**
  * Gets the transferable object
  */
 NS_IMETHODIMP
-nsClipboard::GetData(nsITransferable *aTransferable,PRInt32 aWhichClipboard)
+nsClipboard::GetData(nsITransferable *aTransferable, PRInt32 aWhichClipboard)
 {
-    qDebug("GetData");
-    if (nsnull != aTransferable) {
-        return GetNativeClipboardData(aTransferable,aWhichClipboard);
-    } else {
-        qDebug("  nsClipboard::GetData(), aTransferable is NULL.\n");
+    if (nsnull != aTransferable)
+    {
+        QClipboard::Mode mode;
+        if (kGlobalClipboard == aWhichClipboard)
+        {
+            mode = QClipboard::Clipboard;
+        }
+        else
+        {
+            mode = QClipboard::Selection;
+        }
+        return GetNativeClipboardData(aTransferable, mode);
+    }
+    else
+    {
+        qDebug("  nsClipboard::GetData(), aTransferable is NULL.");
     }
     return NS_ERROR_FAILURE;
 }
@@ -317,36 +366,42 @@ nsClipboard::GetData(nsITransferable *aTransferable,PRInt32 aWhichClipboard)
 NS_IMETHODIMP
 nsClipboard::EmptyClipboard(PRInt32 aWhichClipboard)
 {
-    qDebug("EmptyClipoard");
-    if (mIgnoreEmptyNotification) {
-        return NS_OK;
-    }
-    switch(aWhichClipboard) {
-    case kSelectionClipboard:
-        if (mSelectionOwner) {
+    if (aWhichClipboard == kSelectionClipboard)
+    {
+        if (mSelectionOwner)
+        {
             mSelectionOwner->LosingOwnership(mSelectionTransferable);
             mSelectionOwner = nsnull;
         }
         mSelectionTransferable = nsnull;
-        break;
-
-    case kGlobalClipboard:
-        if (mGlobalOwner) {
+    }
+    else
+    {
+        if (mGlobalOwner)
+        {
             mGlobalOwner->LosingOwnership(mGlobalTransferable);
             mGlobalOwner = nsnull;
         }
         mGlobalTransferable = nsnull;
-        break;
     }
+
     return NS_OK;
 }
 
 NS_IMETHODIMP
 nsClipboard::SupportsSelectionClipboard(PRBool *_retval)
 {
-    qDebug("SuppotsSelectionClipboard");
     NS_ENSURE_ARG_POINTER(_retval);
 
-    *_retval = PR_TRUE; // we support the selection clipboard on unix.
+    QClipboard *cb = QApplication::clipboard();
+    if (cb->supportsSelection())
+    {
+        *_retval = PR_TRUE; // we support the selection clipboard 
+    }
+    else
+    {
+        *_retval = PR_FALSE;
+    }
+
     return NS_OK;
 }

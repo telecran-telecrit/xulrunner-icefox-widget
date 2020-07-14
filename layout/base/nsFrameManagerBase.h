@@ -48,6 +48,8 @@
  * 04/20/2000       IBM Corp.      OS/2 VisualAge build.
  */
 
+/* part of nsFrameManager, to work around header inclusionordering */
+
 #ifndef _nsFrameManagerBase_h_
 #define _nsFrameManagerBase_h_
 
@@ -65,6 +67,9 @@ class nsILayoutHistoryState;
 
 class nsFrameManagerBase
 {
+public:
+  PRBool IsDestroyingFrames() { return mIsDestroyingFrames; }
+
 protected:
   class UndisplayedMap;
 
@@ -76,7 +81,8 @@ protected:
   PLDHashTable                    mPrimaryFrameMap;
   PLDHashTable                    mPlaceholderMap;
   UndisplayedMap*                 mUndisplayedMap;
-  PRBool                          mIsDestroyingFrames;
+  PRPackedBool                    mIsDestroying;        // The frame manager is being destroyed.
+  PRPackedBool                    mIsDestroyingFrames;  // The frame manager is destroying some frame(s).
 };
 
 #endif

@@ -40,7 +40,6 @@
 #include "nsFilePicker.h"
 
 #include "nsILocalFile.h"
-#include "nsIFileURL.h"
 #include "nsIURI.h"
 #include "nsISupportsArray.h"
 #include "nsMemory.h"
@@ -48,7 +47,6 @@
 #include "nsNetUtil.h"
 #include "nsReadableUtils.h"
 
-#include <qfiledialog.h>
 #include <qfile.h>
 #include <qstringlist.h>
 
@@ -59,16 +57,19 @@ nsFilePicker::nsFilePicker()
     : mDialog(0),
       mMode(nsIFilePicker::modeOpen)
 {
+    qDebug("nsFilePicker constructor");
 }
 
 nsFilePicker::~nsFilePicker()
 {
+    qDebug("nsFilePicker destructor");
     delete mDialog;
 }
 
 NS_IMETHODIMP
 nsFilePicker::Init(nsIDOMWindow *parent, const nsAString & title, PRInt16 mode)
 {
+    qDebug("nsFilePicker::Init()");
     return nsBaseFilePicker::Init(parent, title, mode);
 }
 
@@ -167,7 +168,7 @@ nsFilePicker::GetFile(nsILocalFile * *aFile)
 
 /* readonly attribute nsIFileURL fileURL; */
 NS_IMETHODIMP
-nsFilePicker::GetFileURL(nsIFileURL * *aFileURL)
+nsFilePicker::GetFileURL(nsIURI * *aFileURL)
 {
     nsCOMPtr<nsILocalFile> file;
     GetFile(getter_AddRefs(file));
@@ -196,6 +197,7 @@ nsFilePicker::GetFiles(nsISimpleEnumerator * *aFiles)
 NS_IMETHODIMP
 nsFilePicker::Show(PRInt16 *aReturn)
 {
+    qDebug("nsFilePicker::Show()");
     nsCAutoString directory;
     if (mDisplayDirectory) {
         mDisplayDirectory->GetNativePath(directory);
@@ -205,21 +207,21 @@ nsFilePicker::Show(PRInt16 *aReturn)
     case nsIFilePicker::modeOpen:
         break;
     case nsIFilePicker::modeOpenMultiple:
-        mDialog->setMode(QFileDialog::ExistingFiles);
+        mDialog->setFileMode(QFileDialog::ExistingFiles);
         break;
     case nsIFilePicker::modeSave:
-        mDialog->setMode(QFileDialog::AnyFile);
+        mDialog->setFileMode(QFileDialog::AnyFile);
         break;
     case nsIFilePicker::modeGetFolder:
-        mDialog->setMode(QFileDialog::DirectoryOnly);
+        mDialog->setFileMode(QFileDialog::DirectoryOnly);
         break;
     default:
         break;
     }
 
-    mDialog->setSelection(QString::fromUcs2(mDefault.get()));
+    mDialog->selectFile(QString::fromUtf16(mDefault.get()));
 
-    mDialog->setDir(directory.get());
+    mDialog->setDirectory(directory.get());
 
     QStringList filters;
     PRInt32 count = mFilters.Count();
@@ -230,9 +232,16 @@ nsFilePicker::Show(PRInt16 *aReturn)
 
     switch (mDialog->exec()) {
     case QDialog::Accepted: {
-        QCString path = QFile::encodeName(mDialog->selectedFile());
+        QStringList files = mDialog->selectedFiles();
+        QString selected;
+        if (!files.isEmpty())
+        {
+            selected = files[0];
+        }
+
+        QString path = QFile::encodeName(selected);
         qDebug("path is '%s'", path.data());
-        mFile.Assign(path);
+        mFile.Assign(path.toUtf8().data());
         *aReturn = nsIFilePicker::returnOK;
         if (mMode == modeSave) {
             nsCOMPtr<nsILocalFile> file;
@@ -262,10 +271,10 @@ nsFilePicker::Show(PRInt16 *aReturn)
 
 void nsFilePicker::InitNative(nsIWidget *parent, const nsAString &title, PRInt16 mode)
 {
+    qDebug("nsFilePicker::InitNative()");
     QWidget *parentWidget = (parent)? (QWidget*)parent->GetNativeData(NS_NATIVE_WIDGET):0;
 
     nsAutoString str(title);
-    mDialog = new QFileDialog(parentWidget);
-    mDialog->setCaption(QString::fromUcs2(str.get()));
+    mDialog = new QFileDialog(parentWidget, QString::fromUtf16(str.get()));
     mMode = mode;
 }

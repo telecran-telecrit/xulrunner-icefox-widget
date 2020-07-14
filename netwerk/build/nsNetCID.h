@@ -61,20 +61,6 @@
 #define NS_NETUTIL_CONTRACTID \
     "@mozilla.org/network/util;1"
 
-// service implementing nsIEventTarget.  events dispatched to this event
-// target will be executed on one of necko's background i/o threads.
-#define NS_IOTHREADPOOL_CLASSNAME \
-    "nsIOThreadPool"
-#define NS_IOTHREADPOOL_CONTRACTID \
-    "@mozilla.org/network/io-thread-pool;1"
-#define NS_IOTHREADPOOL_CID                          \
-{ /* f1d62b49-5051-48e2-9155-c3509428461e */         \
-    0xf1d62b49,                                      \
-    0x5051,                                          \
-    0x48e2,                                          \
-    {0x91, 0x55, 0xc3, 0x50, 0x94, 0x28, 0x46, 0x1e} \
-}
-
 // service implementing nsIProtocolProxyService and nsPIProtocolProxyService.
 #define NS_PROTOCOLPROXYSERVICE_CLASSNAME \
     "nsProtocolProxyService"
@@ -125,6 +111,26 @@
      0x2f7b,                                          \
      0x11d3,                                          \
      {0x8c, 0xd0, 0x00, 0x60, 0xb0, 0xfc, 0x14, 0xa3} \
+}
+
+// component inheriting from the simple URI component and also
+// implementing nsINestedURI.
+#define NS_SIMPLENESTEDURI_CID                           \
+{ /* 56388dad-287b-4240-a785-85c394012503 */             \
+     0x56388dad,                                         \
+     0x287b,                                             \
+     0x4240,                                             \
+     { 0xa7, 0x85, 0x85, 0xc3, 0x94, 0x01, 0x25, 0x03 }  \
+}
+
+// component inheriting from the nested simple URI component and also
+// carrying along its base URI
+#define NS_NESTEDABOUTURI_CID                            \
+{ /* 2f277c00-0eaf-4ddb-b936-41326ba48aae */             \
+     0x2f277c00,                                         \
+     0x0eaf,                                             \
+     0x4ddb,                                             \
+     { 0xb9, 0x36, 0x41, 0x32, 0x6b, 0xa4, 0x8a, 0xae }  \
 }
 
 // component implementing nsIStandardURL, nsIURI, nsIURL, nsISerializable,
@@ -207,19 +213,6 @@
     0x4701,                                          \
     0x4ba1,                                          \
     {0xb1, 0xd6, 0x53, 0x88, 0xe0, 0x41, 0xfb, 0x67} \
-}
-
-// DEPRECATED component implementing nsIAsyncStreamListener.
-#define NS_ASYNCSTREAMLISTENER_CLASSNAME \
-    "nsAsyncStreamListener"
-#define NS_ASYNCSTREAMLISTENER_CONTRACTID \
-    "@mozilla.org/network/async-stream-listener;1"
-#define NS_ASYNCSTREAMLISTENER_CID                   \
-{ /* 60047bb2-91c0-11d3-8cd9-0060b0fc14a3 */         \
-    0x60047bb2,                                      \
-    0x91c0,                                          \
-    0x11d3,                                          \
-    {0x8c, 0xd9, 0x00, 0x60, 0xb0, 0xfc, 0x14, 0xa3} \
 }
 
 // component implementing nsIStreamListenerTee.
@@ -343,6 +336,10 @@
 #define NS_INCREMENTALDOWNLOAD_CONTRACTID \
     "@mozilla.org/network/incremental-download;1"
 
+// component implementing nsISystemProxySettings.
+#define NS_SYSTEMPROXYSETTINGS_CONTRACTID \
+    "@mozilla.org/system-proxy-settings;1"
+
 // service implementing nsIStreamTransportService
 #define NS_STREAMTRANSPORTSERVICE_CLASSNAME \
     "nsStreamTransportService"
@@ -443,6 +440,17 @@
     {0x94, 0xdb, 0xd4, 0xf8, 0x59, 0x05, 0x82, 0x15} \
 }
 
+// component implementing nsIPrivateBrowsingService
+#define NS_PRIVATE_BROWSING_SERVICE_CONTRACTID \
+    "@mozilla.org/privatebrowsing-wrapper;1"
+#define NS_PRIVATE_BROWSING_SERVICE_CID              \
+{ /* c31f4883-839b-45f6-82ad-a6a9bc5ad599 */         \
+    0xc31f4883,                                      \
+    0x839b,                                          \
+    0x45f6,                                          \
+    {0x82, 0xad, 0xa6, 0xa9, 0xbc, 0x5a, 0xd5, 0x99} \
+}
+
 // component implementing nsIPrompt
 //
 // NOTE: this implementation does not have any way to correctly parent itself,
@@ -478,6 +486,30 @@
     {0x8f, 0xbc, 0xbe, 0xe8, 0xf9, 0x22, 0xea, 0x67} \
 }
 
+// service implementing nsIApplicationCacheService.
+#define NS_APPLICATIONCACHESERVICE_CLASSNAME \
+    "nsApplicationCacheService"
+#define NS_APPLICATIONCACHESERVICE_CONTRACTID \
+    "@mozilla.org/network/application-cache-service;1"
+#define NS_APPLICATIONCACHESERVICE_CID               \
+{ /* 02bf7a2a-39d8-4a23-a50c-2cbb085ab7a5 */         \
+    0x02bf7a2a,                                      \
+    0x39d8,                                          \
+    0x4a23,                                          \
+    {0xa5, 0x0c, 0x2c, 0xbb, 0x08, 0x5a, 0xb7, 0xa5} \
+}
+
+#define NS_APPLICATIONCACHENAMESPACE_CLASSNAME \
+    "nsApplicationCacheNamespace"
+#define NS_APPLICATIONCACHENAMESPACE_CONTRACTID \
+    "@mozilla.org/network/application-cache-namespace;1"
+#define NS_APPLICATIONCACHENAMESPACE_CID             \
+{ /* b00ed78a-04e2-4f74-8e1c-d1af79dfd12f */         \
+    0xb00ed78a,                                      \
+    0x04e2,                                          \
+    0x4f74,                                          \
+   {0x8e, 0x1c, 0xd1, 0xaf, 0x79, 0xdf, 0xd1, 0x2f}  \
+}
 
 /******************************************************************************
  * netwerk/protocol/http/ classes
@@ -616,6 +648,30 @@
 }
 
 /******************************************************************************
+ * netwerk/protocol/about/ classes
+ */
+
+#define NS_ABOUTPROTOCOLHANDLER_CLASSNAME \
+    "About Protocol Handler"
+#define NS_ABOUTPROTOCOLHANDLER_CID                  \
+{ /* 9e3b6c90-2f75-11d3-8cd0-0060b0fc14a3 */         \
+    0x9e3b6c90,                                      \
+    0x2f75,                                          \
+    0x11d3,                                          \
+    {0x8c, 0xd0, 0x00, 0x60, 0xb0, 0xfc, 0x14, 0xa3} \
+}
+
+#define NS_SAFEABOUTPROTOCOLHANDLER_CLASSNAME \
+    "Safe About Protocol Handler"
+#define NS_SAFEABOUTPROTOCOLHANDLER_CID              \
+{ /* 1423e739-782c-4081-b5d8-fe6fba68c0ef */         \
+    0x1423e739,                                      \
+    0x782c,                                          \
+    0x4081,                                          \
+    {0xb5, 0xd8, 0xfe, 0x6f, 0xba, 0x68, 0xc0, 0xef} \
+}
+
+/******************************************************************************
  * netwerk/dns/ classes
  */
 
@@ -643,6 +699,19 @@
     0x456b,                                          \
     {0x8c, 0x31, 0x28, 0x65, 0xfb, 0xb6, 0x8c, 0x91} \
 }
+
+#define NS_EFFECTIVETLDSERVICE_CLASSNAME \
+    "nsEffectiveTLDService"
+#define NS_EFFECTIVETLDSERVICE_CONTRACTID \
+    "@mozilla.org/network/effective-tld-service;1"
+#define NS_EFFECTIVETLDSERVICE_CID \
+{ /* cb9abbae-66b6-4609-8594-5c4ff300888e */         \
+    0xcb9abbae,                                      \
+    0x66b6,                                          \
+    0x4609,                                          \
+    {0x85, 0x94, 0x5c, 0x4f, 0xf3, 0x00, 0x88, 0x8e} \
+}
+
 
 /******************************************************************************
  * netwerk/mime classes
@@ -693,6 +762,14 @@
     { 0xa2, 0x8a, 0x5b, 0xa2, 0x44, 0x7f, 0xba, 0xce } \
 }
 
+#define NS_UDPSOCKETPROVIDER_CID                       \
+{ /* 320706D2-2E81-42c6-89C3-8D83B17D3FB4 */           \
+    0x320706d2,                                        \
+    0x2e81,                                            \
+    0x42c6,                                            \
+    { 0x89, 0xc3, 0x8d, 0x83, 0xb1, 0x7d, 0x3f, 0xb4 } \
+}
+
 #define NS_SSLSOCKETPROVIDER_CONTRACTID \
     NS_NETWORK_SOCKET_CONTRACTID_PREFIX "ssl"
 
@@ -733,19 +810,28 @@
     { 0xa6, 0x18, 0x00, 0x10, 0xa4, 0x01, 0xeb, 0x10 } \
 }
 
-/**
- * General-purpose content sniffer component. Use with CreateInstance.
- *
- * Implements nsIContentSniffer_MOZILLA_1_8_BRANCH
+/******************************************************************************
+ * netwerk/wifi classes
  */
-#define NS_GENERIC_CONTENT_SNIFFER \
-    "@mozilla.org/network/content-sniffer;1"
+#ifdef NECKO_WIFI
+#define NS_WIFI_MONITOR_CLASSNAME  "WIFI_MONITOR"
+#define NS_WIFI_MONITOR_CONTRACTID "@mozilla.org/wifi/monitor;1"
+
+#define NS_WIFI_MONITOR_COMPONENT_CID                  \
+{  0x3FF8FB9F,                                         \
+   0xEE63,                                             \
+   0x48DF,                                             \
+   { 0x89, 0xF0, 0xDA, 0xCE, 0x02, 0x42, 0xFD, 0x82 }  \
+}
+#endif
 
 /******************************************************************************
  * netwerk/streamconv classes
  */
 
 // service implementing nsIStreamConverterService
+#define NS_STREAMCONVERTERSERVICE_CONTRACTID \
+    "@mozilla.org/streamConverters;1"
 #define NS_STREAMCONVERTERSERVICE_CID                \
 { /* 892FFEB0-3F80-11d3-A16C-0050041CAF44 */         \
     0x892ffeb0,                                      \
@@ -754,31 +840,76 @@
     {0xa1, 0x6c, 0x00, 0x50, 0x04, 0x1c, 0xaf, 0x44} \
 }
 
+/**
+ * General-purpose content sniffer component. Use with CreateInstance.
+ *
+ * Implements nsIContentSniffer
+ */
+#define NS_GENERIC_CONTENT_SNIFFER \
+    "@mozilla.org/network/content-sniffer;1"
+
+/**
+ * Detector that can act as either an nsIStreamConverter or an
+ * nsIContentSniffer to decide whether text/plain data is "really" text/plain
+ * or APPLICATION_GUESS_FROM_EXT.  Use with CreateInstance.
+ */
+#define NS_BINARYDETECTOR_CONTRACTID \
+    "@mozilla.org/network/binary-detector;1"
+
 /******************************************************************************
  * netwerk/system classes
  */
 
 // service implementing nsINetworkLinkService
-#define NS_NETWORK_LINK_SERVICE_CLASSNAME \
-    "Network Link Status"
-#define NS_NETWORK_LINK_SERVICE_CID                  \
-{ /* 75a500a2-0030-40f7-86f8-63f225b940ae */         \
-    0x75a500a2,                                      \
-    0x0030,                                          \
-    0x40f7,                                          \
-    {0x86, 0xf8, 0x63, 0xf2, 0x25, 0xb9, 0x40, 0xae} \
-}
-
+#define NS_NETWORK_LINK_SERVICE_CLASSNAME "Network Link Status"
+#define NS_NETWORK_LINK_SERVICE_CID    \
+  { 0x75a500a2,                                        \
+    0x0030,                                            \
+    0x40f7,                                            \
+    { 0x86, 0xf8, 0x63, 0xf2, 0x25, 0xb9, 0x40, 0xae } \
+  }
+  
 /******************************************************************************
  * Contracts that can be implemented by necko users.
  */
 
 /**
+ * This contract ID will be gotten as a service and gets the opportunity to look
+ * at and veto all redirects that are processed by necko.
+ *
+ * Must implement nsIChannelEventSink
+ */
+#define NS_GLOBAL_CHANNELEVENTSINK_CONTRACTID \
+  "@mozilla.org/netwerk/global-channel-event-sink;1"
+
+/**
  * This contract ID will be gotten as a service implementing nsINetworkLinkService
  * and monitored by IOService for automatic online/offline management.
+ *
+ * Must implement nsINetworkLinkService
  */
 #define NS_NETWORK_LINK_SERVICE_CONTRACTID \
-    "@mozilla.org/network/network-link-service;1"
+  "@mozilla.org/network/network-link-service;1"
+
+/**
+ * This contract ID is used when Necko needs to wrap an nsIAuthPrompt as
+ * nsIAuthPrompt2. Implementing it is required for backwards compatibility
+ * with Versions before 1.9.
+ *
+ * Must implement nsIAuthPromptAdapterFactory
+ */
+#define NS_AUTHPROMPT_ADAPTER_FACTORY_CONTRACTID \
+  "@mozilla.org/network/authprompt-adapter-factory;1"
+
+/**
+ * Must implement nsICryptoHash.
+ */
+#define NS_CRYPTO_HASH_CONTRACTID "@mozilla.org/security/hash;1"
+
+/**
+ * Must implement nsICryptoHMAC.
+ */
+#define NS_CRYPTO_HMAC_CONTRACTID "@mozilla.org/security/hmac;1"
 
 /******************************************************************************
  * Categories
@@ -793,8 +924,7 @@
 
 /**
  * Services in this category will get told about each load that happens and get
- * the opportunity to override the detected MIME type via
- * nsIContentSniffer_MOZILLA_1_8_BRANCH.
+ * the opportunity to override the detected MIME type via nsIContentSniffer.
  * Services should not set the MIME type on the channel directly, but return the
  * new type. If getMIMETypeFromContent throws an exception, the type will remain
  * unchanged.
@@ -809,5 +939,10 @@
  * nsIChannel::LOAD_CALL_CONTENT_SNIFFERS.
  */
 #define NS_CONTENT_SNIFFER_CATEGORY "net-content-sniffers"
+
+/**
+ * Must implement nsINSSErrorsService.
+ */
+#define NS_NSS_ERRORS_SERVICE_CONTRACTID "@mozilla.org/nss_errors_service;1"
 
 #endif // nsNetCID_h__

@@ -39,7 +39,7 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: sslproto.h,v 1.9.2.2 2006/05/15 21:55:47 rrelyea%redhat.com Exp $ */
+/* $Id: sslproto.h,v 1.15 2010/02/16 18:56:48 wtc%google.com Exp $ */
 
 #ifndef __sslproto_h_
 #define __sslproto_h_
@@ -158,6 +158,13 @@
 #define TLS_DHE_RSA_WITH_AES_256_CBC_SHA  	0x0039
 #define TLS_DH_ANON_WITH_AES_256_CBC_SHA  	0x003A
 
+#define TLS_RSA_WITH_CAMELLIA_128_CBC_SHA      	0x0041
+#define TLS_DH_DSS_WITH_CAMELLIA_128_CBC_SHA   	0x0042
+#define TLS_DH_RSA_WITH_CAMELLIA_128_CBC_SHA   	0x0043
+#define TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA  	0x0044
+#define TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA  	0x0045
+#define TLS_DH_ANON_WITH_CAMELLIA_128_CBC_SHA  	0x0046
+
 #define TLS_RSA_EXPORT1024_WITH_DES_CBC_SHA     0x0062
 #define TLS_RSA_EXPORT1024_WITH_RC4_56_SHA      0x0064
 
@@ -165,6 +172,24 @@
 #define TLS_DHE_DSS_EXPORT1024_WITH_RC4_56_SHA  0x0065
 #define TLS_DHE_DSS_WITH_RC4_128_SHA            0x0066
 
+#define TLS_RSA_WITH_CAMELLIA_256_CBC_SHA      	0x0084
+#define TLS_DH_DSS_WITH_CAMELLIA_256_CBC_SHA   	0x0085
+#define TLS_DH_RSA_WITH_CAMELLIA_256_CBC_SHA   	0x0086
+#define TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA  	0x0087
+#define TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA  	0x0088
+#define TLS_DH_ANON_WITH_CAMELLIA_256_CBC_SHA  	0x0089
+
+#define TLS_RSA_WITH_SEED_CBC_SHA		0x0096
+
+/* TLS "Signaling Cipher Suite Value" (SCSV). May be requested by client.
+ * Must NEVER be chosen by server.  SSL 3.0 server acknowledges by sending
+ * back an empty Renegotiation Info (RI) server hello extension.
+ */
+#define TLS_EMPTY_RENEGOTIATION_INFO_SCSV	0x00FF
+
+/* Cipher Suite Values starting with 0xC000 are defined in informational
+ * RFCs.
+ */
 #define TLS_ECDH_ECDSA_WITH_NULL_SHA            0xC001
 #define TLS_ECDH_ECDSA_WITH_RC4_128_SHA         0xC002
 #define TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA    0xC003

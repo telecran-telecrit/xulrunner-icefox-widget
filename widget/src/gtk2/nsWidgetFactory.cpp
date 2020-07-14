@@ -39,20 +39,43 @@
 #include "nsIGenericFactory.h"
 #include "nsWidgetsCID.h"
 #include "nsAppShell.h"
+#include "nsAppShellSingleton.h"
 #include "nsBaseWidget.h"
 #include "nsLookAndFeel.h"
 #include "nsWindow.h"
 #include "nsTransferable.h"
-#include "nsClipboardHelper.h"
 #include "nsHTMLFormatConverter.h"
+#ifdef MOZ_X11
+#include "nsClipboardHelper.h"
 #include "nsClipboard.h"
 #include "nsDragService.h"
+#endif
 #include "nsFilePicker.h"
 #include "nsSound.h"
 #include "nsBidiKeyboard.h"
 #include "nsNativeKeyBindings.h"
+#include "nsScreenManagerGtk.h"
+
+#ifdef NS_PRINTING
+#include "nsPrintOptionsGTK.h"
+#include "nsPrintSession.h"
+#include "nsDeviceContextSpecG.h"
+#endif
+
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
+#include "nsImageToPixbuf.h"
+#include "nsPrintDialogGTK.h"
+
+#if defined(NS_OSSO)
+#include "nsIdleServiceOSSO.h"
+#elif defined(MOZ_X11)
+#include "nsIdleServiceGTK.h"
+#endif
+
+#ifdef NATIVE_THEME_SUPPORT
+#include "nsNativeThemeGTK.h"
+#endif
 
 #include "nsIComponentRegistrar.h"
 #include "nsComponentManagerUtils.h"
@@ -68,15 +91,66 @@ static NS_DEFINE_CID(kNativeFilePickerCID, NS_FILEPICKER_CID);
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsWindow)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsChildWindow)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsAppShell)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsLookAndFeel)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsTransferable)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsBidiKeyboard)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsClipboardHelper)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsHTMLFormatConverter)
+#ifdef MOZ_X11
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsClipboardHelper)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsClipboard, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDragService)
+#endif
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSound)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsScreenManagerGtk)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsImageToPixbuf)
+
+
+#ifdef NATIVE_THEME_SUPPORT
+// from nsWindow.cpp
+extern PRBool gDisableNativeTheme;
+
+static NS_IMETHODIMP
+nsNativeThemeGTKConstructor(nsISupports *aOuter, REFNSIID aIID,
+                            void **aResult)
+{
+    nsresult rv;
+    nsNativeThemeGTK * inst;
+
+    if (gDisableNativeTheme)
+        return NS_ERROR_NO_INTERFACE;
+
+    *aResult = NULL;
+    if (NULL != aOuter) {
+        rv = NS_ERROR_NO_AGGREGATION;
+        return rv;
+    }
+
+    NS_NEWXPCOM(inst, nsNativeThemeGTK);
+    if (NULL == inst) {
+        rv = NS_ERROR_OUT_OF_MEMORY;
+        return rv;
+    }
+    NS_ADDREF(inst);
+    rv = inst->QueryInterface(aIID, aResult);
+    NS_RELEASE(inst);
+
+    return rv;
+}
+#endif
+
+#if defined(NS_OSSO)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsIdleServiceOSSO)
+#elif defined(MOZ_X11)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsIdleServiceGTK)
+#endif
+
+#ifdef NS_PRINTING
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsDeviceContextSpecGTK)
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintOptionsGTK, Init)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsPrinterEnumeratorGTK)
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintSession, Init)
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintDialogServiceGTK, Init)
+#endif
 
 static NS_IMETHODIMP
 nsFilePickerConstructor(nsISupports *aOuter, REFNSIID aIID,
@@ -97,10 +171,10 @@ nsFilePickerConstructor(nsISupports *aOuter, REFNSIID aIID,
         allowPlatformPicker = prefAllow;
     }
   }
-
+  
   nsCOMPtr<nsIFilePicker> picker;
   if (allowPlatformPicker && gtk_check_version(2,6,3) == NULL) {
-    picker = new nsFilePicker;
+      picker = new nsFilePicker;
   } else {
     picker = do_CreateInstance(kXULFilePickerCID);
   }
@@ -186,6 +260,7 @@ static const nsModuleComponentInfo components[] =
     NS_TRANSFERABLE_CID,
     "@mozilla.org/widget/transferable;1",
     nsTransferableConstructor },
+#ifdef MOZ_X11
   { "Gtk Clipboard",
     NS_CLIPBOARD_CID,
     "@mozilla.org/widget/clipboard;1",
@@ -198,6 +273,7 @@ static const nsModuleComponentInfo components[] =
     NS_DRAGSERVICE_CID,
     "@mozilla.org/widget/dragservice;1",
     nsDragServiceConstructor },
+#endif
   { "HTML Format Converter",
     NS_HTMLFORMATCONVERTER_CID,
     "@mozilla.org/widget/htmlformatconverter;1",
@@ -217,17 +293,69 @@ static const nsModuleComponentInfo components[] =
   { "Editor Native Keybindings",
     NS_NATIVEKEYBINDINGSEDITOR_CID,
     NS_NATIVEKEYBINDINGSEDITOR_CONTRACTID,
-    nsNativeKeyBindingsTextAreaConstructor }
+    nsNativeKeyBindingsTextAreaConstructor },
+  { "Gtk Screen Manager",
+    NS_SCREENMANAGER_CID,
+    "@mozilla.org/gfx/screenmanager;1",
+    nsScreenManagerGtkConstructor },
+#ifdef NATIVE_THEME_SUPPORT
+   { "Native Theme Renderer",
+    NS_THEMERENDERER_CID,
+    "@mozilla.org/chrome/chrome-native-theme;1",
+     nsNativeThemeGTKConstructor },
+#endif
+#ifdef NS_PRINTING
+  { "PrintSettings Service",
+    NS_PRINTSETTINGSSERVICE_CID,
+    "@mozilla.org/gfx/printsettings-service;1",
+    nsPrintOptionsGTKConstructor },
+  { "Gtk Printer Enumerator",
+    NS_PRINTER_ENUMERATOR_CID,
+    //    "@mozilla.org/gfx/printer_enumerator/gtk;1",
+    "@mozilla.org/gfx/printerenumerator;1",
+    nsPrinterEnumeratorGTKConstructor },
+  { "Print Session",
+    NS_PRINTSESSION_CID,
+    "@mozilla.org/gfx/printsession;1",
+    nsPrintSessionConstructor },
+  { "Gtk Device Context Spec",
+    NS_DEVICE_CONTEXT_SPEC_CID,
+    //    "@mozilla.org/gfx/device_context_spec/gtk;1",
+    "@mozilla.org/gfx/devicecontextspec;1",
+    nsDeviceContextSpecGTKConstructor },
+  { "Native Print Dialog",
+    NS_PRINTDIALOGSERVICE_CID,
+    NS_PRINTDIALOGSERVICE_CONTRACTID,
+    nsPrintDialogServiceGTKConstructor },
+#endif 
+  { "Image to gdk-pixbuf converter",
+    NS_IMAGE_TO_PIXBUF_CID,
+    "@mozilla.org/widget/image-to-gdk-pixbuf;1",
+    nsImageToPixbufConstructor },
+#if defined(NS_OSSO)
+  { "User Idle Service",
+    NS_IDLE_SERVICE_CID,
+    "@mozilla.org/widget/idleservice;1",
+    nsIdleServiceOSSOConstructor },  
+#elif defined(MOZ_X11)
+{ "User Idle Service",
+    NS_IDLE_SERVICE_CID,
+    "@mozilla.org/widget/idleservice;1",
+    nsIdleServiceGTKConstructor },
+#endif
+
 };
 
-PR_STATIC_CALLBACK(void)
+static void
 nsWidgetGtk2ModuleDtor(nsIModule *aSelf)
 {
   nsFilePicker::Shutdown();
+  nsSound::Shutdown();
   nsWindow::ReleaseGlobals();
-  nsAppShell::ReleaseGlobals();
+  nsAppShellShutdown(aSelf);
 }
 
-NS_IMPL_NSGETMODULE_WITH_DTOR(nsWidgetGtk2Module,
-                              components,
-                              nsWidgetGtk2ModuleDtor)
+NS_IMPL_NSGETMODULE_WITH_CTOR_DTOR(nsWidgetGtk2Module,
+                                   components,
+                                   nsAppShellInit,
+                                   nsWidgetGtk2ModuleDtor)

@@ -40,6 +40,7 @@
 
 #include "nsUCSupport.h"
 #include "nsUTF32ToUnicode.h"
+#include "nsCharTraits.h"
 #include <string.h>
 
 //----------------------------------------------------------------------
@@ -96,9 +97,7 @@ static nsresult ConvertCommon(const char * aSrc,
     ucs4 =  aIsLE ? LE_STRING_TO_UCS4(aBuffer) : BE_STRING_TO_UCS4(aBuffer); 
     if (ucs4 < 0x10000L)  // BMP
     {
-      // XXX Do we have to convert surrogate code points to the replacement
-      // character (0xfffd)?  
-      *dest++= PRUnichar(ucs4);
+      *dest++= IS_SURROGATE(ucs4) ? UCS2_REPLACEMENT_CHAR : PRUnichar(ucs4);
     }
     else if (ucs4 < 0x110000L)  // plane 1 through plane 16 
     {
@@ -108,9 +107,8 @@ static nsresult ConvertCommon(const char * aSrc,
         *aDestLength = 0;
         return NS_OK_UDEC_MOREOUTPUT;
       }
-      // ((ucs4 - 0x10000) >> 10) + 0xd800;
-      *dest++= PRUnichar((ucs4 >> 10) + 0xd7c0);  // high surrogate
-      *dest++= PRUnichar(ucs4 & 0x3ffL | 0xdc00); // low surrogate
+      *dest++= H_SURROGATE(ucs4);
+      *dest++= L_SURROGATE(ucs4);
     }       
     // Codepoints in plane 17 and higher (> 0x10ffff)
     // are not representable in UTF-16 we use for the internal
@@ -119,7 +117,7 @@ static nsresult ConvertCommon(const char * aSrc,
     // in plane 17 and higher. Therefore, we convert them
     // to Unicode replacement character (0xfffd).
     else                   
-      *dest++ = 0xfffd;
+      *dest++ = UCS2_REPLACEMENT_CHAR;
     src += *aState;
     *aState = 0;
   }
@@ -141,20 +139,18 @@ static nsresult ConvertCommon(const char * aSrc,
     ucs4 =  aIsLE ? LE_STRING_TO_UCS4(src) : BE_STRING_TO_UCS4(src); 
     if (ucs4 < 0x10000L)  // BMP
     {
-      // XXX Do we have to convert surrogate code points to the replacement
-      // character (0xfffd)?  
-      *dest++= PRUnichar(ucs4);
+      *dest++= IS_SURROGATE(ucs4) ? UCS2_REPLACEMENT_CHAR : PRUnichar(ucs4);
     }
     else if (ucs4 < 0x110000L)  // plane 1 through plane 16 
     {
       if (destEnd - dest < 2) 
         break;
       // ((ucs4 - 0x10000) >> 10) + 0xd800;
-      *dest++= PRUnichar((ucs4 >> 10) + 0xd7c0); 
-      *dest++= PRUnichar(ucs4 & 0x3ffL | 0xdc00);
+      *dest++= H_SURROGATE(ucs4);
+      *dest++= L_SURROGATE(ucs4);
     }       
     else                       // plane 17 and higher
-      *dest++ = 0xfffd;
+      *dest++ = UCS2_REPLACEMENT_CHAR;
   }
 
   //output not finished, output buffer too short
@@ -171,7 +167,7 @@ static nsresult ConvertCommon(const char * aSrc,
 //----------------------------------------------------------------------
 // Class nsUTF32ToUnicode [implementation]
 
-nsUTF32ToUnicode::nsUTF32ToUnicode() : nsBasicDecoderSupport()
+nsUTF32ToUnicodeBase::nsUTF32ToUnicodeBase() : nsBasicDecoderSupport()
 {
   Reset();
 }
@@ -179,9 +175,9 @@ nsUTF32ToUnicode::nsUTF32ToUnicode() : nsBasicDecoderSupport()
 //----------------------------------------------------------------------
 // Subclassing of nsDecoderSupport class [implementation]
 
-NS_IMETHODIMP nsUTF32ToUnicode::GetMaxLength(const char * aSrc, 
-                                            PRInt32 aSrcLength, 
-                                            PRInt32 * aDestLength)
+NS_IMETHODIMP nsUTF32ToUnicodeBase::GetMaxLength(const char * aSrc, 
+                                                 PRInt32 aSrcLength, 
+                                                 PRInt32 * aDestLength)
 {
   // Non-BMP characters take two PRUnichars(a pair of surrogate codepoints)
   // so that we have to divide by 2 instead of 4 for the worst case.
@@ -193,7 +189,7 @@ NS_IMETHODIMP nsUTF32ToUnicode::GetMaxLength(const char * aSrc,
 //----------------------------------------------------------------------
 // Subclassing of nsBasicDecoderSupport class [implementation]
 
-NS_IMETHODIMP nsUTF32ToUnicode::Reset()
+NS_IMETHODIMP nsUTF32ToUnicodeBase::Reset()
 {
   // the number of additional bytes to read to complete UTF-32 4byte seq.
   mState = 0;  
@@ -207,7 +203,7 @@ NS_IMETHODIMP nsUTF32ToUnicode::Reset()
 // Class nsUTF32BEToUnicode [implementation]
 
 //----------------------------------------------------------------------
-// Subclassing of nsUTF32ToUnicode class [implementation]
+// Subclassing of nsUTF32ToUnicodeBase class [implementation]
 
 NS_IMETHODIMP nsUTF32BEToUnicode::Convert(const char * aSrc, 
                                           PRInt32 * aSrcLength, 
@@ -222,7 +218,7 @@ NS_IMETHODIMP nsUTF32BEToUnicode::Convert(const char * aSrc,
 // Class nsUTF32LEToUnicode [implementation]
   
 //----------------------------------------------------------------------
-// Subclassing of nsUTF32ToUnicode class [implementation]
+// Subclassing of nsUTF32ToUnicodeBase class [implementation]
 
 NS_IMETHODIMP nsUTF32LEToUnicode::Convert(const char * aSrc, 
                                           PRInt32 * aSrcLength, 
@@ -231,6 +227,82 @@ NS_IMETHODIMP nsUTF32LEToUnicode::Convert(const char * aSrc,
 {
   return ConvertCommon(aSrc, aSrcLength, aDest, aDestLength, &mState, 
                        mBufferInc, PR_TRUE);
+}
+
+//----------------------------------------------------------------------
+// Class nsUTF32ToUnicode [implementation]
+
+//----------------------------------------------------------------------
+// Subclassing of nsUTF32ToUnicodeBase class [implementation]
+
+NS_IMETHODIMP nsUTF32ToUnicode::Reset()
+{
+  nsresult rv = nsUTF32ToUnicodeBase::Reset();
+  mState = 4;
+  mEndian = kUnknown;
+  mFoundBOM = PR_FALSE;
+  return rv;
+}
+
+NS_IMETHODIMP nsUTF32ToUnicode::Convert(const char * aSrc, 
+                                        PRInt32 * aSrcLength, 
+                                        PRUnichar * aDest, 
+                                        PRInt32 * aDestLength)
+{
+  PRBool foundBOM = PR_FALSE;
+  if (4 == mState) // Called for the first time.
+  {
+    if (*aSrcLength < 4)
+      return NS_ERROR_ILLEGAL_INPUT;
+
+    // check if BOM (0xFEFF) is at the beginning, remove it if found, and
+    // set mEndian accordingly.
+    if (0xFF == PRUint8(aSrc[0]) && 0xFE == PRUint8(aSrc[1]) &&
+        0 == PRUint8(aSrc[2]) && 0 == PRUint8(aSrc[3])) {
+      aSrc += 4;
+      *aSrcLength -= 4;
+      mState = 0;
+      mEndian = kLittleEndian;
+      mFoundBOM = foundBOM = PR_TRUE;
+    }
+    else if (0 == PRUint8(aSrc[0]) && 0 == PRUint8(aSrc[1]) &&
+             0xFE == PRUint8(aSrc[2]) && 0xFF == PRUint8(aSrc[3])) {
+      aSrc += 4;
+      *aSrcLength -= 4;
+      mState = 0;
+      mEndian = kBigEndian;
+      mFoundBOM = foundBOM = PR_TRUE;
+    }
+    // BOM is not found, but we can use a simple heuristic to determine
+    // the endianness. Assume the first character is [U+0001, U+FFFF].
+    // Not always valid, but it's very likely to hold for html/xml/css. 
+#if 0 // BE case will be handled below
+    else if (!aSrc[0] && !aSrc[1] && (aSrc[2] || aSrc[3])) {  // 0x00 0x00 0xhh 0xhh (hh != 00)
+      mState = 0;
+      mEndian = kBigEndian;
+    }
+#endif
+    else if ((aSrc[0] || aSrc[1]) && !aSrc[2] && !aSrc[3]) {  // 0xhh 0xhh 0x00 0x00 (hh != 00)
+      mState = 0;
+      mEndian = kLittleEndian;
+    }
+    else { // Neither BOM nor 'plausible' byte patterns at the beginning.
+           // Just assume it's BE (following Unicode standard)
+           // and let the garbage show up in the browser. (security concern?)
+           // (bug 246194)
+      mState = 0;
+      mEndian = kBigEndian;
+    }
+  }
+
+  nsresult rv = ConvertCommon(aSrc, aSrcLength, aDest, aDestLength, &mState, 
+                              mBufferInc, mEndian == kLittleEndian);
+  if (foundBOM)
+    *aSrcLength += 4; // need to consume BOM
+
+  // If BOM is not found and we're to return NS_OK, signal that BOM
+  // is not found. Otherwise, return |rv| from |UTF16ConvertToUnicode|
+  return (rv == NS_OK && !mFoundBOM) ? NS_OK_UDEC_NOBOMFOUND : rv;
 }
 
 // XXX : What to do with 'unflushed' mBufferInc?? : Finish()

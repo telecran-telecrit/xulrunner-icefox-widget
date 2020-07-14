@@ -96,6 +96,8 @@
 #define APPLICATION_XPINSTALL               "application/x-xpinstall"
 
 #define AUDIO_BASIC                         "audio/basic"
+#define AUDIO_OGG                           "audio/ogg"
+#define AUDIO_WAV                           "audio/x-wav"
 
 #define IMAGE_GIF                           "image/gif"
 #define IMAGE_JPG                           "image/jpeg"
@@ -143,6 +145,8 @@
 #define TEXT_XUL                            "application/vnd.mozilla.xul+xml"
 
 #define VIDEO_MPEG                          "video/mpeg"
+#define VIDEO_OGG                           "video/ogg"
+#define APPLICATION_OGG                     "application/ogg"
 
 /* x-uuencode-apple-single. QuickMail made me do this. */
 #define UUENCODE_APPLE_SINGLE               "x-uuencode-apple-single"
@@ -191,7 +195,6 @@
 
 #define UNKNOWN_CONTENT_TYPE                "application/x-unknown-content-type"
 #define APPLICATION_GUESS_FROM_EXT          "application/x-vnd.mozilla.guess-from-ext"
-#define APPLICATION_MAYBE_TEXT              "application/x-vnd.mozilla.maybe-text"
 #define VIEWSOURCE_CONTENT_TYPE             "application/x-view-source"
 
 #define APPLICATION_DIRECTORY				        "application/directory" /* text/x-vcard is synonym */

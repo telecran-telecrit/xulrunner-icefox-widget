@@ -51,6 +51,7 @@
 #include "nsNetUtil.h"
 #include "nsCOMPtr.h"
 #include "nsAutoPtr.h"
+#include "nsString.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -59,6 +60,7 @@
 /* used with esd_open_sound */
 static int esdref = -1;
 static PRLibrary *elib = nsnull;
+static PRLibrary *libcanberra = nsnull;
 
 // the following from esd.h
 
@@ -71,17 +73,32 @@ static PRLibrary *elib = nsnull;
 
 #define WAV_MIN_LENGTH 44
 
-typedef int (PR_CALLBACK *EsdOpenSoundType)(const char *host);
-typedef int (PR_CALLBACK *EsdCloseType)(int);
+typedef int (*EsdOpenSoundType)(const char *host);
+typedef int (*EsdCloseType)(int);
 
 /* used to play the sounds from the find symbol call */
-typedef int (PR_CALLBACK *EsdPlayStreamType)  (int, 
-                                               int, 
-                                               const char *, 
-                                               const char *);
-typedef int  (PR_CALLBACK *EsdAudioOpenType)  (void);
-typedef int  (PR_CALLBACK *EsdAudioWriteType) (const void *, int);
-typedef void (PR_CALLBACK *EsdAudioCloseType) (void);
+typedef int  (*EsdPlayStreamType) (int, int, const char *, const char *);
+typedef int  (*EsdAudioOpenType)  (void);
+typedef int  (*EsdAudioWriteType) (const void *, int);
+typedef void (*EsdAudioCloseType) (void);
+
+/* used to find and play common system event sounds.
+   this interfaces with libcanberra.
+ */
+typedef struct _ca_context ca_context;
+
+typedef int (*ca_context_create_fn) (ca_context **);
+typedef int (*ca_context_destroy_fn) (ca_context *);
+typedef int (*ca_context_play_fn) (ca_context *c,
+                                   uint32_t id,
+                                   ...);
+typedef int (*ca_context_change_props_fn) (ca_context *c,
+                                           ...);
+
+static ca_context_create_fn ca_context_create;
+static ca_context_destroy_fn ca_context_destroy;
+static ca_context_play_fn ca_context_play;
+static ca_context_change_props_fn ca_context_change_props;
 
 NS_IMPL_ISUPPORTS2(nsSound, nsISound, nsIStreamLoaderObserver)
 
@@ -95,8 +112,9 @@ nsSound::~nsSound()
 {
     /* see above comment */
     if (esdref != -1) {
-        EsdCloseType EsdClose = (EsdCloseType) PR_FindSymbol(elib, "esd_close");
-        (*EsdClose)(esdref);
+        EsdCloseType EsdClose = (EsdCloseType) PR_FindFunctionSymbol(elib, "esd_close");
+        if (EsdClose)
+            (*EsdClose)(esdref);
         esdref = -1;
     }
 }
@@ -104,32 +122,64 @@ nsSound::~nsSound()
 NS_IMETHODIMP
 nsSound::Init()
 {
-    /* we don't need to do esd_open_sound if we are only going to play files
-       but we will if we want to do things like streams, etc
-    */
+    // This function is designed so that no library is compulsory, and
+    // one library missing doesn't cause the other(s) to not be used.
     if (mInited) 
         return NS_OK;
-    if (elib) 
-        return NS_OK;
-
-    EsdOpenSoundType EsdOpenSound;
-
-    elib = PR_LoadLibrary("libesd.so.0");
-    if (!elib) return NS_ERROR_FAILURE;
-
-    EsdOpenSound = (EsdOpenSoundType) PR_FindSymbol(elib, "esd_open_sound");
-
-    if (!EsdOpenSound)
-        return NS_ERROR_FAILURE;
-
-    esdref = (*EsdOpenSound)("localhost");
-
-    if (!esdref)
-        return NS_ERROR_FAILURE;
 
     mInited = PR_TRUE;
 
+    if (!elib) {
+        /* we don't need to do esd_open_sound if we are only going to play files
+           but we will if we want to do things like streams, etc */
+        EsdOpenSoundType EsdOpenSound;
+
+        elib = PR_LoadLibrary("libesd.so.0");
+        if (elib) {
+            EsdOpenSound = (EsdOpenSoundType) PR_FindFunctionSymbol(elib, "esd_open_sound");
+            if (!EsdOpenSound) {
+                PR_UnloadLibrary(elib);
+                elib = nsnull;
+            } else {
+                esdref = (*EsdOpenSound)("localhost");
+                if (!esdref) {
+                    PR_UnloadLibrary(elib);
+                    elib = nsnull;
+                }
+            }
+        }
+    }
+
+    if (!libcanberra) {
+        libcanberra = PR_LoadLibrary("libcanberra.so.0");
+        if (libcanberra) {
+            ca_context_create = (ca_context_create_fn) PR_FindFunctionSymbol(libcanberra, "ca_context_create");
+            if (!ca_context_create) {
+                PR_UnloadLibrary(libcanberra);
+                libcanberra = nsnull;
+            } else {
+                // at this point we know we have a good libcanberra library
+                ca_context_destroy = (ca_context_destroy_fn) PR_FindFunctionSymbol(libcanberra, "ca_context_destroy");
+                ca_context_play = (ca_context_play_fn) PR_FindFunctionSymbol(libcanberra, "ca_context_play");
+                ca_context_change_props = (ca_context_change_props_fn) PR_FindFunctionSymbol(libcanberra, "ca_context_change_props");
+            }
+        }
+    }
+
     return NS_OK;
+}
+
+/* static */ void
+nsSound::Shutdown()
+{
+    if (elib) {
+        PR_UnloadLibrary(elib);
+        elib = nsnull;
+    }
+    if (libcanberra) {
+        PR_UnloadLibrary(libcanberra);
+        libcanberra = nsnull;
+    }
 }
 
 #define GET_WORD(s, i) (s[i+1] << 8) | s[i]
@@ -170,6 +220,11 @@ NS_IMETHODIMP nsSound::OnStreamComplete(nsIStreamLoader *aLoader,
     PRUint16 format, channels = 1, bits_per_sample = 0;
     const PRUint8 *audio = nsnull;
     size_t audio_len = 0;
+
+    if (dataLen < 4) {
+        NS_WARNING("Sound stream too short to determine its type");
+        return NS_ERROR_FAILURE;
+    }
 
     if (memcmp(data, "RIFF", 4)) {
 #ifdef DEBUG
@@ -259,9 +314,10 @@ NS_IMETHODIMP nsSound::OnStreamComplete(nsIStreamLoader *aLoader,
 
     /* open up connection to esd */  
     EsdPlayStreamType EsdPlayStream = 
-        (EsdPlayStreamType) PR_FindSymbol(elib, 
-                                          "esd_play_stream");
-    // XXX what if that fails? (Bug 241738)
+        (EsdPlayStreamType) PR_FindFunctionSymbol(elib, 
+                                                  "esd_play_stream");
+    if (!EsdPlayStream)
+        return NS_ERROR_FAILURE;
 
     mask = ESD_PLAY | ESD_STREAM;
 
@@ -298,9 +354,13 @@ NS_IMETHODIMP nsSound::OnStreamComplete(nsIStreamLoader *aLoader,
     if (fd < 0) {
       int *esd_audio_format = (int *) PR_FindSymbol(elib, "esd_audio_format");
       int *esd_audio_rate = (int *) PR_FindSymbol(elib, "esd_audio_rate");
-      EsdAudioOpenType EsdAudioOpen = (EsdAudioOpenType) PR_FindSymbol(elib, "esd_audio_open");
-      EsdAudioWriteType EsdAudioWrite = (EsdAudioWriteType) PR_FindSymbol(elib, "esd_audio_write");
-      EsdAudioCloseType EsdAudioClose = (EsdAudioCloseType) PR_FindSymbol(elib, "esd_audio_close");
+      EsdAudioOpenType EsdAudioOpen = (EsdAudioOpenType) PR_FindFunctionSymbol(elib, "esd_audio_open");
+      EsdAudioWriteType EsdAudioWrite = (EsdAudioWriteType) PR_FindFunctionSymbol(elib, "esd_audio_write");
+      EsdAudioCloseType EsdAudioClose = (EsdAudioCloseType) PR_FindFunctionSymbol(elib, "esd_audio_close");
+
+      if (!esd_audio_format || !esd_audio_rate ||
+          !EsdAudioOpen || !EsdAudioWrite || !EsdAudioClose)
+          return NS_ERROR_FAILURE;
 
       *esd_audio_format = mask;
       *esd_audio_rate = samples_per_sec;
@@ -313,7 +373,7 @@ NS_IMETHODIMP nsSound::OnStreamComplete(nsIStreamLoader *aLoader,
       (*EsdAudioClose)();
     } else {
       while (audio_len > 0) {
-        size_t written = write(fd, audio, audio_len);
+        ssize_t written = write(fd, audio, audio_len);
         if (written <= 0)
           break;
         audio += written;
@@ -347,22 +407,74 @@ NS_METHOD nsSound::Play(nsIURL *aURL)
     return rv;
 }
 
-NS_IMETHODIMP nsSound::PlaySystemSound(const char *aSoundAlias)
+nsresult nsSound::PlaySystemEventSound(const nsAString &aSoundAlias)
 {
-    if (!aSoundAlias)
-        return NS_ERROR_FAILURE;
+    if (!libcanberra)
+        return NS_OK;
 
-    if (strcmp(aSoundAlias, "_moz_mailbeep") == 0) {
-        return Beep();
+    // Do we even want alert sounds?
+    // If so, what sound theme are we using?
+    GtkSettings* settings = gtk_settings_get_default();
+    gchar* sound_theme_name = nsnull;
+
+    if (g_object_class_find_property(G_OBJECT_GET_CLASS(settings), "gtk-sound-theme-name") &&
+        g_object_class_find_property(G_OBJECT_GET_CLASS(settings), "gtk-enable-event-sounds")) {
+        gboolean enable_sounds = TRUE;
+        g_object_get(settings, "gtk-enable-event-sounds", &enable_sounds,
+                               "gtk-sound-theme-name", &sound_theme_name,
+                               NULL);
+
+        if (!enable_sounds) {
+            g_free(sound_theme_name);
+            return NS_OK;
+        }
     }
+
+    // This allows us to avoid race conditions with freeing the context by handing that
+    // responsibility to Glib, and still use one context at a time
+    ca_context* ctx = nsnull;
+    static GStaticPrivate ctx_static_private = G_STATIC_PRIVATE_INIT;
+    ctx = (ca_context*) g_static_private_get(&ctx_static_private);
+    if (!ctx) {
+        ca_context_create(&ctx);
+        if (!ctx) {
+            g_free(sound_theme_name);
+            return NS_ERROR_OUT_OF_MEMORY;
+        }
+
+        g_static_private_set(&ctx_static_private, ctx, (GDestroyNotify) ca_context_destroy);
+    }
+
+    if (sound_theme_name) {
+        ca_context_change_props(ctx, "canberra.xdg-theme.name", sound_theme_name, NULL);
+        g_free(sound_theme_name);
+    }
+
+    if (aSoundAlias.Equals(NS_SYSSOUND_ALERT_DIALOG))
+        ca_context_play(ctx, 0, "event.id", "dialog-warning", NULL);
+    else if (aSoundAlias.Equals(NS_SYSSOUND_CONFIRM_DIALOG))
+        ca_context_play(ctx, 0, "event.id", "dialog-question", NULL);
+    else if (aSoundAlias.Equals(NS_SYSSOUND_MAIL_BEEP))
+        ca_context_play(ctx, 0, "event.id", "message-new-email", NULL);
+
+    return NS_OK;
+}
+
+NS_IMETHODIMP nsSound::PlaySystemSound(const nsAString &aSoundAlias)
+{
+    if (!mInited)
+        Init();
+
+    if (NS_IsMozAliasSound(aSoundAlias))
+        return PlaySystemEventSound(aSoundAlias);
 
     nsresult rv;
     nsCOMPtr <nsIURI> fileURI;
 
     // create a nsILocalFile and then a nsIFileURL from that
     nsCOMPtr <nsILocalFile> soundFile;
-    rv = NS_NewNativeLocalFile(nsDependentCString(aSoundAlias), PR_TRUE, 
-                               getter_AddRefs(soundFile));
+    rv = NS_NewLocalFile(aSoundAlias, PR_TRUE, 
+                         getter_AddRefs(soundFile));
     NS_ENSURE_SUCCESS(rv,rv);
 
     rv = NS_NewFileURI(getter_AddRefs(fileURI), soundFile);

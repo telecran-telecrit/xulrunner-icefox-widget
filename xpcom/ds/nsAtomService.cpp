@@ -21,6 +21,7 @@
  *
  * Contributor(s):
  *   Alec Flett <alecf@netscape.com>
+ *   Benjamin Smedberg <benjamin@smedbergs.us>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -45,7 +46,7 @@ nsAtomService::nsAtomService()
 }
 
 nsresult
-nsAtomService::GetAtom(const PRUnichar *aString, nsIAtom ** aResult)
+nsAtomService::GetAtom(const nsAString& aString, nsIAtom ** aResult)
 {
   *aResult = NS_NewAtom(aString);
 
@@ -56,7 +57,7 @@ nsAtomService::GetAtom(const PRUnichar *aString, nsIAtom ** aResult)
 }
 
 nsresult
-nsAtomService::GetPermanentAtom(const PRUnichar *aString, nsIAtom ** aResult)
+nsAtomService::GetPermanentAtom(const nsAString& aString, nsIAtom ** aResult)
 {
   *aResult = NS_NewPermanentAtom(aString);
 
@@ -64,4 +65,26 @@ nsAtomService::GetPermanentAtom(const PRUnichar *aString, nsIAtom ** aResult)
     return NS_ERROR_OUT_OF_MEMORY;
   
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsAtomService::GetAtomUTF8(const char *aValue, nsIAtom* *aResult)
+{
+    *aResult = NS_NewAtom(aValue);
+
+    if (!*aResult)
+        return NS_ERROR_OUT_OF_MEMORY;
+
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsAtomService::GetPermanentAtomUTF8(const char *aValue, nsIAtom* *aResult)
+{
+    *aResult = NS_NewPermanentAtom(aValue);
+
+    if (!*aResult)
+        return NS_ERROR_OUT_OF_MEMORY;
+
+    return NS_OK;
 }

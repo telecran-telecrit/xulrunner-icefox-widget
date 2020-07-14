@@ -72,10 +72,10 @@
 #include "nsIDocumentObserver.h"
 
 #include "nsPoint.h"
+#include "nsTArray.h"
 
 class nsIDOMKeyEvent;
 class nsITransferable;
-class nsIDOMEventReceiver;
 class nsIDOMNSRange;
 class nsIDocumentEncoder;
 class nsIClipboard;
@@ -341,6 +341,9 @@ public:
   /** returns PR_TRUE if aParentTag can contain a child of type aChildTag */
   virtual PRBool TagCanContainTag(const nsAString& aParentTag, const nsAString& aChildTag);
   
+  /** returns PR_TRUE if aNode is a container */
+  virtual PRBool IsContainer(nsIDOMNode *aNode);
+
   /** make the given selection span the entire document */
   NS_IMETHOD SelectEntireDocument(nsISelection *aSelection);
 
@@ -361,9 +364,17 @@ public:
   NS_IMETHODIMP DeleteText(nsIDOMCharacterData *aTextNode,
                            PRUint32             aOffset,
                            PRUint32             aLength);
+  NS_IMETHOD InsertTextImpl(const nsAString& aStringToInsert, 
+                            nsCOMPtr<nsIDOMNode> *aInOutNode, 
+                            PRInt32 *aInOutOffset,
+                            nsIDOMDocument *aDoc);
+  NS_IMETHOD_(PRBool) IsModifiableNode(nsIDOMNode *aNode);
+
+  NS_IMETHOD SelectAll();
 
   /* ------------ nsICSSLoaderObserver -------------- */
-  NS_IMETHOD StyleSheetLoaded(nsICSSStyleSheet*aSheet, PRBool aNotify);
+  NS_IMETHOD StyleSheetLoaded(nsICSSStyleSheet*aSheet, PRBool aWasAlternate,
+                              nsresult aStatus);
 
   /* ------------ Utility Routines, not part of public API -------------- */
   NS_IMETHOD TypedText(const nsAString& aString, PRInt32 aAction);
@@ -440,13 +451,12 @@ protected:
 
   virtual void RemoveEventListeners();
 
-  /** returns the layout object (nsIFrame in the real world) for aNode
-    * @param aNode          the content to get a frame for
-    * @param aLayoutObject  the "primary frame" for aNode, if one exists.  May be null
-    * @return NS_OK whether a frame is found or not
-    *         an error if some serious error occurs
-    */
-  NS_IMETHOD GetLayoutObject(nsIDOMNode *aInNode, nsISupports **aOutLayoutObject);
+  // Sets mCSSAware to correspond to aFlags. This toggles whether CSS is
+  // used to style elements in the editor. Note that the editor is only CSS
+  // aware by default in Composer and in the mail editor.
+  void UpdateForFlags(PRUint32 aFlags) {
+    mCSSAware = ((aFlags & (eEditorNoCSSMask | eEditorMailMask)) == 0);
+  }
 
   // Return TRUE if aElement is a table-related elemet and caret was set
   PRBool SetCaretInTableCell(nsIDOMElement* aElement);
@@ -606,7 +616,7 @@ protected:
                                      nsIDOMNode **aTargetNode,       
                                      PRInt32 *aTargetOffset,   
                                      PRBool *aDoContinue);
-  nsresult   RelativizeURIInFragmentList(nsCOMArray<nsIDOMNode> aNodeList,
+  nsresult   RelativizeURIInFragmentList(const nsCOMArray<nsIDOMNode> &aNodeList,
                                         const nsAString &aFlavor,
                                         nsIDOMDocument *aSourceDoc,
                                         nsIDOMNode *aTargetNode);
@@ -619,19 +629,23 @@ protected:
                                         const nsAString & aContextStr,
                                         const nsAString & aInfoStr,
                                         nsCOMPtr<nsIDOMNode> *outFragNode,
-                                        PRInt32 *outRangeStartHint,
-                                        PRInt32 *outRangeEndHint);
-  nsresult   ParseFragment(const nsAString & aStr, nsVoidArray &aTagStack,
+                                        nsCOMPtr<nsIDOMNode> *outStartNode,
+                                        nsCOMPtr<nsIDOMNode> *outEndNode,
+                                        PRInt32 *outStartOffset,
+                                        PRInt32 *outEndOffset,
+                                        PRBool aTrustedInput);
+  nsresult   ParseFragment(const nsAString & aStr, nsTArray<nsString> &aTagStack,
                            nsIDocument* aTargetDoc,
-                           nsCOMPtr<nsIDOMNode> *outNode);
+                           nsCOMPtr<nsIDOMNode> *outNode,
+                           PRBool aTrustedInput);
   nsresult   CreateListOfNodesToPaste(nsIDOMNode  *aFragmentAsNode,
                                       nsCOMArray<nsIDOMNode>& outNodeList,
                                       nsIDOMNode *aStartNode,
                                       PRInt32 aStartOffset,
                                       nsIDOMNode *aEndNode,
                                       PRInt32 aEndOffset);
-  nsresult CreateTagStack(nsVoidArray &aTagStack, nsIDOMNode *aNode);
-  void     FreeTagStackStrings(nsVoidArray &tagStack);
+  nsresult CreateTagStack(nsTArray<nsString> &aTagStack,
+                          nsIDOMNode *aNode);
   nsresult GetListAndTableParents( PRBool aEnd, 
                                    nsCOMArray<nsIDOMNode>& aListOfNodes,
                                    nsCOMArray<nsIDOMNode>& outArray);
@@ -746,6 +760,23 @@ protected:
   nsresult HasStyleOrIdOrClass(nsIDOMElement * aElement, PRBool *aHasStyleOrIdOrClass);
   nsresult RemoveElementIfNoStyleOrIdOrClass(nsIDOMElement * aElement, nsIAtom * aTag);
 
+  // This function is used to insert a string of HTML input optionally with some
+  // context information into the editable field.  The HTML input either comes
+  // from a transferable object created as part of a drop/paste operation, or from
+  // the InsertHTML method.  We may want the HTML input to be sanitized (for example,
+  // if it's coming from a transferable object), in which case aTrustedInput should
+  // be set to false, otherwise, the caller should set it to true, which means that
+  // the HTML will be inserted in the DOM verbatim.
+  nsresult DoInsertHTMLWithContext(const nsAString& aInputString,
+                                   const nsAString& aContextStr,
+                                   const nsAString& aInfoStr,
+                                   const nsAString& aFlavor,
+                                   nsIDOMDocument* aSourceDoc,
+                                   nsIDOMNode* aDestNode,
+                                   PRInt32 aDestOffset,
+                                   PRBool aDeleteSelection,
+                                   PRBool aTrustedInput);
+
 // Data members
 protected:
 
@@ -795,6 +826,10 @@ protected:
   void     DeleteRefToAnonymousNode(nsIDOMElement* aElement,
                                     nsIContent * aParentContent,
                                     nsIPresShell* aShell);
+
+  nsresult ShowResizersInner(nsIDOMElement *aResizedElement);
+
+  // Returns the offset of an element's frame to its absolute containing block.
   nsresult GetElementOrigin(nsIDOMElement * aElement, PRInt32 & aX, PRInt32 & aY);
   nsresult GetPositionAndDimensions(nsIDOMElement * aElement,
                                     PRInt32 & aX, PRInt32 & aY,
@@ -896,7 +931,6 @@ protected:
   void     SetFinalSize(PRInt32 aX, PRInt32 aY);
   void     DeleteRefToAnonymousNode(nsIDOMNode * aNode);
   void     SetResizeIncrements(PRInt32 aX, PRInt32 aY, PRInt32 aW, PRInt32 aH, PRBool aPreserveRatio);
-  void     SetInfoIncrements(PRInt8 aX, PRInt8 aY);
 
   /* ABSOLUTE POSITIONING */
 

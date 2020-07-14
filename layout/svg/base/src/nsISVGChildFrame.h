@@ -42,49 +42,76 @@
 
 #include "nsISupports.h"
 #include "nsCOMPtr.h"
-#include "nsISVGRendererRegion.h"
+#include "nsRect.h"
 
-class nsISVGRendererCanvas;
+class gfxContext;
 class nsPresContext;
 class nsIDOMSVGRect;
-struct nsRect;
+class nsIDOMSVGMatrix;
+class nsSVGRenderState;
 
 #define NS_ISVGCHILDFRAME_IID \
-{ 0x13c16e09, 0x049d, 0x407c, { 0x91, 0xf2, 0xf0, 0xbc, 0xf1, 0xb3, 0xab, 0x81 } }
+{ 0xfc3ee9b2, 0xaf40, 0x416d, \
+  { 0xa8, 0x51, 0xb4, 0x68, 0xa4, 0xe4, 0x8b, 0xcd } }
 
 class nsISVGChildFrame : public nsISupports {
 public:
 
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_ISVGCHILDFRAME_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISVGCHILDFRAME_IID)
 
-  // XXX Ideally we don't want to pass the dirtyRect along but extract
-  // it from nsIRenderingContext where needed (only in foreign
-  // objects) dirtyRectTwips is the unmodified region passed to the
-  // outer svg frame's ::Paint
-  NS_IMETHOD PaintSVG(nsISVGRendererCanvas* canvas, const nsRect& dirtyRectTwips)=0;
+  // Paint this frame - aDirtyRect is the area being redrawn, in frame
+  // offset pixel coordinates
+  NS_IMETHOD PaintSVG(nsSVGRenderState* aContext,
+                      const nsIntRect *aDirtyRect)=0;
 
   // Check if this frame or children contain the given point,
-  // specified in device pixels relative to the origin of the outer
+  // specified in app units relative to the origin of the outer
   // svg frame (origin ill-defined in the case of borders - bug
-  // 290770).  Return value unspecified (usually NS_OK for hit, error
-  // no hit, but not always [ex: nsSVGPathGeometryFrame.cpp]) and no
-  // code trusts the return value - this should be fixed (bug 290765).
-  // *hit set to topmost frame in the children (or 'this' if leaf
-  // frame) which is accepting pointer events, null if no frame hit.
-  // See bug 290852 for foreignObject complications.
-  NS_IMETHOD GetFrameForPointSVG(float x, float y, nsIFrame** hit)=0;
+  // 290770).  See bug 290852 for foreignObject complications.
+  NS_IMETHOD_(nsIFrame*) GetFrameForPoint(const nsPoint &aPoint)=0;
 
-  NS_IMETHOD_(already_AddRefed<nsISVGRendererRegion>) GetCoveredRegion()=0;
+  // Get bounds in our gfxContext's coordinates space (in app units)
+  NS_IMETHOD_(nsRect) GetCoveredRegion()=0;
+  NS_IMETHOD UpdateCoveredRegion()=0;
+
+  // Called once on SVG child frames except descendants of <defs>, either
+  // when their nsSVGOuterSVGFrame receives its initial reflow (i.e. once
+  // the SVG viewport dimensions are known), or else when they're inserted
+  // into the frame tree (if they're inserted after the initial reflow).
   NS_IMETHOD InitialUpdate()=0;
-  NS_IMETHOD NotifyCanvasTMChanged()=0;
+
+  // Flags to pass to NotifySVGChange:
+  //
+  // SUPPRESS_INVALIDATION - do not invalidate rendered areas (only to be
+  //                           used in conjunction with TRANSFORM_CHANGED)
+  // TRANSFORM_CHANGED     - the current transform matrix for this frame has changed
+  // COORD_CONTEXT_CHANGED - the dimensions of this frame's coordinate context has
+  //                           changed (percentage lengths must be reevaluated)
+  enum SVGChangedFlags {
+    SUPPRESS_INVALIDATION = 0x01,
+    TRANSFORM_CHANGED     = 0x02,
+    COORD_CONTEXT_CHANGED = 0x04
+  };
+  virtual void NotifySVGChanged(PRUint32 aFlags)=0;
   NS_IMETHOD NotifyRedrawSuspended()=0;
   NS_IMETHOD NotifyRedrawUnsuspended()=0;
 
+  // Set whether we should stop multiplying matrices when building up
+  // the current transformation matrix at this frame.
   NS_IMETHOD SetMatrixPropagation(PRBool aPropagate)=0;
+  virtual PRBool GetMatrixPropagation()=0;
 
   // XXX move this function into interface nsISVGLocatableMetrics
   NS_IMETHOD GetBBox(nsIDOMSVGRect **_retval)=0; // bbox in local coords
+
+  // Are we a container frame?
+  NS_IMETHOD_(PRBool) IsDisplayContainer()=0;
+
+  // Does this frame have an current covered region in mRect (aka GetRect())?
+  NS_IMETHOD_(PRBool) HasValidCoveredRect()=0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsISVGChildFrame, NS_ISVGCHILDFRAME_IID)
 
 #endif // __NS_ISVGCHILDFRAME_H__
 

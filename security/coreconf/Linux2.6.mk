@@ -37,10 +37,8 @@
 
 include $(CORE_DEPTH)/coreconf/Linux.mk
 
-DSO_LDOPTS      += -Wl,-z,defs
-
 OS_REL_CFLAGS   += -DLINUX2_1
-MKSHLIB         = $(CC) $(DSO_LDOPTS) -Wl,-soname -Wl,$(@:$(OBJDIR)/%.so=%.so)
+MKSHLIB         = $(CC) $(DSO_LDOPTS) -Wl,-soname -Wl,$(@:$(OBJDIR)/%.so=%.so) $(RPATH)
 
 ifdef MAPFILE
 	MKSHLIB += -Wl,--version-script,$(MAPFILE)

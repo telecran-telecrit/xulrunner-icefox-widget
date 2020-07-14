@@ -39,16 +39,177 @@
 #ifndef __NS_SVGGRADIENTFRAME_H__
 #define __NS_SVGGRADIENTFRAME_H__
 
-#include "nsIFrame.h"
-#include "nsIContent.h"
-#include "nsIPresShell.h"
+#include "nsSVGPaintServerFrame.h"
+#include "nsISVGValueObserver.h"
+#include "nsWeakReference.h"
+#include "nsSVGElement.h"
+#include "gfxPattern.h"
 
-nsresult NS_NewSVGLinearGradientFrame(nsIPresShell* aPresShell, 
-                                      nsIContent*   aContent, 
-                                      nsIFrame**    aNewFrame);
+class nsIDOMSVGStopElement;
 
-nsresult NS_NewSVGRadialGradientFrame(nsIPresShell* aPresShell, 
-                                      nsIContent*   aContent, 
-                                      nsIFrame**    aNewFrame);
+typedef nsSVGPaintServerFrame nsSVGGradientFrameBase;
+
+/**
+ * Gradients can refer to other gradients. We create an nsSVGPaintingProperty
+ * with property type nsGkAtoms::href to track the referenced gradient.
+ */
+class nsSVGGradientFrame : public nsSVGGradientFrameBase
+{
+protected:
+  nsSVGGradientFrame(nsStyleContext* aContext);
+
+public:
+  // nsSVGPaintServerFrame methods:
+  virtual PRBool SetupPaintServer(gfxContext *aContext,
+                                  nsSVGGeometryFrame *aSource,
+                                  float aGraphicOpacity);
+
+  // nsIFrame interface:
+  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext);
+
+  NS_IMETHOD AttributeChanged(PRInt32         aNameSpaceID,
+                              nsIAtom*        aAttribute,
+                              PRInt32         aModType);
+
+#ifdef DEBUG
+  // nsIFrameDebug interface:
+  NS_IMETHOD GetFrameName(nsAString& aResult) const
+  {
+    return MakeFrameName(NS_LITERAL_STRING("SVGGradient"), aResult);
+  }
+#endif // DEBUG
+
+private:
+
+  // Parse our xlink:href and set up our nsSVGPaintingProperty if we
+  // reference another gradient and we don't have a property. Return
+  // the referenced gradient's frame if available, null otherwise.
+  nsSVGGradientFrame* GetReferencedGradient();
+
+  // Helpers to look at our gradient and then along its reference chain (if any)
+  // to find the first gradient with the specified attribute.
+  // Returns aDefault if no content with that attribute is found
+  nsSVGGradientElement* GetGradientWithAttr(nsIAtom *aAttrName, nsIContent *aDefault);
+
+  // Some attributes are only valid on one type of gradient, and we *must* get
+  // the right type or we won't have the data structures we require.
+  // Returns aDefault if no content with that attribute is found
+  nsSVGGradientElement* GetGradientWithAttr(nsIAtom *aAttrName, nsIAtom *aGradType,
+                                            nsIContent *aDefault);
+
+  // Optionally get a stop frame (returns stop index/count)
+  PRInt32 GetStopFrame(PRInt32 aIndex, nsIFrame * *aStopFrame);
+
+  PRUint16 GetSpreadMethod();
+  PRUint32 GetStopCount();
+  void GetStopInformation(PRInt32 aIndex,
+                          float *aOffset, nscolor *aColor, float *aStopOpacity);
+  gfxMatrix GetGradientTransform(nsSVGGeometryFrame *aSource);
+
+protected:
+  virtual already_AddRefed<gfxPattern> CreateGradient() = 0;
+
+  // Use these inline methods instead of GetGradientWithAttr(..., aGradType)
+  nsSVGLinearGradientElement* GetLinearGradientWithAttr(nsIAtom *aAttrName, nsIContent *aDefault)
+  {
+    return static_cast<nsSVGLinearGradientElement*>(
+            GetGradientWithAttr(aAttrName, nsGkAtoms::svgLinearGradientFrame, aDefault));
+  }
+  nsSVGRadialGradientElement* GetRadialGradientWithAttr(nsIAtom *aAttrName, nsIContent *aDefault)
+  {
+    return static_cast<nsSVGRadialGradientElement*>(
+            GetGradientWithAttr(aAttrName, nsGkAtoms::svgRadialGradientFrame, aDefault));
+  }
+
+  // Get the value of our gradientUnits attribute
+  PRUint16 GetGradientUnits();
+
+  // The graphic element our gradient is (currently) being applied to
+  nsRefPtr<nsSVGElement>                 mSourceContent;
+
+private:
+  // Flag to mark this frame as "in use" during recursive calls along our
+  // gradient's reference chain so we can detect reference loops. See:
+  // http://www.w3.org/TR/SVG11/pservers.html#LinearGradientElementHrefAttribute
+  PRPackedBool                           mLoopFlag;
+  // Gradients often don't reference other gradients, so here we cache
+  // the fact that that isn't happening.
+  PRPackedBool                           mNoHRefURI;
+};
+
+
+// -------------------------------------------------------------------------
+// Linear Gradients
+// -------------------------------------------------------------------------
+
+typedef nsSVGGradientFrame nsSVGLinearGradientFrameBase;
+
+class nsSVGLinearGradientFrame : public nsSVGLinearGradientFrameBase
+{
+  friend nsIFrame* NS_NewSVGLinearGradientFrame(nsIPresShell* aPresShell,
+                                                nsIContent*   aContent,
+                                                nsStyleContext* aContext);
+protected:
+  nsSVGLinearGradientFrame(nsStyleContext* aContext) :
+    nsSVGLinearGradientFrameBase(aContext) {}
+
+public:
+  // nsIFrame interface:
+  virtual nsIAtom* GetType() const;  // frame type: nsGkAtoms::svgLinearGradientFrame
+
+  NS_IMETHOD AttributeChanged(PRInt32         aNameSpaceID,
+                              nsIAtom*        aAttribute,
+                              PRInt32         aModType);
+
+#ifdef DEBUG
+  // nsIFrameDebug interface:
+  NS_IMETHOD GetFrameName(nsAString& aResult) const
+  {
+    return MakeFrameName(NS_LITERAL_STRING("SVGLinearGradient"), aResult);
+  }
+#endif // DEBUG
+
+protected:
+  float GradientLookupAttribute(nsIAtom *aAtomName, PRUint16 aEnumName);
+  virtual already_AddRefed<gfxPattern> CreateGradient();
+};
+
+// -------------------------------------------------------------------------
+// Radial Gradients
+// -------------------------------------------------------------------------
+
+typedef nsSVGGradientFrame nsSVGRadialGradientFrameBase;
+
+class nsSVGRadialGradientFrame : public nsSVGRadialGradientFrameBase
+{
+  friend nsIFrame* NS_NewSVGRadialGradientFrame(nsIPresShell* aPresShell,
+                                                nsIContent*   aContent,
+                                                nsStyleContext* aContext);
+protected:
+  nsSVGRadialGradientFrame(nsStyleContext* aContext) :
+    nsSVGRadialGradientFrameBase(aContext) {}
+
+public:
+  // nsIFrame interface:
+  virtual nsIAtom* GetType() const;  // frame type: nsGkAtoms::svgRadialGradientFrame
+
+  NS_IMETHOD AttributeChanged(PRInt32         aNameSpaceID,
+                              nsIAtom*        aAttribute,
+                              PRInt32         aModType);
+
+#ifdef DEBUG
+  // nsIFrameDebug interface:
+  NS_IMETHOD GetFrameName(nsAString& aResult) const
+  {
+    return MakeFrameName(NS_LITERAL_STRING("SVGRadialGradient"), aResult);
+  }
+#endif // DEBUG
+
+protected:
+  float GradientLookupAttribute(nsIAtom *aAtomName, PRUint16 aEnumName,
+                                nsSVGRadialGradientElement *aElement = nsnull);
+  virtual already_AddRefed<gfxPattern> CreateGradient();
+};
+
 #endif // __NS_SVGGRADIENTFRAME_H__
 

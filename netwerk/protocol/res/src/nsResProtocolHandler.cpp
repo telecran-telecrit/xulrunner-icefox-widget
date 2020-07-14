@@ -22,6 +22,7 @@
  * Contributor(s):
  *   Darin Fisher <darin@netscape.com>
  *   Benjamin Smedberg <bsmedberg@covad.net>
+ *   Daniel Veditz <dveditz@cruzio.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -51,6 +52,7 @@
 #include "nsDirectoryServiceDefs.h"
 #include "nsNetUtil.h"
 #include "nsURLHelper.h"
+#include "nsEscape.h"
 
 static NS_DEFINE_CID(kResURLCID, NS_RESURL_CID);
 
@@ -175,6 +177,9 @@ nsResProtocolHandler::Init()
     //XXXbsmedberg Neil wants a resource://pchrome/ for the profile chrome dir...
     // but once I finish multiple chrome registration I'm not sure that it is needed
 
+    // XXX dveditz: resource://pchrome/ defeats profile directory salting
+    // if web content can load it. Tread carefully.
+
     return rv;
 }
 
@@ -208,7 +213,9 @@ nsResProtocolHandler::GetDefaultPort(PRInt32 *result)
 NS_IMETHODIMP
 nsResProtocolHandler::GetProtocolFlags(PRUint32 *result)
 {
-    *result = URI_STD;
+    // XXXbz Is this really true for all resource: URIs?  Could we
+    // somehow give different flags to some of them?
+    *result = URI_STD | URI_IS_UI_RESOURCE | URI_IS_LOCAL_RESOURCE;
     return NS_OK;
 }
 
@@ -226,7 +233,36 @@ nsResProtocolHandler::NewURI(const nsACString &aSpec,
         return NS_ERROR_OUT_OF_MEMORY;
     NS_ADDREF(resURL);
 
-    rv = resURL->Init(nsIStandardURL::URLTYPE_STANDARD, -1, aSpec, aCharset, aBaseURI);
+    // unescape any %2f and %2e to make sure nsStandardURL coalesces them.
+    // Later net_GetFileFromURLSpec() will do a full unescape and we want to
+    // treat them the same way the file system will. (bugs 380994, 394075)
+    nsCAutoString spec;
+    const char *src = aSpec.BeginReading();
+    const char *end = aSpec.EndReading();
+    const char *last = src;
+
+    spec.SetCapacity(aSpec.Length()+1);
+    for ( ; src < end; ++src) {
+        if (*src == '%' && (src < end-2) && *(src+1) == '2') {
+           char ch = '\0';
+           if (*(src+2) == 'f' || *(src+2) == 'F')
+             ch = '/';
+           else if (*(src+2) == 'e' || *(src+2) == 'E')
+             ch = '.';
+
+           if (ch) {
+             if (last < src)
+               spec.Append(last, src-last);
+             spec.Append(ch);
+             src += 2;
+             last = src+1; // src will be incremented by the loop
+           }
+        }
+    }
+    if (last < src)
+      spec.Append(last, src-last);
+
+    rv = resURL->Init(nsIStandardURL::URLTYPE_STANDARD, -1, spec, aCharset, aBaseURI);
     if (NS_SUCCEEDED(rv))
         rv = CallQueryInterface(resURL, result);
     NS_RELEASE(resURL);
@@ -330,6 +366,10 @@ nsResProtocolHandler::ResolveURI(nsIURI *uri, nsACString &result)
 
     // Don't misinterpret the filepath as an absolute URI.
     if (filepath.FindChar(':') != -1)
+        return NS_ERROR_MALFORMED_URI;
+
+    NS_UnescapeURL(filepath);
+    if (filepath.FindChar('\\') != -1)
         return NS_ERROR_MALFORMED_URI;
 
     const char *p = path.get() + 1; // path always starts with a slash

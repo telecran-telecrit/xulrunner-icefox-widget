@@ -56,10 +56,10 @@
 #include "nsIPrefBranch.h"
 #include "nsIPrefLocalizedString.h"
 
-NS_IMPL_THREADSAFE_ISUPPORTS3(nsDirIndexParser,
-                              nsIRequestObserver,
-                              nsIStreamListener,
-                              nsIDirIndexParser)
+NS_IMPL_ISUPPORTS3(nsDirIndexParser,
+                   nsIRequestObserver,
+                   nsIStreamListener,
+                   nsIDirIndexParser)
 
 nsDirIndexParser::nsDirIndexParser() {
 }
@@ -190,6 +190,10 @@ nsDirIndexParser::ParseFormat(const char* aFormatStr) {
       ++pos;
     
     ++num;
+    // There are a maximum of six allowed header fields (doubled plus
+    // terminator, just in case) -- Bug 443299
+    if (num > (2 * NS_ARRAY_LENGTH(gFieldTable)))
+      return NS_ERROR_UNEXPECTED;
 
     if (! *pos)
       break;
@@ -200,6 +204,9 @@ nsDirIndexParser::ParseFormat(const char* aFormatStr) {
   } while (*pos);
 
   mFormat = new int[num+1];
+  // Prevent NULL Deref - Bug 443299 
+  if (mFormat == nsnull)
+    return NS_ERROR_OUT_OF_MEMORY;
   mFormat[num] = -1;
   
   int formatNum=0;
@@ -302,7 +309,7 @@ nsDirIndexParser::ParseData(nsIDirIndex *aIdx, char* aDataStr) {
               aIdx->SetDescription(result);
             success = PR_TRUE;
           }
-          Recycle(result);
+          NS_Free(result);
         } else {
           NS_WARNING("UnEscapeAndConvert error");
         }
@@ -315,14 +322,14 @@ nsDirIndexParser::ParseData(nsIDirIndex *aIdx, char* aDataStr) {
         // when can we fail to get the service, anyway? - bbaetz
         aIdx->SetLocation(filename.get());
         if (!mHasDescription) {
-          aIdx->SetDescription(NS_ConvertUTF8toUCS2(value).get());
+          aIdx->SetDescription(NS_ConvertUTF8toUTF16(value).get());
         }
       }
     }
       break;
     case FIELD_DESCRIPTION:
       nsUnescape(value);
-      aIdx->SetDescription(NS_ConvertUTF8toUCS2(value).get());
+      aIdx->SetDescription(NS_ConvertUTF8toUTF16(value).get());
       break;
     case FIELD_CONTENTLENGTH:
       {

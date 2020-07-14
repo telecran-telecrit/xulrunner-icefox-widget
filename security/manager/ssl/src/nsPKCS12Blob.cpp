@@ -34,7 +34,7 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: nsPKCS12Blob.cpp,v 1.42.20.3 2006/01/31 12:50:31 kaie%kuix.de Exp $ */
+/* $Id: nsPKCS12Blob.cpp,v 1.49 2007/09/05 07:13:46 jwalden%mit.edu Exp $ */
 
 #include "prmem.h"
 #include "prprf.h"
@@ -47,6 +47,7 @@
 #include "nsIWindowWatcher.h"
 #include "nsIPrompt.h"
 #include "nsProxiedService.h"
+#include "nsThreadUtils.h"
 
 #include "nsNSSComponent.h"
 #include "nsNSSHelper.h"
@@ -294,7 +295,7 @@ nsPKCS12Blob::LoadCerts(const PRUnichar **certNames, int numCerts)
   }
   /* Add the certs */
   for (int i=0; i<numCerts; i++) {
-    strcpy(namecpy, NS_ConvertUCS2toUTF8(certNames[i]));
+    strcpy(namecpy, NS_ConvertUTF16toUTF8(certNames[i]));
     CERTCertificate *nssCert = PK11_FindCertFromNickname(namecpy, NULL);
     if (!nssCert) {
       if (!handleError())
@@ -326,7 +327,7 @@ isExtractable(SECKEYPrivateKey *privKey)
     return PR_FALSE;
   }
   if ((value.len == 1) && (value.data != NULL)) {
-    isExtractable = *(CK_BBOOL*)value.data;
+    isExtractable = !!(*(CK_BBOOL*)value.data);
   }
   SECITEM_FreeItem(&value, PR_FALSE);
   return isExtractable;
@@ -392,8 +393,7 @@ nsPKCS12Blob::ExportToFile(nsILocalFile *file,
     if (NS_FAILED(nrv)) goto finish;
 #endif
   for (i=0; i<numCerts; i++) {
-//    nsNSSCertificate *cert = NS_REINTREPRET_POINTER_CAST(nsNSSCertificate *,
-//                                                         certs[i]);
+//    nsNSSCertificate *cert = reinterpret_cast<nsNSSCertificate *>(certs[i]);
     nsNSSCertificate *cert = (nsNSSCertificate *)certs[i];
     // get it as a CERTCertificate XXX
     CERTCertificate *nssCert = NULL;
@@ -648,7 +648,7 @@ OSErr ConvertMacPathToUnixPath(const char *macPath, char **unixPath)
 SECStatus PR_CALLBACK
 nsPKCS12Blob::digest_open(void *arg, PRBool reading)
 {
-  nsPKCS12Blob *cx = NS_REINTERPRET_POINTER_CAST(nsPKCS12Blob *, arg);
+  nsPKCS12Blob *cx = reinterpret_cast<nsPKCS12Blob *>(arg);
   NS_ENSURE_TRUE(cx, SECFailure);
   
   if (reading) {
@@ -683,7 +683,7 @@ nsPKCS12Blob::digest_open(void *arg, PRBool reading)
 SECStatus PR_CALLBACK
 nsPKCS12Blob::digest_close(void *arg, PRBool remove_it)
 {
-  nsPKCS12Blob *cx = NS_REINTERPRET_POINTER_CAST(nsPKCS12Blob *, arg);
+  nsPKCS12Blob *cx = reinterpret_cast<nsPKCS12Blob *>(arg);
   NS_ENSURE_TRUE(cx, SECFailure);
 
   delete cx->mDigestIterator;
@@ -702,7 +702,7 @@ nsPKCS12Blob::digest_close(void *arg, PRBool remove_it)
 int PR_CALLBACK
 nsPKCS12Blob::digest_read(void *arg, unsigned char *buf, unsigned long len)
 {
-  nsPKCS12Blob *cx = NS_REINTERPRET_POINTER_CAST(nsPKCS12Blob *, arg);
+  nsPKCS12Blob *cx = reinterpret_cast<nsPKCS12Blob *>(arg);
   NS_ENSURE_TRUE(cx, SECFailure);
   NS_ENSURE_TRUE(cx->mDigest, SECFailure);
 
@@ -725,15 +725,15 @@ nsPKCS12Blob::digest_read(void *arg, unsigned char *buf, unsigned long len)
 int PR_CALLBACK
 nsPKCS12Blob::digest_write(void *arg, unsigned char *buf, unsigned long len)
 {
-  nsPKCS12Blob *cx = NS_REINTERPRET_POINTER_CAST(nsPKCS12Blob *, arg);
+  nsPKCS12Blob *cx = reinterpret_cast<nsPKCS12Blob *>(arg);
   NS_ENSURE_TRUE(cx, SECFailure);
   NS_ENSURE_TRUE(cx->mDigest, SECFailure);
 
   // make sure we are in write mode, read iterator has not yet been allocated
   NS_ENSURE_FALSE(cx->mDigestIterator, SECFailure);
   
-  cx->mDigest->Append(NS_REINTERPRET_CAST(char *, buf),
-                     NS_STATIC_CAST(PRUint32, len));
+  cx->mDigest->Append(reinterpret_cast<char *>(buf),
+                     static_cast<PRUint32>(len));
   
   return len;
 }
@@ -784,7 +784,7 @@ nsPKCS12Blob::nickname_collision(SECItem *oldNick, PRBool *cancel, void *wincx)
       nickname = nickFromPropC;
     }
     CERTCertificate *cert = CERT_FindCertByNickname(CERT_GetDefaultCertDB(),
-                                           NS_CONST_CAST(char*,nickname.get()));
+                                           const_cast<char*>(nickname.get()));
     if (!cert) {
       break;
     }
@@ -828,69 +828,65 @@ pip_ucs2_ascii_conversion_fn(PRBool toUnicode,
   return PR_TRUE;
 }
 
-PRBool
+void
 nsPKCS12Blob::handleError(int myerr)
 {
   nsPSMUITracker tracker;
   if (tracker.isUIForbidden()) {
-    return PR_FALSE;
+    return;
   }
 
   nsresult rv;
-  PRBool keepGoing = PR_FALSE;
   int prerr = PORT_GetError();
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("PKCS12: NSS/NSPR error(%d)", prerr));
   PR_LOG(gPIPNSSLog, PR_LOG_DEBUG, ("PKCS12: I called(%d)", myerr));
   nsCOMPtr<nsINSSComponent> nssComponent(do_GetService(kNSSComponentCID, &rv));
-  if (NS_FAILED(rv)) return PR_FALSE;
-  nsCOMPtr<nsIProxyObjectManager> proxyman(
-                                      do_GetService(NS_XPCOMPROXY_CONTRACTID));
-  if (!proxyman) return PR_FALSE;
+  if (NS_FAILED(rv)) return;
   nsCOMPtr<nsIPrompt> errPrompt;
   nsCOMPtr<nsIWindowWatcher> wwatch(do_GetService(NS_WINDOWWATCHER_CONTRACTID));
   if (wwatch) {
     wwatch->GetNewPrompter(0, getter_AddRefs(errPrompt));
     if (errPrompt) {
       nsCOMPtr<nsIPrompt> proxyPrompt;
-      proxyman->GetProxyForObject(NS_UI_THREAD_EVENTQ, NS_GET_IID(nsIPrompt),
-                                  errPrompt, PROXY_SYNC, 
-                                  getter_AddRefs(proxyPrompt));
-      if (!proxyPrompt) return PR_FALSE;
+      NS_GetProxyForObject(NS_PROXY_TO_MAIN_THREAD,
+                           NS_GET_IID(nsIPrompt), errPrompt,
+                           NS_PROXY_SYNC, getter_AddRefs(proxyPrompt));
+      if (!proxyPrompt) return;
     } else {
-      return PR_FALSE;
+      return;
     }
   } else {
-    return PR_FALSE;
+    return;
   }
   nsAutoString errorMsg;
   switch (myerr) {
   case PIP_PKCS12_RESTORE_OK:
     rv = nssComponent->GetPIPNSSBundleString("SuccessfulP12Restore", errorMsg);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_FAILED(rv)) return;
     errPrompt->Alert(nsnull, errorMsg.get());
-    return PR_TRUE;
+    return;
   case PIP_PKCS12_BACKUP_OK:
     rv = nssComponent->GetPIPNSSBundleString("SuccessfulP12Backup", errorMsg);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_FAILED(rv)) return;
     errPrompt->Alert(nsnull, errorMsg.get());
-    return PR_TRUE;
+    return;
   case PIP_PKCS12_USER_CANCELED:
-    return PR_TRUE;  /* Just ignore it for now */
+    return;  /* Just ignore it for now */
   case PIP_PKCS12_NOSMARTCARD_EXPORT:
     rv = nssComponent->GetPIPNSSBundleString("PKCS12InfoNoSmartcardBackup", errorMsg);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_FAILED(rv)) return;
     errPrompt->Alert(nsnull, errorMsg.get());
-    return PR_TRUE;
+    return;
   case PIP_PKCS12_RESTORE_FAILED:
     rv = nssComponent->GetPIPNSSBundleString("PKCS12UnknownErrRestore", errorMsg);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_FAILED(rv)) return;
     errPrompt->Alert(nsnull, errorMsg.get());
-    return PR_TRUE;
+    return;
   case PIP_PKCS12_BACKUP_FAILED:
     rv = nssComponent->GetPIPNSSBundleString("PKCS12UnknownErrBackup", errorMsg);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_FAILED(rv)) return;
     errPrompt->Alert(nsnull, errorMsg.get());
-    return PR_TRUE;
+    return;
   case PIP_PKCS12_NSS_ERROR:
     switch (prerr) {
     // The following errors have the potential to be "handled", by asking
@@ -907,41 +903,39 @@ nsPKCS12Blob::handleError(int myerr)
       //     but then again, how would it?  anyway, convey the info below
     case SEC_ERROR_PKCS12_PRIVACY_PASSWORD_INCORRECT:
       rv = nssComponent->GetPIPNSSBundleString("PKCS12PasswordInvalid", errorMsg);
-      if (NS_FAILED(rv)) return rv;
+      if (NS_FAILED(rv)) return;
       errPrompt->Alert(nsnull, errorMsg.get());
     break;
 #endif
     case SEC_ERROR_BAD_PASSWORD:
       rv = nssComponent->GetPIPNSSBundleString("PK11BadPassword", errorMsg);
-      if (NS_FAILED(rv)) return rv;
+      if (NS_FAILED(rv)) return;
       errPrompt->Alert(nsnull, errorMsg.get());
       break;
     case SEC_ERROR_BAD_DER:
     case SEC_ERROR_PKCS12_CORRUPT_PFX_STRUCTURE:
     case SEC_ERROR_PKCS12_INVALID_MAC:
       rv = nssComponent->GetPIPNSSBundleString("PKCS12DecodeErr", errorMsg);
-      if (NS_FAILED(rv)) return rv;
+      if (NS_FAILED(rv)) return;
       errPrompt->Alert(nsnull, errorMsg.get());
       break;
     case SEC_ERROR_PKCS12_DUPLICATE_DATA:
       rv = nssComponent->GetPIPNSSBundleString("PKCS12DupData", errorMsg);
-      if (NS_FAILED(rv)) return rv;
+      if (NS_FAILED(rv)) return;
       errPrompt->Alert(nsnull, errorMsg.get());
       break;
     default:
       rv = nssComponent->GetPIPNSSBundleString("PKCS12UnknownErr", errorMsg);
-      if (NS_FAILED(rv)) return rv;
+      if (NS_FAILED(rv)) return;
       errPrompt->Alert(nsnull, errorMsg.get());
     }
     break;
   case 0: 
   default:
     rv = nssComponent->GetPIPNSSBundleString("PKCS12UnknownErr", errorMsg);
-    if (NS_FAILED(rv)) return rv;
+    if (NS_FAILED(rv)) return;
     errPrompt->Alert(nsnull, errorMsg.get());
     break;
   }
-  if (NS_FAILED(rv)) return rv;
-  return keepGoing;
 }
 

@@ -19,23 +19,23 @@
 # Portions created by the Initial Developer are Copyright (C) 2002
 # the Initial Developer. All Rights Reserved.
 #
-# Contributors:
-#     William A. ("PowerGUI") Law <law@netscape.com>
-#     Scott MacGregor <mscott@netscape.com>
-#     jean-Francois Ducarroz <ducarroz@netscape.com>
-#     Rod Spears <rods@netscape.com>
+# Contributor(s):
+#   William A. ("PowerGUI") Law <law@netscape.com>
+#   Scott MacGregor <mscott@netscape.com>
+#   jean-Francois Ducarroz <ducarroz@netscape.com>
+#   Rod Spears <rods@netscape.com>
 #
 # Alternatively, the contents of this file may be used under the terms of
-# either the GNU General Public License Version 2 or later (the "GPL"), or 
+# either the GNU General Public License Version 2 or later (the "GPL"), or
 # the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
 # in which case the provisions of the GPL or the LGPL are applicable instead
 # of those above. If you wish to allow use of your version of this file only
 # under the terms of either the GPL or the LGPL, and not to allow others to
-# use your version of this file under the terms of the NPL, indicate your
+# use your version of this file under the terms of the MPL, indicate your
 # decision by deleting the provisions above and replace them with the notice
 # and other provisions required by the GPL or the LGPL. If you do not delete
 # the provisions above, a recipient may use your version of this file under
-# the terms of any one of the NPL, the GPL or the LGPL.
+# the terms of any one of the MPL, the GPL or the LGPL.
 #
 # ***** END LICENSE BLOCK *****
 
@@ -98,6 +98,26 @@ var progressListener = {
         var percentPrint = getString( "progressText" );
         percentPrint = replaceInsert( percentPrint, 1, 100 );
         dialog.progressText.setAttribute("value", percentPrint);
+
+        var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"].
+                     getService(Components.interfaces.nsIWindowMediator);
+        if (wm && wm.getMostRecentWindow(null) == window) {
+          // This progress dialog is the currently active window. In
+          // this case we need to make sure that some other window
+          // gets focus before we close this dialog to work around the
+          // buggy Windows XP Fax dialog, which ends up parenting
+          // itself to the currently focused window and is unable to
+          // survive that window going away. What happens without this
+          // opener.focus() call on Windows XP is that the fax dialog
+          // is opened only to go away when this dialog actually
+          // closes (which can happen asynchronously, so the fax
+          // dialog just flashes once and then goes away), so w/o this
+          // fix, it's impossible to fax on Windows XP w/o manually
+          // switching focus to another window (or holding on to the
+          // progress dialog with the mouse long enough).
+          opener.focus();
+        }
+
         window.close();
       }
     },

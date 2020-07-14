@@ -73,13 +73,34 @@ static char* GetKeyValue(char* verbuf, char* key)
         // On windows CE, the verbuf is wide and the shunt
         // layer can't do much about it.  So, here we
         // convert the wide string.
-		return PL_strdup(NS_ConvertUCS2toUTF8((PRUnichar*)buf).get());
+		return PL_strdup(NS_ConvertUTF16toUTF8((PRUnichar*)buf).get());
 #else
 		return PL_strdup(buf);	
 #endif
 	}
 
 	return nsnull;
+}
+
+static char* GetVersion(char* verbuf)
+{
+    VS_FIXEDFILEINFO *fileInfo;
+    UINT fileInfoLen;
+
+    ::VerQueryValue(verbuf,
+                    "\\",
+                    (void **)&fileInfo, &fileInfoLen);
+
+    if (fileInfo != NULL)
+    {
+        return PR_smprintf("%ld.%ld.%ld.%ld",
+                           HIWORD(fileInfo->dwFileVersionMS),
+                           LOWORD(fileInfo->dwFileVersionMS),
+                           HIWORD(fileInfo->dwFileVersionLS),
+                           LOWORD(fileInfo->dwFileVersionLS));
+    }
+
+    return nsnull;
 }
 
 static PRUint32 CalculateVariantCount(char* mimeTypes)
@@ -223,6 +244,10 @@ nsresult nsPluginFile::LoadPlugin(PRLibrary* &outLibrary)
     char* pluginFolderPath = PL_strdup(temp.get());
     
     index = PL_strrchr(pluginFolderPath, '\\');
+    if (!index) {
+      PL_strfree(pluginFolderPath);
+      return NS_ERROR_FILE_INVALID_PATH;
+    }
     *index = 0;
     
 	BOOL restoreOrigDir = FALSE;
@@ -287,6 +312,7 @@ nsresult nsPluginFile::GetPluginInfo(nsPluginInfo& info)
 		info.fMimeDescriptionArray = MakeStringArray(info.fVariantCount, mimeDescription);
 		info.fExtensionArray = MakeStringArray(info.fVariantCount, extensions);
         info.fFileName = PL_strdup(path);
+        info.fVersion = GetVersion(verbuf);
         
         PL_strfree(mimeType);
         PL_strfree(mimeDescription);
@@ -320,6 +346,9 @@ nsresult nsPluginFile::FreePluginInfo(nsPluginInfo& info)
 
   if(info.fFileName != NULL)
     PL_strfree(info.fFileName);
+
+  if(info.fVersion != NULL)
+    PL_strfree(info.fVersion);
 
   ZeroMemory((void *)&info, sizeof(info));
 

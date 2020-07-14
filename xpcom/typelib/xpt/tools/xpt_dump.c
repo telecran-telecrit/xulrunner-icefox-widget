@@ -41,19 +41,18 @@
 
 #include "xpt_xdr.h"
 #include <stdio.h>
-#ifdef XP_MAC
-#include <stat.h>
-#include <StandardFile.h>
-#include "FullPath.h"
-#else
-#ifdef XP_OS2_EMX
+#ifdef XP_OS2
 #include <sys/types.h>
 #endif
 #include <sys/stat.h>
-#endif
 #include <stdlib.h>
 #include <string.h>
 #include "prprf.h"
+
+#ifdef WINCE
+#include <windows.h>
+static void perror(const char* a) {}
+#endif
 
 #define BASE_INDENT 3
 
@@ -141,27 +140,31 @@ xpt_dump_usage(char *argv[]) {
             "       -v verbose mode\n", argv[0]);
 }
 
-#if defined(XP_MAC) && defined(XPIDL_PLUGIN)
-
-#define main xptdump_main
-int xptdump_main(int argc, char *argv[]);
-
-#define get_file_length mac_get_file_length
-extern size_t mac_get_file_length(const char* filename);
-
-#else /* !(XP_MAC && XPIDL_PLUGIN) */
-
 static size_t get_file_length(const char* filename)
 {
+#ifndef WINCE
     struct stat file_stat;
     if (stat(filename, &file_stat) != 0) {
         perror("FAILED: get_file_length");
         exit(1);
     }
     return file_stat.st_size;
+#else
+    DWORD fileSize;
+    HANDLE hFile = CreateFile(filename, 
+                              GENERIC_READ,
+                              0, 
+                              NULL,
+                              OPEN_EXISTING, 
+                              FILE_ATTRIBUTE_NORMAL, 
+                              NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return -1;
+    fileSize = GetFileSize(hFile,  NULL);
+    CloseHandle(hFile);
+    return fileSize;
+#endif
 }
-
-#endif /* !(XP_MAC && XPIDL_PLUGIN) */
 
 int 
 main(int argc, char **argv)
@@ -623,6 +626,9 @@ XPT_DumpMethodDescriptor(XPTHeader *header, XPTMethodDescriptor *md,
                         fprintf(stdout, "retval ");
                     }
                 }
+                if (XPT_PD_IS_OPTIONAL(pd->flags)) {
+                    fprintf(stdout, "optional ");
+                }
             } else {
                 if (XPT_PD_IS_OUT(pd->flags)) {
                     fprintf(stdout, "out ");
@@ -631,6 +637,9 @@ XPT_DumpMethodDescriptor(XPTHeader *header, XPTMethodDescriptor *md,
                     }
                     if (XPT_PD_IS_SHARED(pd->flags)) {
                         fprintf(stdout, "shared ");
+                    }
+                    if (XPT_PD_IS_OPTIONAL(pd->flags)) {
+                        fprintf(stdout, "optional ");
                     }
                 } else {
                     param_problems = PR_TRUE;
@@ -751,6 +760,12 @@ XPT_DumpParamDescriptor(XPTHeader *header, XPTParamDescriptor *pd,
 
     fprintf(stdout, "%*sDipper?     ", indent, " ");
     if (XPT_PD_IS_DIPPER(pd->flags))
+        fprintf(stdout, "TRUE\n");
+    else 
+        fprintf(stdout, "FALSE\n");
+
+    fprintf(stdout, "%*sOptional?     ", indent, " ");
+    if (XPT_PD_IS_OPTIONAL(pd->flags))
         fprintf(stdout, "TRUE\n");
     else 
         fprintf(stdout, "FALSE\n");

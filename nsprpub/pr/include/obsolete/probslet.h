@@ -44,6 +44,7 @@
 #define PROBSLET_H
 
 #include "prio.h"
+#include "private/pprio.h"  /* for PROsfd */
 
 PR_BEGIN_EXTERN_C
 
@@ -70,7 +71,7 @@ typedef struct PR_fd_set {
     PRUint32      hsize;
     PRFileDesc   *harray[PR_MAX_SELECT_DESC];
     PRUint32      nsize;
-    PRInt32       narray[PR_MAX_SELECT_DESC];
+    PROsfd        narray[PR_MAX_SELECT_DESC];
 } PR_fd_set;
 
 /*
@@ -154,9 +155,9 @@ NSPR_API(void)        PR_FD_ZERO(PR_fd_set *set);
 NSPR_API(void)        PR_FD_SET(PRFileDesc *fd, PR_fd_set *set);
 NSPR_API(void)        PR_FD_CLR(PRFileDesc *fd, PR_fd_set *set);
 NSPR_API(PRInt32)     PR_FD_ISSET(PRFileDesc *fd, PR_fd_set *set);
-NSPR_API(void)        PR_FD_NSET(PRInt32 osfd, PR_fd_set *set);
-NSPR_API(void)        PR_FD_NCLR(PRInt32 osfd, PR_fd_set *set);
-NSPR_API(PRInt32)     PR_FD_NISSET(PRInt32 osfd, PR_fd_set *set);
+NSPR_API(void)        PR_FD_NSET(PROsfd osfd, PR_fd_set *set);
+NSPR_API(void)        PR_FD_NCLR(PROsfd osfd, PR_fd_set *set);
+NSPR_API(PRInt32)     PR_FD_NISSET(PROsfd osfd, PR_fd_set *set);
 
 /*
 ** The next two entry points should not be in the API, but they are
@@ -168,11 +169,7 @@ NSPR_API(PRInt32) PR_GetSysfdTableMax(void);
 NSPR_API(PRInt32) PR_SetSysfdTableSize(PRIntn table_size);
 
 #ifndef NO_NSPR_10_SUPPORT
-#ifdef XP_MAC
-#include <stat.h>
-#else
 #include <sys/stat.h>
-#endif
 
 NSPR_API(PRInt32) PR_Stat(const char *path, struct stat *buf);
 #endif /* NO_NSPR_10_SUPPORT */

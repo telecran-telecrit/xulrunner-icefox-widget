@@ -191,69 +191,54 @@ double Stopwatch::GetRealTime(){
 #endif
 }
 
-
-double Stopwatch::GetCPUTime(){ 
+double Stopwatch::GetCPUTime() {
 #if defined(R__MAC)
-// return(double)clock() / gTicks;
-   return(double)clock();
+//  return(double)clock() / gTicks;
+  return(double)clock();
 #elif defined(R__UNIX)
-   struct tms cpt;
-   times(&cpt);
-   return (double)(cpt.tms_utime+cpt.tms_stime) / gTicks;
+  struct tms cpt;
+  times(&cpt);
+  return (double)(cpt.tms_utime+cpt.tms_stime) / gTicks;
 #elif defined(R__VMS)
-   return(double)clock()/gTicks;
+  return(double)clock()/gTicks;
 #elif defined(WINCE)
-   return 0;
+  return 0;
 #elif defined(WIN32)
 
-  OSVERSIONINFO OsVersionInfo;
+  FILETIME    ftCreate,       // when the process was created
+              ftExit;         // when the process exited
 
-//*-*         Value                      Platform
-//*-*  ----------------------------------------------------
-//*-*  VER_PLATFORM_WIN32_WINDOWS       Win32 on Windows 95
-//*-*  VER_PLATFORM_WIN32_NT            Windows NT
-//*-*
-  OsVersionInfo.dwOSVersionInfoSize=sizeof(OSVERSIONINFO);
-  GetVersionEx(&OsVersionInfo);
-  if (OsVersionInfo.dwPlatformId == VER_PLATFORM_WIN32_NT) {
-    DWORD       ret;
-    FILETIME    ftCreate,       // when the process was created
-                ftExit;         // when the process exited
+  union     {FILETIME ftFileTime;
+             __int64  ftInt64;
+            } ftKernel; // time the process has spent in kernel mode
 
-    union     {FILETIME ftFileTime;
-               __int64  ftInt64;
-              } ftKernel; // time the process has spent in kernel mode
+  union     {FILETIME ftFileTime;
+             __int64  ftInt64;
+            } ftUser;   // time the process has spent in user mode
 
-    union     {FILETIME ftFileTime;
-               __int64  ftInt64;
-              } ftUser;   // time the process has spent in user mode
-
-    HANDLE hProcess = GetCurrentProcess();
-    ret = GetProcessTimes (hProcess, &ftCreate, &ftExit,
-                                     &ftKernel.ftFileTime,
-                                     &ftUser.ftFileTime);
-    if (ret != PR_TRUE){
-      ret = GetLastError ();
+  HANDLE hProcess = GetCurrentProcess();
 #ifdef DEBUG
-      printf("%s 0x%lx\n"," Error on GetProcessTimes", (int)ret);
+  BOOL ret =
 #endif
-    }
-
-    /*
-     * Process times are returned in a 64-bit structure, as the number of
-     * 100 nanosecond ticks since 1 January 1601.  User mode and kernel mode
-     * times for this process are in separate 64-bit structures.
-     * To convert to floating point seconds, we will:
-     *
-     *          Convert sum of high 32-bit quantities to 64-bit int
-     */
-
-      return (double) (ftKernel.ftInt64 + ftUser.ftInt64) * gTicks;
-  }
-  else
-      return GetRealTime();
-
+    GetProcessTimes(hProcess, &ftCreate, &ftExit,
+                              &ftKernel.ftFileTime, &ftUser.ftFileTime);
+#ifdef DEBUG
+  if (!ret)
+    // ToDo: May want to use NS_ERROR().
+    printf("Error: GetProcessTimes() failed, 0x%lx\n", (int)GetLastError());
 #endif
+
+  /*
+   * Process times are returned in a 64-bit structure, as the number of
+   * 100 nanosecond ticks since 1 January 1601.  User mode and kernel mode
+   * times for this process are in separate 64-bit structures.
+   * To convert to floating point seconds, we will:
+   *
+   *          Convert sum of high 32-bit quantities to 64-bit int
+   */
+  return (double) (ftKernel.ftInt64 + ftUser.ftInt64) * gTicks;
+
+#endif # elif, WIN32
 }
 
 

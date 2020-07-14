@@ -38,7 +38,7 @@
 
 /*
 **
-** Sample client side test program that uses SSL and libsec
+** Sample client side test program that uses SSL and NSS
 **
 */
 
@@ -65,6 +65,7 @@
 #include "sslproto.h"
 #include "pk11func.h"
 #include "plgetopt.h"
+#include "plstr.h"
 
 #if defined(WIN32)
 #include <fcntl.h>
@@ -121,23 +122,12 @@ int ssl3CipherSuites[] = {
 
 unsigned long __cmp_umuls;
 PRBool verbose;
+int renegotiationsToDo = 0;
+int renegotiationsDone = 0;
 
 static char *progName;
 
-/* This exists only for the automated test suite. It allows us to
- * pass in a password on the command line. 
- */
-
-char *password = NULL;
-
-char * ownPasswd( PK11SlotInfo *slot, PRBool retry, void *arg)
-{
-	char *passwd = NULL;
-	if ( (!retry) && arg ) {
-		passwd = PL_strdup((char *)arg);
-	}
-	return passwd;
-}
+secuPWData  pwdata          = { PW_NONE, 0 };
 
 void printSecurityInfo(PRFileDesc *fd)
 {
@@ -160,9 +150,11 @@ void printSecurityInfo(PRFileDesc *fd)
 	       suite.effectiveKeyBits, suite.symCipherName, 
 	       suite.macBits, suite.macAlgorithmName);
 	    FPRINTF(stderr, 
-	    "tstclnt: Server Auth: %d-bit %s, Key Exchange: %d-bit %s\n",
+	    "tstclnt: Server Auth: %d-bit %s, Key Exchange: %d-bit %s\n"
+	    "         Compression: %s\n",
 	       channel.authKeyBits, suite.authAlgorithmName,
-	       channel.keaKeyBits,  suite.keaTypeName);
+	       channel.keaKeyBits,  suite.keaTypeName,
+	       channel.compressionMethodName);
     	}
     }
     cert = SSL_RevealCert(fd);
@@ -181,23 +173,36 @@ void printSecurityInfo(PRFileDesc *fd)
 	cert = NULL;
     }
     fprintf(stderr,
-    	"%ld cache hits; %ld cache misses, %ld cache not reusable\n",
+    	"%ld cache hits; %ld cache misses, %ld cache not reusable\n"
+	"%ld stateless resumes\n",
     	ssl3stats->hsh_sid_cache_hits, ssl3stats->hsh_sid_cache_misses,
-	ssl3stats->hsh_sid_cache_not_ok);
-
+	ssl3stats->hsh_sid_cache_not_ok, ssl3stats->hsh_sid_stateless_resumes);
 }
 
 void
 handshakeCallback(PRFileDesc *fd, void *client_data)
 {
+    const char *secondHandshakeName = (char *)client_data;
+    if (secondHandshakeName) {
+        SSL_SetURL(fd, secondHandshakeName);
+    }
     printSecurityInfo(fd);
+    if (renegotiationsDone < renegotiationsToDo) {
+	SSL_ReHandshake(fd, (renegotiationsToDo < 2));
+	++renegotiationsDone;
+    }
 }
 
 static void Usage(const char *progName)
 {
     fprintf(stderr, 
-"Usage:  %s -h host [-p port] [-d certdir] [-n nickname] [-23BTfosvx] \n"
-"                   [-c ciphers] [-w passwd] [-q]\n", progName);
+"Usage:  %s -h host [-a 1st_hs_name ] [-a 2nd_hs_name ] [-p port]\n"
+                    "[-d certdir] [-n nickname] [-23BTafosvx] [-c ciphers]\n"
+                    "[-r N] [-w passwd] [-W pwfile] [-q]\n", progName);
+    fprintf(stderr, "%-20s Send different SNI name. 1st_hs_name - at first\n"
+                    "%-20s handshake, 2nd_hs_name - at second handshake.\n"
+                    "%-20s Defualt is host from the -h argument.\n", "-a name",
+                    "", "");
     fprintf(stderr, "%-20s Hostname to connect with\n", "-h host");
     fprintf(stderr, "%-20s Port number for SSL server\n", "-p port");
     fprintf(stderr, 
@@ -210,12 +215,17 @@ static void Usage(const char *progName)
     fprintf(stderr, "%-20s Disable SSL v2.\n", "-2");
     fprintf(stderr, "%-20s Disable SSL v3.\n", "-3");
     fprintf(stderr, "%-20s Disable TLS (SSL v3.1).\n", "-T");
+    fprintf(stderr, "%-20s Prints only payload data. Skips HTTP header.\n", "-S");
     fprintf(stderr, "%-20s Client speaks first. \n", "-f");
     fprintf(stderr, "%-20s Override bad server cert. Make it OK.\n", "-o");
     fprintf(stderr, "%-20s Disable SSL socket locking.\n", "-s");
     fprintf(stderr, "%-20s Verbose progress reporting.\n", "-v");
     fprintf(stderr, "%-20s Use export policy.\n", "-x");
     fprintf(stderr, "%-20s Ping the server and then exit.\n", "-q");
+    fprintf(stderr, "%-20s Renegotiate N times (resuming session if N>1).\n", "-r N");
+    fprintf(stderr, "%-20s Enable the session ticket extension.\n", "-u");
+    fprintf(stderr, "%-20s Enable compression.\n", "-z");
+    fprintf(stderr, "%-20s Enable false start.\n", "-g");
     fprintf(stderr, "%-20s Letter(s) chosen from the following list\n", 
                     "-c ciphers");
     fprintf(stderr, 
@@ -265,8 +275,8 @@ milliPause(PRUint32 milli)
 void
 disableAllSSLCiphers(void)
 {
-    const PRUint16 *cipherSuites = SSL_ImplementedCiphers;
-    int             i            = SSL_NumImplementedCiphers;
+    const PRUint16 *cipherSuites = SSL_GetImplementedCiphers();
+    int             i            = SSL_GetNumImplementedCiphers();
     SECStatus       rv;
 
     /* disable all the SSL3 cipher suites */
@@ -397,6 +407,83 @@ printHostNameAndAddr(const char * host, const PRNetAddr * addr)
     }
 }
 
+/*
+ *  Prints output according to skipProtoHeader flag. If skipProtoHeader
+ *  is not set, prints without any changes, otherwise looking
+ *  for \n\r\n(empty line sequence: HTTP header separator) and
+ *  prints everything after it.
+ */
+static void
+separateReqHeader(const PRFileDesc* outFd, const char* buf, const int nb,
+                  PRBool *wrStarted, int *ptrnMatched) {
+
+    /* it is sufficient to look for only "\n\r\n". Hopping that
+     * HTTP response format satisfies the standard */
+    char *ptrnStr = "\n\r\n";
+    char *resPtr;
+
+    if (nb == 0) {
+        return;
+    }
+
+    if (*ptrnMatched > 0) {
+        /* Get here only if previous separateReqHeader call found
+         * only a fragment of "\n\r\n" in previous buffer. */
+        PORT_Assert(*ptrnMatched < 3);
+
+        /* the size of fragment of "\n\r\n" what we want to find in this
+         * buffer is equal to *ptrnMatched */
+        if (*ptrnMatched <= nb) {
+            /* move the pointer to the beginning of the fragment */
+            int strSize = *ptrnMatched;
+            char *tmpPtrn = ptrnStr + (3 - strSize);
+            if (PL_strncmp(buf, tmpPtrn, strSize) == 0) {
+                /* print the rest of the buffer(without the fragment) */
+                PR_Write((void*)outFd, buf + strSize, nb - strSize);
+                *wrStarted = PR_TRUE;
+                return;
+            }
+        } else {
+            /* we are here only when nb == 1 && *ptrnMatched == 2 */
+            if (*buf == '\r') {
+                *ptrnMatched = 1;
+            } else {
+                *ptrnMatched = 0;
+            }
+            return;
+        }
+    }
+    resPtr = PL_strnstr(buf, ptrnStr, nb);
+    if (resPtr != NULL) {
+        /* if "\n\r\n" was found in the buffer, calculate offset
+         * and print the rest of the buffer */
+        int newBn = nb - (resPtr - buf + 3); /* 3 is the length of "\n\r\n" */
+
+        PR_Write((void*)outFd, resPtr + 3, newBn);
+        *wrStarted = PR_TRUE;
+        return;
+    } else {
+        /* try to find a fragment of "\n\r\n" at the end of the buffer.
+         * if found, set *ptrnMatched to the number of chars left to find
+         * in the next buffer.*/
+        int i;
+        for(i = 1 ;i < 3;i++) {
+            char *bufPrt;
+            int strSize = 3 - i;
+            
+            if (strSize > nb) {
+                continue;
+            }
+            bufPrt = (char*)(buf + nb - strSize);
+            
+            if (PL_strncmp(bufPrt, ptrnStr, strSize) == 0) {
+                *ptrnMatched = i;
+                return;
+            }
+        }
+    }
+}
+
 #define SSOCK_FD 0
 #define STDIN_FD 1
 
@@ -417,7 +504,6 @@ int main(int argc, char **argv)
     PRFileDesc *       std_out;
     CERTCertDBHandle * handle;
     char *             host	=  NULL;
-    char *             port	=  "443";
     char *             certDir  =  NULL;
     char *             nickname =  NULL;
     char *             cipherString = NULL;
@@ -434,14 +520,21 @@ int main(int argc, char **argv)
     int                bypassPKCS11 = 0;
     int                disableLocking = 0;
     int                useExportPolicy = 0;
+    int                enableSessionTickets = 0;
+    int                enableCompression = 0;
+    int                enableFalseStart = 0;
     PRSocketOptionData opt;
     PRNetAddr          addr;
-    PRHostEnt          hp;
     PRPollDesc         pollset[2];
-    PRBool             useCommandLinePassword = PR_FALSE;
     PRBool             pingServerFirst = PR_FALSE;
     PRBool             clientSpeaksFirst = PR_FALSE;
+    PRBool             wrStarted = PR_FALSE;
+    PRBool             skipProtoHeader = PR_FALSE;
+    int                headerSeparatorPtrnId = 0;
     int                error = 0;
+    PRUint16           portno = 443;
+    char *             hs1SniHostName = NULL;
+    char *             hs2SniHostName = NULL;
     PLOptState *optstate;
     PLOptStatus optstatus;
     PRStatus prStatus;
@@ -459,7 +552,8 @@ int main(int argc, char **argv)
        }
     }
 
-    optstate = PL_CreateOptState(argc, argv, "23BTfc:h:p:d:m:n:oqsvw:x");
+    optstate = PL_CreateOptState(argc, argv,
+                                 "23BSTW:a:c:d:fgh:m:n:op:qr:suvw:xz");
     while ((optstatus = PL_GetNextOpt(optstate)) == PL_OPT_OK) {
 	switch (optstate->option) {
 	  case '?':
@@ -471,18 +565,28 @@ int main(int argc, char **argv)
 
           case 'B': bypassPKCS11 = 1; 			break;
 
+          case 'S': skipProtoHeader = PR_TRUE;                 break;
+
           case 'T': disableTLS  = 1; 			break;
 
-          case 'c': cipherString = strdup(optstate->value); break;
+          case 'a': if (!hs1SniHostName) {
+                        hs1SniHostName = PORT_Strdup(optstate->value);
+                    } else if (!hs2SniHostName) {
+                        hs2SniHostName =  PORT_Strdup(optstate->value);
+                    } else {
+                        Usage(progName);
+                    }
+                    break;
 
-          case 'h': host = strdup(optstate->value);	break;
+          case 'c': cipherString = PORT_Strdup(optstate->value); break;
 
-          case 'f':  clientSpeaksFirst = PR_TRUE;       break;
+          case 'g': enableFalseStart = 1; 		break;
 
-	  case 'd':
-	    certDir = strdup(optstate->value);
-	    certDir = SECU_ConfigDirectory(certDir);
-	    break;
+          case 'd': certDir = PORT_Strdup(optstate->value);   break;
+
+          case 'f': clientSpeaksFirst = PR_TRUE;        break;
+
+          case 'h': host = PORT_Strdup(optstate->value);	break;
 
 	  case 'm':
 	    multiplier = atoi(optstate->value);
@@ -490,46 +594,59 @@ int main(int argc, char **argv)
 	    	multiplier = 0;
 	    break;
 
-	  case 'n': nickname = strdup(optstate->value);	break;
+	  case 'n': nickname = PORT_Strdup(optstate->value);	break;
 
 	  case 'o': override = 1; 			break;
 
-	  case 'p': port = strdup(optstate->value);	break;
+	  case 'p': portno = (PRUint16)atoi(optstate->value);	break;
 
 	  case 'q': pingServerFirst = PR_TRUE;          break;
 
 	  case 's': disableLocking = 1;                 break;
 
+	  case 'u': enableSessionTickets = PR_TRUE;	break;
+
 	  case 'v': verbose++;	 			break;
 
-	  case 'w':
-		password = PORT_Strdup(optstate->value);
-		useCommandLinePassword = PR_TRUE;
+	  case 'r': renegotiationsToDo = atoi(optstate->value);	break;
+
+          case 'w':
+                pwdata.source = PW_PLAINTEXT;
+		pwdata.data = PORT_Strdup(optstate->value);
 		break;
 
+          case 'W':
+                pwdata.source = PW_FROMFILE;
+                pwdata.data = PORT_Strdup(optstate->value);
+                break;
+
 	  case 'x': useExportPolicy = 1; 		break;
+
+	  case 'z': enableCompression = 1;		break;
 	}
     }
+
+    PL_DestroyOptState(optstate);
+
     if (optstatus == PL_OPT_BAD)
 	Usage(progName);
 
-    if (!host || !port) Usage(progName);
-
-    if (!certDir) {
-	certDir = SECU_DefaultSSLDir();	/* Look in $SSL_DIR */
-	certDir = SECU_ConfigDirectory(certDir); /* call even if it's NULL */
-    }
+    if (!host || !portno) 
+    	Usage(progName);
 
     PR_Init( PR_SYSTEM_THREAD, PR_PRIORITY_NORMAL, 1);
 
-    /* set our password function */
-    if ( useCommandLinePassword ) {
-	PK11_SetPasswordFunc(ownPasswd);
-    } else {
-    	PK11_SetPasswordFunc(SECU_GetModulePassword);
-    }
+    PK11_SetPasswordFunc(SECU_GetModulePassword);
 
     /* open the cert DB, the key DB, and the secmod DB. */
+    if (!certDir) {
+	certDir = SECU_DefaultSSLDir();	/* Look in $SSL_DIR */
+	certDir = SECU_ConfigDirectory(certDir);
+    } else {
+	char *certDirTmp = certDir;
+	certDir = SECU_ConfigDirectory(certDirTmp);
+	PORT_Free(certDirTmp);
+    }
     rv = NSS_Init(certDir);
     if (rv != SECSuccess) {
 	SECU_PrintError(progName, "unable to open cert database");
@@ -556,28 +673,28 @@ int main(int argc, char **argv)
 
     status = PR_StringToNetAddr(host, &addr);
     if (status == PR_SUCCESS) {
-	int portno = atoi(port);
-    	addr.inet.port = PR_htons((PRUint16)portno);
+    	addr.inet.port = PR_htons(portno);
     } else {
 	/* Lookup host */
-	char buf[PR_NETDB_BUF_SIZE];
-	status = PR_GetIPNodeByName(host, PR_AF_INET6, PR_AI_DEFAULT, 
-				    buf, sizeof buf, &hp);
-	if (status != PR_SUCCESS) {
+	PRAddrInfo *addrInfo;
+	void       *enumPtr   = NULL;
+
+	addrInfo = PR_GetAddrInfoByName(host, PR_AF_UNSPEC, 
+	                                PR_AI_ADDRCONFIG | PR_AI_NOCANONNAME);
+	if (!addrInfo) {
 	    SECU_PrintError(progName, "error looking up host");
 	    return 1;
 	}
-	if (PR_EnumerateHostEnt(0, &hp, (PRUint16)atoi(port), &addr) == -1) {
+	do {
+	    enumPtr = PR_EnumerateAddrInfo(enumPtr, addrInfo, portno, &addr);
+	} while (enumPtr != NULL &&
+		 addr.raw.family != PR_AF_INET &&
+		 addr.raw.family != PR_AF_INET6);
+	PR_FreeAddrInfo(addrInfo);
+	if (enumPtr == NULL) {
 	    SECU_PrintError(progName, "error looking up host address");
 	    return 1;
 	}
-    }
-
-    if (PR_IsNetAddrType(&addr, PR_IpAddrV4Mapped)) {
-    	/* convert to IPv4.  */
-	addr.inet.family = PR_AF_INET;
-	memcpy(&addr.inet.ip, &addr.ipv6.ip.pr_s6_addr[12], 4);
-	memset(&addr.inet.pad[0], 0, sizeof addr.inet.pad);
     }
 
     printHostNameAndAddr(host, &addr);
@@ -586,7 +703,7 @@ int main(int argc, char **argv)
 	int iter = 0;
 	PRErrorCode err;
 	do {
-	    s = PR_NewTCPSocket();
+	    s = PR_OpenTCPSocket(addr.raw.family);
 	    if (s == NULL) {
 		SECU_PrintError(progName, "Failed to create a TCP socket");
 	    }
@@ -624,7 +741,7 @@ int main(int argc, char **argv)
     }
 
     /* Create socket */
-    s = PR_NewTCPSocket();
+    s = PR_OpenTCPSocket(addr.raw.family);
     if (s == NULL) {
 	SECU_PrintError(progName, "error creating socket");
 	return 1;
@@ -655,6 +772,7 @@ int main(int argc, char **argv)
 
     /* all the SSL2 and SSL3 cipher suites are enabled by default. */
     if (cipherString) {
+    	char *cstringSaved = cipherString;
     	int ndx;
 
 	while (0 != (ndx = *cipherString++)) {
@@ -694,6 +812,7 @@ int main(int argc, char **argv)
 		Usage(progName);
 	    }
 	}
+	PORT_Free(cstringSaved);
     }
 
     rv = SSL_OptionSet(s, SSL_ENABLE_SSL2, !disableSSL2);
@@ -735,18 +854,40 @@ int main(int argc, char **argv)
 	return 1;
     }
 
-
-    if (useCommandLinePassword) {
-	SSL_SetPKCS11PinArg(s, password);
+    /* enable Session Ticket extension. */
+    rv = SSL_OptionSet(s, SSL_ENABLE_SESSION_TICKETS, enableSessionTickets);
+    if (rv != SECSuccess) {
+	SECU_PrintError(progName, "error enabling Session Ticket extension");
+	return 1;
     }
+
+    /* enable compression. */
+    rv = SSL_OptionSet(s, SSL_ENABLE_DEFLATE, enableCompression);
+    if (rv != SECSuccess) {
+	SECU_PrintError(progName, "error enabling compression");
+	return 1;
+    }
+
+    /* enable false start. */
+    rv = SSL_OptionSet(s, SSL_ENABLE_FALSE_START, enableFalseStart);
+    if (rv != SECSuccess) {
+	SECU_PrintError(progName, "error enabling false start");
+	return 1;
+    }
+
+    SSL_SetPKCS11PinArg(s, &pwdata);
 
     SSL_AuthCertificateHook(s, SSL_AuthCertificate, (void *)handle);
     if (override) {
 	SSL_BadCertHook(s, ownBadCertHandler, NULL);
     }
     SSL_GetClientAuthDataHook(s, own_GetClientAuthData, (void *)nickname);
-    SSL_HandshakeCallback(s, handshakeCallback, NULL);
-    SSL_SetURL(s, host);
+    SSL_HandshakeCallback(s, handshakeCallback, hs2SniHostName);
+    if (hs1SniHostName) {
+        SSL_SetURL(s, hs1SniHostName);
+    } else {
+        SSL_SetURL(s, host);
+    }
 
     /* Try to connect to the server */
     status = PR_Connect(s, &addr, PR_INTERVAL_NO_TIMEOUT);
@@ -940,7 +1081,12 @@ int main(int argc, char **argv)
 		/* EOF from socket... stop polling socket for read */
 		pollset[SSOCK_FD].in_flags = 0;
 	    } else {
-		PR_Write(std_out, buf, nb);
+		if (skipProtoHeader != PR_TRUE || wrStarted == PR_TRUE) {
+		    PR_Write(std_out, buf, nb);
+		} else {
+		    separateReqHeader(std_out, buf, nb, &wrStarted,
+		                      &headerSeparatorPtrnId);
+		}
 		if (verbose)
 		    fputs("\n\n", stderr);
 	    }
@@ -949,12 +1095,27 @@ int main(int argc, char **argv)
     }
 
   done:
+    if (hs1SniHostName) {
+        PORT_Free(hs1SniHostName);
+    }
+    if (hs2SniHostName) {
+        PORT_Free(hs2SniHostName);
+    }
+    if (nickname) {
+        PORT_Free(nickname);
+    }
+    if (pwdata.data) {
+        PORT_Free(pwdata.data);
+    }
+    PORT_Free(host);
+
     PR_Close(s);
     SSL_ClearSessionCache();
     if (NSS_Shutdown() != SECSuccess) {
         exit(1);
     }
 
+    FPRINTF(stderr, "tstclnt: exiting with return code %d\n", error);
     PR_Cleanup();
     return error;
 }

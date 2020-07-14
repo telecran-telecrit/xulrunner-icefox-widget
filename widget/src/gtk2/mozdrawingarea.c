@@ -45,7 +45,8 @@ static void moz_drawingarea_init                (MozDrawingarea *drawingarea);
 /* static methods */
 static void moz_drawingarea_create_windows      (MozDrawingarea *drawingarea,
                                                  GdkWindow *parent,
-                                                 GtkWidget *widget);
+                                                 GtkWidget *widget,
+                                                 GdkVisual *visual);
 
 static void moz_drawingarea_finalize            (GObject *object);
 
@@ -79,22 +80,23 @@ moz_drawingarea_get_type(void)
 }
 
 MozDrawingarea *
-moz_drawingarea_new (MozDrawingarea *parent, MozContainer *widget_parent)
+moz_drawingarea_new (MozDrawingarea *parent, MozContainer *widget_parent,
+                     GdkVisual *visual)
 {
     MozDrawingarea *drawingarea;
 
     drawingarea = g_object_new(MOZ_DRAWINGAREA_TYPE, NULL);
 
-    drawingarea->parent = parent;
-
     if (!parent)
         moz_drawingarea_create_windows(drawingarea,
                                        GTK_WIDGET(widget_parent)->window,
-                                       GTK_WIDGET(widget_parent));
+                                       GTK_WIDGET(widget_parent),
+                                       visual);
     else
         moz_drawingarea_create_windows(drawingarea,
                                        parent->inner_window, 
-                                       GTK_WIDGET(widget_parent));
+                                       GTK_WIDGET(widget_parent),
+                                       visual);
 
     return drawingarea;
 }
@@ -124,7 +126,7 @@ moz_drawingarea_reparent (MozDrawingarea *drawingarea, GdkWindow *aNewParent)
 
 void
 moz_drawingarea_create_windows (MozDrawingarea *drawingarea, GdkWindow *parent,
-                                GtkWidget *widget)
+                                GtkWidget *widget, GdkVisual *visual)
 {
     GdkWindowAttr attributes;
     gint          attributes_mask = 0;
@@ -136,9 +138,14 @@ moz_drawingarea_create_windows (MozDrawingarea *drawingarea, GdkWindow *parent,
     attributes.width = 1;
     attributes.height = 1;
     attributes.wclass = GDK_INPUT_OUTPUT;
-    attributes.visual = gtk_widget_get_visual (widget);
-    attributes.colormap = gtk_widget_get_colormap (widget);
     attributes.window_type = GDK_WINDOW_CHILD;
+    if (!visual) {
+        attributes.visual = gtk_widget_get_visual (widget);
+        attributes.colormap = gtk_widget_get_colormap (widget);
+    } else {
+        attributes.visual = visual;
+        attributes.colormap = gdk_colormap_new(visual, 0);
+    }
 
     attributes_mask |= GDK_WA_VISUAL | GDK_WA_COLORMAP |
         GDK_WA_X | GDK_WA_Y;
@@ -155,6 +162,9 @@ moz_drawingarea_create_windows (MozDrawingarea *drawingarea, GdkWindow *parent,
                              GDK_VISIBILITY_NOTIFY_MASK |
                              GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK |
                              GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+#ifdef HAVE_GTK_MOTION_HINTS
+                             GDK_POINTER_MOTION_HINT_MASK |
+#endif
                              GDK_POINTER_MOTION_MASK);
     /* create the inner window */
     drawingarea->inner_window = gdk_window_new (drawingarea->clip_window,
@@ -164,20 +174,23 @@ moz_drawingarea_create_windows (MozDrawingarea *drawingarea, GdkWindow *parent,
     /* set the default pixmap to None so that you don't end up with the
        gtk default which is BlackPixel. */
     gdk_window_set_back_pixmap(drawingarea->inner_window, NULL, FALSE);
+
+    if (visual) {
+        g_object_unref(attributes.colormap);
+    }
 }
 
 void
 moz_drawingarea_finalize (GObject *object)
 {
     MozDrawingarea *drawingarea;
+    gpointer user_data;
 
     g_return_if_fail(IS_MOZ_DRAWINGAREA(object));
 
     drawingarea = MOZ_DRAWINGAREA(object);
 
-    gdk_window_set_user_data(drawingarea->inner_window, NULL);
     gdk_window_destroy(drawingarea->inner_window);
-    gdk_window_set_user_data(drawingarea->clip_window, NULL);
     gdk_window_destroy(drawingarea->clip_window);
 
     (* parent_class->finalize) (object);

@@ -66,17 +66,21 @@
 #include <string.h>
 
 /* for getcwd */
-#if defined(XP_UNIX) || defined (XP_OS2_EMX) || defined(XP_BEOS)
+#if defined(XP_UNIX) || defined (XP_OS2) || defined(XP_BEOS)
 #include <unistd.h>
 #elif defined(XP_PC)
 #include <direct.h>
 #endif
 
-#ifdef XP_MAC
-#include "prlog.h"
-#define printf PR_LogPrint
+#ifdef WINCE
+#include <windows.h>
+char *getcwd(char *buf, size_t size)
+{
+    wchar_t wpath[MAX_PATH];
+    _wgetcwd(wpath, MAX_PATH);
+    WideCharToMultiByte(CP_ACP, 0, wpath, -1, buf, size, 0, 0);
+}
 #endif
-
 
 #define BASE_PORT 9867
 
@@ -125,7 +129,9 @@ static PRStatus MakeReceiver(Shared *shared)
     {
         char *argv[3];
         char path[1024 + sizeof("/tmoacc")];
-        (void)getcwd(path, sizeof(path));
+
+        getcwd(path, sizeof(path));
+
         (void)strcat(path, "/tmoacc");
 #ifdef XP_PC
         (void)strcat(path, ".exe");

@@ -66,7 +66,6 @@ interface jsdIErrorHook;
 interface jsdIExecutionHook;
 interface jsdICallHook;
 interface jsdIEphemeral;
-interface jsdIPC;
 interface jsdIContext;
 interface jsdIStackFrame;
 interface jsdIScript;
@@ -78,7 +77,7 @@ interface jsdIProperty;
  * Debugger service.  It's not a good idea to have more than one active client of
  * the debugger service.
  */
-[scriptable, uuid(9dd9006a-4e5e-4a80-ac3d-007fb7335ca4)]
+[scriptable, uuid(a074fcb4-73d7-4825-a4cd-7cbb1d6800b1)]
 interface jsdIDebuggerService : nsISupports
 {
     /** Internal use only. */
@@ -382,6 +381,13 @@ interface jsdIDebuggerService : nsISupports
      *               nested.  your code can use it for sanity checks.
      */
     unsigned long exitNestedEventLoop ();
+
+    /**
+     * Output dump of JS heap.
+     *
+     * @param fileName Filename to dump the heap into.
+     */
+    void dumpHeap (in string fileName);
 };
 
 /* callback interfaces */
@@ -420,7 +426,7 @@ interface jsdIFilter : nsISupports
      * matches all hooks.  This attribute must be QI'able to the
      * (non-scriptable) nsIScriptGlobalObject interface.
      *
-     * The jsdIService caches this value internally, to if it changes you must
+     * The jsdIService caches this value internally, so if it changes you must
      * swap the filter with itself using jsdIService::swapFilters.
      */
     attribute nsISupports globalObject;

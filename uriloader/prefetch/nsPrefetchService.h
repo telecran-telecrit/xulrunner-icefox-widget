@@ -47,8 +47,11 @@
 #include "nsIStreamListener.h"
 #include "nsIChannel.h"
 #include "nsIURI.h"
+#include "nsIDOMDocument.h"
+#include "nsIDOMLoadStatus.h"
 #include "nsWeakReference.h"
 #include "nsCOMPtr.h"
+#include "nsAutoPtr.h"
 
 class nsPrefetchService;
 class nsPrefetchListener;
@@ -73,69 +76,78 @@ public:
 
     nsresult Init();
     void     ProcessNextURI();
-    void     UpdateCurrentChannel(nsIChannel *c) { mCurrentChannel = c; }
+
+    nsPrefetchNode *GetCurrentNode() { return mCurrentNode.get(); }
+    nsPrefetchNode *GetQueueHead() { return mQueueHead; }
+
+    void NotifyLoadRequested(nsPrefetchNode *node);
+    void NotifyLoadCompleted(nsPrefetchNode *node);
 
 private:
     ~nsPrefetchService();
 
+    nsresult Prefetch(nsIURI *aURI,
+                      nsIURI *aReferrerURI,
+                      nsIDOMNode *aSource,
+                      PRBool aExplicit);
+
     void     AddProgressListener();
     void     RemoveProgressListener();
-    nsresult EnqueueURI(nsIURI *aURI, nsIURI *aReferrerURI);
-    nsresult DequeueURI(nsIURI **aURI, nsIURI **aReferrerURI);
+    nsresult EnqueueURI(nsIURI *aURI, nsIURI *aReferrerURI,
+                        nsIDOMNode *aSource, nsPrefetchNode **node);
+    nsresult EnqueueNode(nsPrefetchNode *node);
+    nsresult DequeueNode(nsPrefetchNode **node);
     void     EmptyQueue();
+
     void     StartPrefetching();
     void     StopPrefetching();
 
-    nsPrefetchNode      *mQueueHead;
-    nsPrefetchNode      *mQueueTail;
-    nsCOMPtr<nsIChannel> mCurrentChannel;
-    PRInt32              mStopCount;
-    PRBool               mDisabled;
-};
-
-//-----------------------------------------------------------------------------
-// nsPrefetchListener
-//-----------------------------------------------------------------------------
-
-class nsPrefetchListener : public nsIStreamListener
-                         , public nsIInterfaceRequestor
-                         , public nsIChannelEventSink
-{
-public:
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIREQUESTOBSERVER
-    NS_DECL_NSISTREAMLISTENER
-    NS_DECL_NSIINTERFACEREQUESTOR
-    NS_DECL_NSICHANNELEVENTSINK
-
-    nsPrefetchListener(nsPrefetchService *aPrefetchService);
-
-private:
-    ~nsPrefetchListener();
-
-    static NS_METHOD ConsumeSegments(nsIInputStream *, void *, const char *,
-                                     PRUint32, PRUint32, PRUint32 *);
-
-    nsPrefetchService *mService;
+    nsPrefetchNode                   *mQueueHead;
+    nsPrefetchNode                   *mQueueTail;
+    nsRefPtr<nsPrefetchNode>          mCurrentNode;
+    PRInt32                           mStopCount;
+    // true if pending document loads have ever reached zero.
+    PRInt32                           mHaveProcessed;
+    PRBool                            mDisabled;
 };
 
 //-----------------------------------------------------------------------------
 // nsPrefetchNode
 //-----------------------------------------------------------------------------
 
-class nsPrefetchNode
+class nsPrefetchNode : public nsIDOMLoadStatus
+                     , public nsIStreamListener
+                     , public nsIInterfaceRequestor
+                     , public nsIChannelEventSink
 {
 public:
-    nsPrefetchNode(nsIURI *aURI,
-                   nsIURI *aReferrerURI)
-        : mNext(nsnull)
-        , mURI(aURI)
-        , mReferrerURI(aReferrerURI)
-        { }
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIDOMLOADSTATUS
+    NS_DECL_NSIREQUESTOBSERVER
+    NS_DECL_NSISTREAMLISTENER
+    NS_DECL_NSIINTERFACEREQUESTOR
+    NS_DECL_NSICHANNELEVENTSINK
 
-    nsPrefetchNode  *mNext;
-    nsCOMPtr<nsIURI> mURI;
-    nsCOMPtr<nsIURI> mReferrerURI;
+    nsPrefetchNode(nsPrefetchService *aPrefetchService,
+                   nsIURI *aURI,
+                   nsIURI *aReferrerURI,
+                   nsIDOMNode *aSource);
+
+    ~nsPrefetchNode() {}
+
+    nsresult OpenChannel();
+    nsresult CancelChannel(nsresult error);
+
+    nsPrefetchNode             *mNext;
+    nsCOMPtr<nsIURI>            mURI;
+    nsCOMPtr<nsIURI>            mReferrerURI;
+    nsCOMPtr<nsIWeakReference>  mSource;
+
+private:
+    nsRefPtr<nsPrefetchService> mService;
+    nsCOMPtr<nsIChannel>        mChannel;
+    PRUint16                    mState;
+    PRInt32                     mBytesRead;
 };
 
 #endif // !nsPrefetchService_h__

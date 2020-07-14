@@ -87,7 +87,7 @@ class nsDocLoader : public nsIDocumentLoader,
                     public nsISupportsPriority
 {
 public:
-    NS_DEFINE_STATIC_IID_ACCESSOR(NS_THIS_DOCLOADER_IMPL_CID);
+    NS_DECLARE_STATIC_IID_ACCESSOR(NS_THIS_DOCLOADER_IMPL_CID)
 
     nsDocLoader();
 
@@ -96,7 +96,7 @@ public:
     static already_AddRefed<nsDocLoader> GetAsDocLoader(nsISupports* aSupports);
     // Needed to deal with ambiguous inheritance from nsISupports...
     static nsISupports* GetAsSupports(nsDocLoader* aDocLoader) {
-        return NS_STATIC_CAST(nsIDocumentLoader*, aDocLoader);
+        return static_cast<nsIDocumentLoader*>(aDocLoader);
     }
 
     // Add aDocLoader as a child to the docloader service.
@@ -133,22 +133,17 @@ protected:
 
     virtual nsresult SetDocLoaderParent(nsDocLoader * aLoader);
 
-    // DocLoaderIsEmpty should be called whenever the docloader may be empty.
-    // This method is idempotent and does nothing if the docloader is not in
-    // fact empty.
-    void DocLoaderIsEmpty();
-
     PRBool IsBusy();
 
     void Destroy();
     virtual void DestroyChildren();
 
     nsIDocumentLoader* ChildAt(PRInt32 i) {
-        return NS_STATIC_CAST(nsDocLoader*, mChildList[i]);
+        return static_cast<nsDocLoader*>(mChildList[i]);
     }
 
     nsIDocumentLoader* SafeChildAt(PRInt32 i) {
-        return NS_STATIC_CAST(nsDocLoader*, mChildList.SafeElementAt(i));
+        return static_cast<nsDocLoader*>(mChildList.SafeElementAt(i));
     }
 
     void FireOnProgressChange(nsDocLoader* aLoadInitiator,
@@ -173,6 +168,11 @@ protected:
                               nsIRequest* aRequest,
                               nsIURI *aUri);
 
+    PRBool RefreshAttempted(nsIWebProgress* aWebProgress,
+                            nsIURI *aURI,
+                            PRInt32 aDelay,
+                            PRBool aSameURI);
+
     // this function is overridden by the docshell, it is provided so that we
     // can pass more information about redirect state (the normal OnStateChange
     // doesn't get the new channel).
@@ -189,6 +189,22 @@ protected:
     void doStopURLLoad(nsIRequest *request, nsresult aStatus);
     void doStopDocumentLoad(nsIRequest *request, nsresult aStatus);
 
+    // Inform a parent docloader that aChild is about to call its onload
+    // handler.
+    PRBool ChildEnteringOnload(nsIDocumentLoader* aChild) {
+        // It's ok if we're already in the list -- we'll just be in there twice
+        // and then the RemoveObject calls from ChildDoneWithOnload will remove
+        // us.
+        return mChildrenInOnload.AppendObject(aChild);
+    }
+
+    // Inform a parent docloader that aChild is done calling its onload
+    // handler.
+    void ChildDoneWithOnload(nsIDocumentLoader* aChild) {
+        mChildrenInOnload.RemoveObject(aChild);
+        DocLoaderIsEmpty(PR_TRUE);
+    }        
+
 protected:
     // IMPORTANT: The ownership implicit in the following member
     // variables has been explicitly checked and set using nsCOMPtr
@@ -201,12 +217,6 @@ protected:
     nsDocLoader*               mParent;                // [WEAK]
 
     nsVoidArray                mListenerInfoList;
-    /*
-     * This flag indicates that the loader is loading a document.  It is set
-     * from the call to LoadDocument(...) until the OnConnectionsComplete(...)
-     * notification is fired...
-     */
-    PRBool mIsLoadingDocument;
 
     nsCOMPtr<nsILoadGroup>        mLoadGroup;
     // We hold weak refs to all our kids
@@ -223,16 +233,42 @@ protected:
     nsInt64 mMaxTotalProgress;
 
     PLDHashTable mRequestInfoHash;
+    nsInt64 mCompletedTotalProgress;
+
+    /*
+     * This flag indicates that the loader is loading a document.  It is set
+     * from the call to LoadDocument(...) until the OnConnectionsComplete(...)
+     * notification is fired...
+     */
+    PRPackedBool mIsLoadingDocument;
 
     /* Flag to indicate that we're in the process of restoring a document. */
-    PRBool mIsRestoringDocument;
+    PRPackedBool mIsRestoringDocument;
+
+    /* Flag to indicate that we're in the process of flushing layout
+       undere DocLoaderIsEmpty() */
+    PRPackedBool mIsFlushingLayout;
 
 private:
+    // A list of kids that are in the middle of their onload calls and will let
+    // us know once they're done.  We don't want to fire onload for "normal"
+    // DocLoaderIsEmpty calls (those coming from requests finishing in our
+    // loadgroup) unless this is empty.
+    nsCOMArray<nsIDocumentLoader> mChildrenInOnload;
+    
+    // DocLoaderIsEmpty should be called whenever the docloader may be empty.
+    // This method is idempotent and does nothing if the docloader is not in
+    // fact empty.  This method _does_ make sure that layout is flushed if our
+    // loadgroup has no active requests before checking for "real" emptiness if
+    // aFlushLayout is true.
+    void DocLoaderIsEmpty(PRBool aFlushLayout);
+
     nsListenerInfo *GetListenerInfo(nsIWebProgressListener* aListener);
 
     PRInt64 GetMaxTotalProgress();
 
     nsresult AddRequestInfo(nsIRequest* aRequest);
+    void RemoveRequestInfo(nsIRequest* aRequest);
     nsRequestInfo *GetRequestInfo(nsIRequest* aRequest);
     void ClearRequestInfoHash();
     PRInt64 CalculateMaxProgress();
@@ -241,5 +277,7 @@ private:
     // used to clear our internal progress state between loads...
     void ClearInternalProgress(); 
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsDocLoader, NS_THIS_DOCLOADER_IMPL_CID)
 
 #endif /* nsDocLoader_h__ */

@@ -74,13 +74,13 @@ ifeq (,$(filter-out WINCE WINNT,$(OS_ARCH)))
 CPPSRCS += nsUserInfoWin.cpp
 else
 ifneq (,$(filter mac cocoa,$(MOZ_WIDGET_TOOLKIT)))
-CPPSRCS += nsUserInfoMac.cpp
+CMMSRCS += nsUserInfoMac.mm
 else
 CPPSRCS += nsUserInfoUnix.cpp
 endif
 endif
 endif
 
-EXTRA_COMPONENTS = nsCloseAllWindows.js
+EXTRA_COMPONENTS = nsTryToClose.js
 
 include $(topsrcdir)/config/rules.mk

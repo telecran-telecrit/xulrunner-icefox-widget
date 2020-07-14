@@ -54,9 +54,18 @@ DeleteTextTxn::DeleteTextTxn()
 {
 }
 
-DeleteTextTxn::~DeleteTextTxn()
-{
-}
+NS_IMPL_CYCLE_COLLECTION_CLASS(DeleteTextTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(DeleteTextTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(DeleteTextTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DeleteTextTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
 
 NS_IMETHODIMP DeleteTextTxn::Init(nsIEditor *aEditor,
                                   nsIDOMCharacterData *aElement,
@@ -69,6 +78,11 @@ NS_IMETHODIMP DeleteTextTxn::Init(nsIEditor *aEditor,
 
   mEditor = aEditor;
   mElement = do_QueryInterface(aElement);
+  // do nothing if the node is read-only
+  if (!mEditor->IsModifiableNode(mElement)) {
+    return NS_ERROR_FAILURE;
+  }
+
   mOffset = aOffset;
   mNumCharsToDelete = aNumCharsToDelete;
   NS_ASSERTION(0!=aNumCharsToDelete, "bad arg, numCharsToDelete");
@@ -129,13 +143,6 @@ NS_IMETHODIMP DeleteTextTxn::UndoTransaction(void)
   if (!mEditor || !mElement) { return NS_ERROR_NOT_INITIALIZED; }
 
   return mElement->InsertData(mOffset, mDeletedText);
-}
-
-NS_IMETHODIMP DeleteTextTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge = PR_FALSE;
-  return NS_OK;
 }
 
 NS_IMETHODIMP DeleteTextTxn::GetTxnDescription(nsAString& aString)

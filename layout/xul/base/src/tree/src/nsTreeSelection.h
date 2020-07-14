@@ -43,12 +43,13 @@
 #define nsTreeSelection_h__
 
 #include "nsITreeSelection.h"
+#include "nsITreeColumns.h"
 #include "nsITimer.h"
 
 class nsITreeBoxObject;
 struct nsTreeRange;
 
-class nsTreeSelection : public nsITreeSelection
+class nsTreeSelection : public nsINativeTreeSelection
 {
 public:
   nsTreeSelection(nsITreeBoxObject* aTree);
@@ -56,6 +57,9 @@ public:
    
   NS_DECL_ISUPPORTS
   NS_DECL_NSITREESELECTION
+
+  // nsINativeTreeSelection: Untrusted code can use us
+  NS_IMETHOD EnsureNative() { return NS_OK; }
 
   friend struct nsTreeRange;
 
@@ -65,10 +69,11 @@ protected:
 
 protected:
   // Members
-  nsITreeBoxObject* mTree; // [Weak]. The tree will hold on to us through the view and let go when it dies.
+  nsCOMPtr<nsITreeBoxObject> mTree; // The tree will hold on to us through the view and let go when it dies.
 
   PRBool mSuppressed; // Whether or not we should be firing onselect events.
   PRInt32 mCurrentIndex; // The item to draw the rect around. The last one clicked, etc.
+  nsCOMPtr<nsITreeColumn> mCurrentColumn;
   PRInt32 mShiftSelectPivot; // Used when multiple SHIFT+selects are performed to pivot on.
 
   nsTreeRange* mFirstRange; // Our list of ranges.

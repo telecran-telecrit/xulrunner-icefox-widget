@@ -69,7 +69,7 @@ public:
                      "aContent already in map");
 
         Entry* entry =
-            NS_REINTERPRET_CAST(Entry*, PL_DHashTableOperate(&mTable, aContent, PL_DHASH_ADD));
+            reinterpret_cast<Entry*>(PL_DHashTableOperate(&mTable, aContent, PL_DHASH_ADD));
 
         if (entry) {
             entry->mContent = aContent;
@@ -84,20 +84,7 @@ public:
 
         PL_DHashTableOperate(&mTable, aContent, PL_DHASH_REMOVE);
 
-        PRUint32 count;
-
-        // If possible, use the special nsXULElement interface to
-        // "peek" at the child count without accidentally creating
-        // children as a side effect, since we're about to rip 'em
-        // outta the map anyway.
-        nsXULElement *xulcontent = nsXULElement::FromContent(aContent);
-        if (xulcontent) {
-            count = xulcontent->PeekChildCount();
-        }
-        else {
-            count = aContent->GetChildCount();
-        }
-
+        PRUint32 count = aContent->GetChildCount();
         for (PRUint32 i = 0; i < count; ++i) {
             Remove(aContent->GetChildAt(i));
         }
@@ -107,7 +94,7 @@ public:
     void
     GetTemplateFor(nsIContent* aContent, nsIContent** aResult) {
         Entry* entry =
-            NS_REINTERPRET_CAST(Entry*, PL_DHashTableOperate(&mTable, aContent, PL_DHASH_LOOKUP));
+            reinterpret_cast<Entry*>(PL_DHashTableOperate(&mTable, aContent, PL_DHASH_LOOKUP));
 
         if (PL_DHASH_ENTRY_IS_BUSY(&entry->mHdr))
             NS_IF_ADDREF(*aResult = entry->mTemplate);

@@ -52,6 +52,8 @@ EXPORTS =                                      \
 
 XPIDLSRCS =                                    \
        nsIDOMToString.idl                      \
+       nsIDOMStorage2.idl                      \
+       nsIDOMStorageManager.idl                \
        $(NULL)
 
 SDK_XPIDLSRCS =                      \
@@ -60,6 +62,7 @@ SDK_XPIDLSRCS =                      \
         nsIDOMStorageItem.idl    \
         nsIDOMStorageList.idl    \
         nsIDOMStorageWindow.idl  \
+        nsIDOMStorageWindow_1_9_1.idl  \
        $(NULL)
 
 include $(topsrcdir)/config/rules.mk

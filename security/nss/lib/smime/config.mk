@@ -50,6 +50,8 @@ ifdef NS_USE_GCC
 EXTRA_SHARED_LIBS += \
 	-L$(DIST)/lib \
 	-lnss3 \
+	-L$(NSSUTIL_LIB_DIR) \
+	-lnssutil3 \
 	-L$(NSPR_LIB_DIR) \
 	-lplc4 \
 	-lplds4 \
@@ -58,6 +60,7 @@ EXTRA_SHARED_LIBS += \
 else # ! NS_USE_GCC
 EXTRA_SHARED_LIBS += \
 	$(DIST)/lib/nss3.lib \
+	$(DIST)/lib/nssutil3.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)plc4.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)plds4.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)nspr4.lib \
@@ -69,15 +72,13 @@ else
 EXTRA_SHARED_LIBS += \
 	-L$(DIST)/lib \
 	-lnss3 \
+	-L$(NSSUTIL_LIB_DIR) \
+	-lnssutil3 \
 	-L$(NSPR_LIB_DIR) \
 	-lplc4 \
 	-lplds4 \
 	-lnspr4 \
 	$(NULL)
-
-ifeq ($(OS_ARCH), Darwin)
-EXTRA_SHARED_LIBS += -dylib_file @executable_path/libsoftokn3.dylib:$(DIST)/lib/libsoftokn3.dylib
-endif
 
 endif
 
@@ -92,8 +93,3 @@ SHARED_LIBRARY_DIRS = \
 	../pkcs7 \
 	$(NULL)
 
-ifeq ($(OS_TARGET),SunOS)
-# The -R '$ORIGIN' linker option instructs this library to search for its
-# dependencies in the same directory where it resides.
-MKSHLIB += -R '$$ORIGIN'
-endif

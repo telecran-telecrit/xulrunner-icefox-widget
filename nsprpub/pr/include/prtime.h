@@ -115,7 +115,7 @@ typedef struct PRTimeParameters {
 typedef struct PRExplodedTime {
     PRInt32 tm_usec;		    /* microseconds past tm_sec (0-99999)  */
     PRInt32 tm_sec;             /* seconds past tm_min (0-61, accomodating
-                                   up to two leap seconds) */	
+                                   up to two leap seconds) */
     PRInt32 tm_min;             /* minutes past tm_hour (0-59) */
     PRInt32 tm_hour;            /* hours past tm_day (0-23) */
     PRInt32 tm_mday;            /* days past tm_mon (1-31, note that it
@@ -126,7 +126,7 @@ typedef struct PRExplodedTime {
 
     PRInt8 tm_wday;		        /* calculated day of the week
 				                (0-6, Sun = 0) */
-    PRInt16 tm_yday;            /* calculated day of the year 
+    PRInt16 tm_yday;            /* calculated day of the year
 				                (0-365, Jan 1 = 0) */
 
     PRTimeParameters tm_params;  /* time parameters used by conversion */
@@ -174,11 +174,7 @@ typedef PRTimeParameters (PR_CALLBACK *PRTimeParamFn)(const PRExplodedTime *gmt)
  * The implementation is machine dependent.
  * Cf. time_t time(time_t *tp) in ANSI C.
  */
-#if defined(HAVE_WATCOM_BUG_2)
-PRTime __pascal __export __loadds
-#else
-NSPR_API(PRTime) 
-#endif
+NSPR_API(PRTime)
 PR_Now(void);
 
 /*
@@ -195,11 +191,7 @@ NSPR_API(void) PR_ExplodeTime(
     PRTime usecs, PRTimeParamFn params, PRExplodedTime *exploded);
 
 /* Reverse operation of PR_ExplodeTime */
-#if defined(HAVE_WATCOM_BUG_2)
-PRTime __pascal __export __loadds
-#else
-NSPR_API(PRTime) 
-#endif
+NSPR_API(PRTime)
 PR_ImplodeTime(const PRExplodedTime *exploded);
 
 /*
@@ -234,8 +226,12 @@ NSPR_API(PRTimeParameters) PR_GMTParameters(const PRExplodedTime *gmt);
 NSPR_API(PRTimeParameters) PR_USPacificTimeParameters(const PRExplodedTime *gmt);
 
 /*
- * This parses a time/date string into a PRTime
- * (microseconds after "1-Jan-1970 00:00:00 GMT").
+ * This parses a time/date string into a PRExplodedTime
+ * struct. It populates all fields but it can't split
+ * the offset from UTC into tp_gmt_offset and tp_dst_offset in
+ * most cases (exceptions: PST/PDT, MST/MDT, CST/CDT, EST/EDT, GMT/BST).
+ * In those cases tp_gmt_offset will be the sum of these two and
+ * tp_dst_offset will be 0.
  * It returns PR_SUCCESS on success, and PR_FAILURE
  * if the time/date string can't be parsed.
  *
@@ -264,6 +260,19 @@ NSPR_API(PRTimeParameters) PR_USPacificTimeParameters(const PRExplodedTime *gmt)
  * the time string which you are parsing.
  */
 
+NSPR_API(PRStatus) PR_ParseTimeStringToExplodedTime (
+        const char *string,
+        PRBool default_to_gmt,
+        PRExplodedTime *result);
+
+/*
+ * This uses PR_ParseTimeStringToExplodedTime to parse
+ * a time/date string and PR_ImplodeTime to transform it into
+ * a PRTime (microseconds after "1-Jan-1970 00:00:00 GMT").
+ * It returns PR_SUCCESS on success, and PR_FAILURE
+ * if the time/date string can't be parsed.
+ */
+
 NSPR_API(PRStatus) PR_ParseTimeString (
 	const char *string,
 	PRBool default_to_gmt,
@@ -281,7 +290,7 @@ NSPR_API(PRStatus) PR_ParseTimeString (
 #ifndef NO_NSPR_10_SUPPORT
 
 /* Format a time value into a buffer. Same semantics as strftime() */
-NSPR_API(PRUint32) PR_FormatTime(char *buf, int buflen, const char *fmt, 
+NSPR_API(PRUint32) PR_FormatTime(char *buf, int buflen, const char *fmt,
                                            const PRExplodedTime *tm);
 
 /* Format a time value into a buffer. Time is always in US English format, regardless

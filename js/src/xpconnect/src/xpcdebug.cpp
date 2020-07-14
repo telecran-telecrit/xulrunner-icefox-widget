@@ -39,7 +39,6 @@
  * ***** END LICENSE BLOCK ***** */
 
 #include "xpcprivate.h"
-#if defined(DEBUG_xpc_hacker) || defined(DEBUG)
 
 #ifdef TAB
 #undef TAB
@@ -48,6 +47,7 @@
 
 static const char* JSVAL2String(JSContext* cx, jsval val, JSBool* isString)
 {
+    JSAutoRequest ar(cx);
     const char* value = nsnull;
     JSString* value_str = JS_ValueToString(cx, val);
     if(value_str)
@@ -89,6 +89,9 @@ static char* FormatJSFrame(JSContext* cx, JSStackFrame* fp,
 
     JSScript* script = JS_GetFrameScript(cx, fp);
     jsbytecode* pc = JS_GetFramePC(cx, fp);
+
+    JSAutoRequest ar(cx);
+
     if(script && pc)
     {
         filename = JS_GetScriptFilename(cx, script);
@@ -302,7 +305,7 @@ xpc_DumpJSStack(JSContext* cx, JSBool showArgs, JSBool showLocals, JSBool showTh
 
 /***************************************************************************/
 
-JS_STATIC_DLL_CALLBACK(void)
+static void
 xpcDumpEvalErrorReporter(JSContext *cx, const char *message,
                          JSErrorReport *report)
 {
@@ -337,6 +340,8 @@ xpc_DumpEvalInJSStackFrame(JSContext* cx, JSUint32 frameno, const char* text)
         return JS_FALSE;
     }
 
+    JSAutoRequest ar(cx);
+
     JSExceptionState* exceptionState = JS_SaveExceptionState(cx);
     JSErrorReporter older = JS_SetErrorReporter(cx, xpcDumpEvalErrorReporter);
 
@@ -358,7 +363,7 @@ xpc_DumpEvalInJSStackFrame(JSContext* cx, JSUint32 frameno, const char* text)
 
 /***************************************************************************/
 
-JSTrapStatus JS_DLL_CALLBACK
+JSTrapStatus
 xpc_DebuggerKeywordHandler(JSContext *cx, JSScript *script, jsbytecode *pc,
                            jsval *rval, void *closure)
 {
@@ -416,11 +421,9 @@ static void PrintObjectBasics(JSObject* obj)
 {
     if(OBJ_IS_NATIVE(obj))
         printf("%p 'native' <%s>",
-               (void *)obj,
-               ((JSClass*)(obj->slots[JSSLOT_CLASS]-1))->name);
+               (void *)obj, STOBJ_GET_CLASS(obj)->name);
     else
         printf("%p 'host'", (void *)obj);
-
 }
 
 static void PrintObject(JSObject* obj, int depth, ObjectPile* pile)
@@ -443,8 +446,8 @@ static void PrintObject(JSObject* obj, int depth, ObjectPile* pile)
     if(!OBJ_IS_NATIVE(obj))
         return;
 
-    JSObject* parent = (JSObject*)(obj->slots[JSSLOT_PARENT]);
-    JSObject* proto  = (JSObject*)(obj->slots[JSSLOT_PROTO]);
+    JSObject* parent = STOBJ_GET_PARENT(obj);
+    JSObject* proto  = STOBJ_GET_PROTO(obj);
 
     printf("%*sparent: ", INDENT(depth+1));
     if(parent)
@@ -464,9 +467,9 @@ xpc_DumpJSObject(JSObject* obj)
     ObjectPile pile;
 
     puts("Debugging reminders...");
-    puts("  class:  (JSClass*)(obj->slots[2]-1)");
-    puts("  parent: (JSObject*)(obj->slots[1])");
-    puts("  proto:  (JSObject*)(obj->slots[0])");
+    puts("  class:  (JSClass*)(obj->fslots[2]-1)");
+    puts("  parent: (JSObject*)(obj->fslots[1])");
+    puts("  proto:  (JSObject*)(obj->fslots[0])");
     puts("");
 
     if(obj)
@@ -476,4 +479,3 @@ xpc_DumpJSObject(JSObject* obj)
 
     return JS_TRUE;
 }
-#endif

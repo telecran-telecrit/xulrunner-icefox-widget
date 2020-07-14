@@ -60,7 +60,7 @@ include $(CORE_DEPTH)/coreconf/config.mk
 # (4) Include "local" platform-dependent assignments (OPTIONAL).      #
 #######################################################################
 
--include config.mk
+include config.mk
 
 # default for all platforms
 # unset this on those that have multiple freebl libraries
@@ -74,11 +74,23 @@ ifdef USE_ABI32_FPU
 	DEFINES += -DNSS_USE_ABI32_FPU
 endif
 
-# des.c wants _X86_ defined for intel CPUs.  
-# coreconf does this for windows, but not for Linux, FreeBSD, etc.
-ifeq ($(CPU_ARCH),x86)
-ifneq (,$(filter-out WIN%,$(OS_TARGET)))
-	OS_REL_CFLAGS += -D_X86_
+ifeq ($(FREEBL_NO_DEPEND),1)
+	DEFINES += -DFREEBL_NO_DEPEND
+	LOWHASH_SRCS = stubs.c nsslowhash.c
+	LOWHASH_EXPORTS = nsslowhash.h
+	MAPFILE_SOURCE = freebl_hash.def
+else
+	MAPFILE_SOURCE = freebl.def
+endif
+# NSS_X86 means the target is a 32-bits x86 CPU architecture
+# NSS_X64 means the target is a 64-bits x64 CPU architecture
+# NSS_X86_OR_X64 means the target is either x86 or x64
+ifeq (,$(filter-out x386 x86 x86_64,$(CPU_ARCH)))
+        DEFINES += -DNSS_X86_OR_X64
+ifdef USE_64
+        DEFINES += -DNSS_X64
+else
+        DEFINES += -DNSS_X86
 endif
 endif
 
@@ -87,7 +99,17 @@ ifeq ($(OS_TARGET),OSF1)
     MPI_SRCS += mpvalpha.c
 endif
 
-ifeq (,$(filter-out WINNT WIN95,$(OS_TARGET)))  #omits WIN16 and WINCE
+ifeq (OS2,$(OS_TARGET))
+    ASFILES  = mpi_x86_os2.s
+    DEFINES += -DMP_ASSEMBLY_MULTIPLY -DMP_ASSEMBLY_SQUARE 
+    DEFINES += -DMP_ASSEMBLY_DIV_2DX1D
+    DEFINES += -DMP_USE_UINT_DIGIT -DMP_NO_MP_WORD
+    DEFINES += -DMP_CHAR_STORE_SLOW -DMP_IS_LITTLE_ENDIAN
+endif
+
+ifeq (,$(filter-out WINNT WIN95,$(OS_TARGET)))  #omits WINCE
+ifndef USE_64
+# 32-bit Windows
 ifdef NS_USE_GCC
 # Ideally, we want to use assembler
 #     ASFILES  = mpi_x86.s
@@ -98,12 +120,24 @@ ifdef NS_USE_GCC
     ASFILES  =
     DEFINES += -DMP_NO_MP_WORD -DMP_USE_UINT_DIGIT
 else
+# MSVC
     MPI_SRCS += mpi_x86_asm.c
     DEFINES += -DMP_ASSEMBLY_MULTIPLY -DMP_ASSEMBLY_SQUARE 
     DEFINES += -DMP_ASSEMBLY_DIV_2DX1D -DMP_USE_UINT_DIGIT -DMP_NO_MP_WORD
     ifdef BUILD_OPT
 	OPTIMIZER += -Ox  # maximum optimization for freebl
     endif
+endif
+else
+    # -DMP_NO_MP_WORD
+    ifdef BUILD_OPT
+	OPTIMIZER += -Ox  # maximum optimization for freebl
+    endif
+    ASFILES  = arcfour-amd64-masm.asm mpi_amd64_masm.asm mp_comba_amd64_masm.asm
+    DEFINES += -DNSS_BEVAND_ARCFOUR -DMPI_AMD64 -DMP_ASSEMBLY_MULTIPLY
+    DEFINES += -DNSS_USE_COMBA
+    DEFINES += -DMP_CHAR_STORE_SLOW -DMP_IS_LITTLE_ENDIAN
+    MPI_SRCS += mpi_amd64.c
 endif
 endif
 
@@ -128,11 +162,14 @@ endif
 ifeq ($(OS_TARGET),Linux)
 ifeq ($(CPU_ARCH),x86_64)
     ASFILES  = arcfour-amd64-gas.s mpi_amd64_gas.s
-    ASFLAGS += -march=opteron -m64 -fPIC
+    ASFLAGS += -march=opteron -m64 -fPIC -Wa,--noexecstack
     DEFINES += -DNSS_BEVAND_ARCFOUR -DMPI_AMD64 -DMP_ASSEMBLY_MULTIPLY
     DEFINES += -DNSS_USE_COMBA
     DEFINES += -DMP_CHAR_STORE_SLOW -DMP_IS_LITTLE_ENDIAN
 #   DEFINES += -DMPI_AMD64_ADD
+    # comment the next two lines to turn off intel HW accelleration
+#    DEFINES += -DUSE_HW_AES
+#    ASFILES += intel-aes.s
     MPI_SRCS += mpi_amd64.c mp_comba.c
 endif
 ifeq ($(CPU_ARCH),x86)
@@ -192,15 +229,12 @@ endif
 # to bind the blapi function references in FREEBLVector vector
 # (ldvector.c) to the blapi functions defined in the freebl
 # shared libraries.
-ifeq (,$(filter-out BSD_OS FreeBSD Linux NetBSD, $(OS_TARGET)))
+ifeq (,$(filter-out BSD_OS FreeBSD Linux NetBSD OpenBSD, $(OS_TARGET)))
     MKSHLIB += -Wl,-Bsymbolic
 endif
 
 ifeq ($(OS_TARGET),SunOS)
 
-# The -R '$ORIGIN' linker option instructs this library to search for its
-# dependencies in the same directory where it resides.
-MKSHLIB += -R '$$ORIGIN'
 ifdef NS_USE_GCC
     ifdef GCC_USE_GNU_LD
 	MKSHLIB += -Wl,-Bsymbolic,-z,now,-z,text
@@ -362,7 +396,7 @@ else
     ifdef NS_USE_GCC
 	LD = gcc
 	AS = gcc
-	ASFLAGS =
+	ASFLAGS = -x assembler-with-cpp
     endif
     ifeq ($(USE_64),1)
 	# Solaris for AMD64
@@ -374,15 +408,18 @@ else
 	    ASFILES  = arcfour-amd64-sun.s mpi_amd64_sun.s sha-fast-amd64-sun.s
  	    ASFILES += mp_comba_amd64_sun.s mpcpucache_amd64.s
 	    ASFLAGS += -xarch=generic64 -K PIC
+            SOL_CFLAGS += -xprefetch=no
 	    SHA_SRCS =
  	    MPCPU_SRCS =
 	endif
 	DEFINES += -DNSS_BEVAND_ARCFOUR -DMPI_AMD64 -DMP_ASSEMBLY_MULTIPLY
-	DEFINES += -DNSS_USE_COMBA
+	DEFINES += -DNSS_USE_COMBA -DMP_CHAR_STORE_SLOW -DMP_IS_LITTLE_ENDIAN
+	# comment the next two lines to turn off intel HW accelleration
+#	DEFINES += -DUSE_HW_AES
+#	ASFILES += intel-aes.s
 	MPI_SRCS += mpi_amd64.c
     else
 	# Solaris x86
-	DEFINES += -D_X86_
 	DEFINES += -DMP_USE_UINT_DIGIT
 	DEFINES += -DMP_ASSEMBLY_MULTIPLY -DMP_ASSEMBLY_SQUARE 
 	DEFINES += -DMP_ASSEMBLY_DIV_2DX1D
@@ -431,6 +468,7 @@ vpath %.h mpi ecl
 vpath %.c mpi ecl
 vpath %.S mpi ecl
 vpath %.s mpi ecl
+vpath %.asm mpi ecl
 INCLUDES += -Impi -Iecl
 
 
@@ -452,7 +490,7 @@ $(ECL_OBJS): $(ECL_HDRS)
 
 
 
-$(OBJDIR)/sysrand$(OBJ_SUFFIX): sysrand.c unix_rand.c win_rand.c mac_rand.c os2_rand.c
+$(OBJDIR)/sysrand$(OBJ_SUFFIX): sysrand.c unix_rand.c win_rand.c os2_rand.c
 
 $(OBJDIR)/$(PROG_PREFIX)mpprime$(OBJ_SUFFIX): primes.c
 
@@ -565,14 +603,6 @@ endif
 
 endif  # FREEBL_CHILD_BUILD
 
-
-# Bugzilla Bug 209827: disable optimization to work around what appears
-# to be a VACPP optimizer bug.
-ifdef XP_OS2_VACPP
-$(OBJDIR)/alg2268.obj: alg2268.c
-	@$(MAKE_OBJDIR)
-	$(CC) -Fo$@ -c $(filter-out /O+, $(CFLAGS)) $(call core_abspath,$<)
-endif
 
 # Bugzilla Bug 333917: the non-x86 code in desblapi.c seems to violate
 # ANSI C's strict aliasing rules.

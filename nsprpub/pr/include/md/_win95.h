@@ -50,7 +50,17 @@
 
 #define PR_LINKER_ARCH      "win32"
 #define _PR_SI_SYSNAME        "WIN95"
-#define _PR_SI_ARCHITECTURE   "x86"    /* XXXMB hardcode for now */
+#if defined(_M_IX86) || defined(_X86_)
+#define _PR_SI_ARCHITECTURE   "x86"
+#elif defined(_M_X64) || defined(_M_AMD64) || defined(_AMD64_)
+#define _PR_SI_ARCHITECTURE   "x86-64"
+#elif defined(_M_IA64) || defined(_IA64_)
+#define _PR_SI_ARCHITECTURE   "ia64"
+#elif defined(_M_ARM) || defined(_ARM_)
+#define _PR_SI_ARCHITECTURE   "arm"
+#else
+#error unknown processor architecture
+#endif
 
 #define HAVE_DLL
 #undef  HAVE_THREAD_AFFINITY
@@ -61,6 +71,8 @@
 /* newer ws2tcpip.h provides these */
 #ifndef AI_CANONNAME
 #define AI_CANONNAME 0x2
+#define AI_NUMERICHOST 0x4
+#define NI_NUMERICHOST 0x02
 struct addrinfo {
     int ai_flags;
     int ai_family;
@@ -148,7 +160,7 @@ struct _MDSegment {
 
 struct _MDDir {
     HANDLE           d_hdl;
-    WIN32_FIND_DATA  d_entry;
+    WIN32_FIND_DATAA d_entry;
     PRBool           firstEntry;     /* Is this the entry returned
                                       * by FindFirstFile()? */
     PRUint32         magic;          /* for debugging */
@@ -208,7 +220,7 @@ struct _MDSemaphore {
 };
 
 struct _MDFileDesc {
-    PRInt32 osfd;    /* The osfd can come from one of three spaces:
+    PROsfd osfd;     /* The osfd can come from one of three spaces:
                       * - For stdin, stdout, and stderr, we are using
                       *   the libc file handle (0, 1, 2), which is an int.
                       * - For files and pipes, we are using Win32 HANDLE,
@@ -248,7 +260,7 @@ extern void _PR_NT_FreeSecurityDescriptorACL(
 #define _MD_WRITEV                    _PR_MD_WRITEV
 #define _MD_LSEEK                     _PR_MD_LSEEK
 #define _MD_LSEEK64                   _PR_MD_LSEEK64
-extern PRInt32 _MD_CloseFile(PRInt32 osfd);
+extern PRInt32 _MD_CloseFile(PROsfd osfd);
 #define _MD_CLOSE_FILE                _MD_CloseFile
 #define _MD_GETFILEINFO               _PR_MD_GETFILEINFO
 #define _MD_GETFILEINFO64             _PR_MD_GETFILEINFO64
@@ -276,6 +288,8 @@ extern PRBool _pr_useUnicode;
 #endif /* MOZ_UNICODE */
 
 /* --- Socket IO stuff --- */
+extern void _PR_MD_InitSockets(void);
+extern void _PR_MD_CleanupSockets(void);
 #define _MD_EACCES                WSAEACCES
 #define _MD_EADDRINUSE            WSAEADDRINUSE
 #define _MD_EADDRNOTAVAIL         WSAEADDRNOTAVAIL
@@ -306,7 +320,7 @@ extern void _MD_MakeNonblock(PRFileDesc *f);
 #define _MD_QUERY_FD_INHERITABLE      _PR_MD_QUERY_FD_INHERITABLE
 #define _MD_SHUTDOWN                  _PR_MD_SHUTDOWN
 #define _MD_LISTEN                    _PR_MD_LISTEN
-extern PRInt32 _MD_CloseSocket(PRInt32 osfd);
+extern PRInt32 _MD_CloseSocket(PROsfd osfd);
 #define _MD_CLOSE_SOCKET              _MD_CloseSocket
 #define _MD_SENDTO                    _PR_MD_SENDTO
 #define _MD_RECVFROM                  _PR_MD_RECVFROM
@@ -342,7 +356,7 @@ extern PRInt32 _MD_SocketAvailable(PRFileDesc *fd);
 #define _MD_SOCKETAVAILABLE           _MD_SocketAvailable
 #define _MD_PIPEAVAILABLE             _PR_MD_PIPEAVAILABLE
 #define _MD_CONNECT                   _PR_MD_CONNECT
-extern PRInt32 _MD_Accept(PRFileDesc *fd, PRNetAddr *raddr, PRUint32 *rlen,
+extern PROsfd _MD_Accept(PRFileDesc *fd, PRNetAddr *raddr, PRUint32 *rlen,
         PRIntervalTime timeout);
 #define _MD_ACCEPT                    _MD_Accept
 #define _MD_BIND                      _PR_MD_BIND
@@ -430,6 +444,7 @@ extern PRInt32 _MD_Accept(PRFileDesc *fd, PRNetAddr *raddr, PRUint32 *rlen,
 #define _MD_UNBLOCK_CLOCK_INTERRUPTS()
 #define _MD_EARLY_INIT                _PR_MD_EARLY_INIT
 #define _MD_FINAL_INIT()
+#define _MD_EARLY_CLEANUP()
 #define _MD_INIT_CPUS()
 #define _MD_INIT_RUNNING_CPU(cpu)
 
@@ -472,6 +487,11 @@ extern PRStatus _PR_KillWindowsProcess(struct PRProcess *process);
 
 /* --- Time --- */
 extern void _PR_FileTimeToPRTime(const FILETIME *filetime, PRTime *prtm);
+
+#ifdef WINCE
+extern void _MD_InitTime(void);
+extern void _MD_CleanupTime(void);
+#endif
 
 /* --- Native-Thread Specific Definitions ------------------------------- */
 

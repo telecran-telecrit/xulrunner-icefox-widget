@@ -49,8 +49,6 @@ IS_COMPONENT	= 1
 MODULE_NAME	= nsPrefMigrationModule
 MOZILLA_INTERNAL_API = 1
 
-PACKAGE_FILE = prefmigr.pkg
-
 REQUIRES	= xpcom \
                   xpcom_obsolete \
 		  string \
@@ -58,6 +56,7 @@ REQUIRES	= xpcom \
 		  intl \
 		  docshell \
 		  dom \
+		  layout \
 		  js \
 		  necko \
 		  widget \
@@ -65,6 +64,7 @@ REQUIRES	= xpcom \
 		  uconv \
 		  windowwatcher \
 		  embed_base \
+		  content \
 		  $(NULL)
 
 CPPSRCS		= \
@@ -85,10 +85,5 @@ EXTRA_DSO_LDOPTS = \
 		$(NULL)
 
 include $(topsrcdir)/config/rules.mk
-
-# XXX os/2's gcc crashes on nsPrefMigration.cpp ("virtual memory exhausted")
-ifeq ($(MOZ_OS2_TOOLS),EMX)
-CXXFLAGS	:= $(filter-out -g,$(CXXFLAGS))
-endif
 
 

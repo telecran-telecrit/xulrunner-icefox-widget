@@ -70,7 +70,6 @@ ifneq (,$(findstring _,$(LIBRARY_NAME)))
   LIBRARY_VERSION := _$(LIBRARY_VERSION)
 endif
 
-MAPFILE_SOURCE = freebl.def
 MAPFILE = $(OBJDIR)/$(LIBRARY_NAME).def
 
 SOFTOKEN_LIBRARY_VERSION = 3
@@ -85,6 +84,9 @@ EXPORTS = \
 	blapit.h \
 	shsign.h \
 	ecl-exp.h \
+	hasht.h \
+	sechash.h \
+	$(LOWHASH_EXPORTS) \
 	$(NULL)
 
 PRIVATE_EXPORTS = \
@@ -120,7 +122,6 @@ MPCPU_SRCS = mpcpucache.c
 CSRCS = \
 	freeblver.c \
 	ldvector.c \
-	prng_fips1861.c \
 	sysrand.c \
 	$(SHA_SRCS) \
 	md2.c \
@@ -133,8 +134,10 @@ CSRCS = \
 	arcfive.c \
 	desblapi.c \
 	des.c \
+	drbg.c \
 	rijndael.c \
 	aeskeywrap.c \
+	camellia.c \
 	dh.c \
 	ec.c \
 	pqg.c \
@@ -142,9 +145,11 @@ CSRCS = \
 	rsa.c \
 	shvfy.c \
 	tlsprfalg.c \
+	seed.c \
 	$(MPI_SRCS) \
 	$(MPCPU_SRCS) \
 	$(ECL_SRCS) \
+	$(LOWHASH_SRCS) \
 	$(NULL)
 
 ALL_CSRCS := $(CSRCS)
@@ -157,18 +162,15 @@ ALL_HDRS =  \
 	ec.h \
 	loader.h \
 	rijndael.h \
+	camellia.h \
 	secmpi.h \
-	sha.h \
 	sha_fast.h \
 	sha256.h \
 	shsign.h \
 	vis_proto.h \
+	seed.h \
 	$(NULL)
 
-
-ifdef NSS_ENABLE_ECC
-DEFINES += -DNSS_ENABLE_ECC
-endif
 
 ifdef AES_GEN_TBL
 DEFINES += -DRIJNDAEL_GENERATE_TABLES

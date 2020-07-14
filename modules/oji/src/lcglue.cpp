@@ -46,11 +46,10 @@
 #include "nsISecurityContext.h"
 #include "nsCSecurityContext.h"
 #include "nsCRT.h"
-#include "nsIScriptGlobalObject.h"
-#include "nsIScriptObjectPrincipal.h"
 #include "nsIServiceManager.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsNetUtil.h"
+#include "nsDOMJSUtils.h"
 
 static NS_DEFINE_CID(kJVMManagerCID, NS_JVMMANAGER_CID);
 
@@ -88,9 +87,9 @@ private:
 };
 
 
-static void PR_CALLBACK detach_JVMContext(void* storage)
+static void detach_JVMContext(void* storage)
 {
-	JVMContext* context = NS_REINTERPRET_CAST(JVMContext*, storage);
+	JVMContext* context = reinterpret_cast<JVMContext*>(storage);
 	
 	JNIEnv* proxyEnv = context->proxyEnv;
 	if (proxyEnv != NULL) {
@@ -123,7 +122,7 @@ JS_BEGIN_EXTERN_C
 
 #include "jscntxt.h"
 
-JS_STATIC_DLL_CALLBACK(JSContext*)
+static JSContext*
 map_jsj_thread_to_js_context_impl(JSJavaThreadState *jsj_env, void* java_applet_obj, JNIEnv *env, char **errp)
 {
 	// Guess what? This design is totally invalid under Gecko, because there isn't a 1 to 1 mapping
@@ -131,7 +130,7 @@ map_jsj_thread_to_js_context_impl(JSJavaThreadState *jsj_env, void* java_applet_
 	// it lives in to make any sense of all this.
 	JSContext* context = NULL;
 	if (java_applet_obj != NULL) {
-		nsIPluginInstance* pluginInstance = NS_REINTERPRET_CAST(nsIPluginInstance*, java_applet_obj);
+		nsIPluginInstance* pluginInstance = reinterpret_cast<nsIPluginInstance*>(java_applet_obj);
 	        nsIPluginInstancePeer* pluginPeer = NULL;
 		if (pluginInstance->GetPeer(&pluginPeer) == NS_OK) {
 			nsIPluginInstancePeer2* pluginPeer2 = NULL;
@@ -151,7 +150,7 @@ map_jsj_thread_to_js_context_impl(JSJavaThreadState *jsj_env, void* java_applet_
 ** to a java thread. JSJ_AttachCurrentThreadToJava just calls AttachCurrentThread
 ** on the java vm.
 */
-JS_STATIC_DLL_CALLBACK(JSJavaThreadState*)
+static JSJavaThreadState*
 map_js_context_to_jsj_thread_impl(JSContext *cx, char **errp)
 {
 	*errp = NULL;
@@ -193,7 +192,7 @@ map_js_context_to_jsj_thread_impl(JSContext *cx, char **errp)
 ** to get to the javascript JSObject.
 */
 
-JS_STATIC_DLL_CALLBACK(JSObject*)
+static JSObject*
 map_java_object_to_js_object_impl(JNIEnv *env, void *pluginInstancePtr, char* *errp)
 {
 	JSObject        *window = NULL;
@@ -219,7 +218,7 @@ map_java_object_to_js_object_impl(JNIEnv *env, void *pluginInstancePtr, char* *e
 	/*
 	 * Check for the mayscript tag.
 	 */
-	nsIPluginInstance* pluginInstance = NS_REINTERPRET_CAST(nsIPluginInstance*, pluginInstancePtr);
+	nsIPluginInstance* pluginInstance = reinterpret_cast<nsIPluginInstance*>(pluginInstancePtr);
 	nsIPluginInstancePeer* pluginPeer;
 	if (pluginInstance->GetPeer(&pluginPeer) == NS_OK) {
 		nsIJVMPluginTagInfo* tagInfo;
@@ -246,7 +245,7 @@ map_java_object_to_js_object_impl(JNIEnv *env, void *pluginInstancePtr, char* *e
 	return window;
 }
 
-JS_STATIC_DLL_CALLBACK(JSPrincipals*)
+static JSPrincipals*
 get_JSPrincipals_from_java_caller_impl(JNIEnv *pJNIEnv, JSContext *pJSContext, void  **ppNSIPrincipalArrayIN, int numPrincipals, void *pNSISecurityContext)
 {
     nsresult rv;
@@ -266,7 +265,7 @@ get_JSPrincipals_from_java_caller_impl(JNIEnv *pJNIEnv, JSContext *pJSContext, v
     return jsprincipals;
 }
 
-JS_STATIC_DLL_CALLBACK(jobject)
+static jobject
 get_java_wrapper_impl(JNIEnv *pJNIEnv, lcjsobject a_jsobject)
 {
     nsresult       err    = NS_OK;
@@ -287,7 +286,7 @@ get_java_wrapper_impl(JNIEnv *pJNIEnv, lcjsobject a_jsobject)
     return pJSObjectWrapper;
 }
 
-JS_STATIC_DLL_CALLBACK(lcjsobject)
+static lcjsobject
 unwrap_java_wrapper_impl(JNIEnv *pJNIEnv, jobject java_wrapper)
 {
     lcjsobject obj = 0;
@@ -308,7 +307,7 @@ unwrap_java_wrapper_impl(JNIEnv *pJNIEnv, jobject java_wrapper)
     return obj;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 enter_js_from_java_impl(JNIEnv *jEnv, char **errp,
                         void **pNSIPrincipaArray, int numPrincipals, 
                         void *pNSISecurityContext,
@@ -317,7 +316,7 @@ enter_js_from_java_impl(JNIEnv *jEnv, char **errp,
 	return PR_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(void)
+static void
 exit_js_impl(JNIEnv *jEnv, JSContext *cx)
 {
     // The main idea is to execute terminate function if have any;
@@ -333,7 +332,7 @@ exit_js_impl(JNIEnv *jEnv, JSContext *cx)
     return;
 }
 
-JS_STATIC_DLL_CALLBACK(PRBool)
+static PRBool
 create_java_vm_impl(SystemJavaVM* *jvm, JNIEnv* *initialEnv, void* initargs)
 {
     // const char* classpath = (const char*)initargs;
@@ -345,11 +344,11 @@ create_java_vm_impl(SystemJavaVM* *jvm, JNIEnv* *initialEnv, void* initargs)
         return PR_FALSE;
     // serv will be released when this function returns, but that's OK because
     // the XPCOM service manager will keep it alive.
-    *jvm = NS_REINTERPRET_CAST(SystemJavaVM*, serv.get());
+    *jvm = reinterpret_cast<SystemJavaVM*>(serv.get());
     return PR_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(PRBool)
+static PRBool
 destroy_java_vm_impl(SystemJavaVM* jvm, JNIEnv* initialEnv)
 {
     JVM_ReleaseJNIEnv(initialEnv);
@@ -357,27 +356,27 @@ destroy_java_vm_impl(SystemJavaVM* jvm, JNIEnv* initialEnv)
     return PR_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JNIEnv*)
+static JNIEnv*
 attach_current_thread_impl(SystemJavaVM* jvm)
 {
     return JVM_GetJNIEnv();
 }
 
-JS_STATIC_DLL_CALLBACK(PRBool)
+static PRBool
 detach_current_thread_impl(SystemJavaVM* jvm, JNIEnv* env)
 {
     JVM_ReleaseJNIEnv(env);
     return PR_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(SystemJavaVM*)
+static SystemJavaVM*
 get_java_vm_impl(JNIEnv* env)
 {
     // only one SystemJavaVM for the whole browser, so it doesn't depend on env
     nsresult rv;
     nsCOMPtr<nsIJVMManager> managerService = do_GetService(kJVMManagerCID, &rv);
     if (NS_FAILED(rv)) return NULL;
-    SystemJavaVM* jvm = NS_REINTERPRET_CAST(SystemJavaVM*, managerService.get());  
+    SystemJavaVM* jvm = reinterpret_cast<SystemJavaVM*>(managerService.get());  
     return jvm;
 }
 

@@ -1,4 +1,3 @@
-#
 # ***** BEGIN LICENSE BLOCK *****
 # Version: MPL 1.1/GPL 2.0/LGPL 2.1
 #
@@ -66,14 +65,13 @@ ALL_TRASH :=    $(TARGETS) $(OBJS) $(OBJDIR) LOGS TAGS $(GARBAGE) \
   PROGRAM        =
 
 else
+
 # This is a recursive child make. We build the shared lib.
 
 TARGETS      = $(SHARED_LIBRARY)
 LIBRARY      =
 IMPORT_LIBRARY =
 PROGRAM      =
-
-EXTRA_LIBS   += $(DIST)/lib/$(LIB_PREFIX)secutil.$(LIB_SUFFIX)
 
 ifeq ($(OS_TARGET), SunOS)
 OS_LIBS += -lkstat
@@ -87,30 +85,47 @@ SHARED_LIBRARY = $(OBJDIR)/$(DLL_PREFIX)$(LIBRARY_NAME)$(LIBRARY_VERSION).$(DLL_
 RES     = $(OBJDIR)/$(LIBRARY_NAME).res
 RESNAME = freebl.rc
 
+ifndef WINCE
+ifdef NS_USE_GCC
+OS_LIBS += -lshell32
+else
+OS_LIBS += shell32.lib
+endif
+endif
+
 ifdef NS_USE_GCC
 EXTRA_SHARED_LIBS += \
+	-L$(DIST)/lib \
+	-L$(NSSUTIL_LIB_DIR) \
+	-lnssutil3 \
 	-L$(NSPR_LIB_DIR) \
-	-lplc4 \
-	-lplds4 \
 	-lnspr4 \
 	$(NULL)
 else # ! NS_USE_GCC
 EXTRA_SHARED_LIBS += \
-	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)plc4.lib \
-	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)plds4.lib \
+	$(DIST)/lib/nssutil3.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)nspr4.lib \
 	$(NULL)
 endif # NS_USE_GCC
 
 else
 
+ifeq ($(FREEBL_NO_DEPEND),1)
+#drop pthreads as well
+OS_PTHREAD=
+else
 EXTRA_SHARED_LIBS += \
+	-L$(DIST)/lib \
+	-L$(NSSUTIL_LIB_DIR) \
+	-lnssutil3 \
 	-L$(NSPR_LIB_DIR) \
-	-lplc4 \
-	-lplds4 \
 	-lnspr4 \
 	$(NULL)
+endif
+endif
 
+ifeq ($(OS_ARCH), Darwin)
+EXTRA_SHARED_LIBS += -dylib_file @executable_path/libplc4.dylib:$(DIST)/lib/libplc4.dylib -dylib_file @executable_path/libplds4.dylib:$(DIST)/lib/libplds4.dylib
 endif
 
 endif

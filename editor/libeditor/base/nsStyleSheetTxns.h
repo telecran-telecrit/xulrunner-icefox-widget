@@ -60,8 +60,6 @@ public:
 
   static const nsIID& GetCID() { static const nsIID iid = ADD_STYLESHEET_TXN_CID; return iid; }
 
-  virtual ~AddStyleSheetTxn();
-
   /** Initialize the transaction.
     * @param aEditor the object providing core editing operations
     * @param aSheet   the stylesheet to add
@@ -73,16 +71,10 @@ private:
   AddStyleSheetTxn();
 
 public:
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(AddStyleSheetTxn, EditTxn)
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr);
 
-  NS_IMETHOD DoTransaction(void);
-
-  NS_IMETHOD UndoTransaction(void);
-
-  NS_IMETHOD RedoTransaction(void);
-
-  NS_IMETHOD Merge(nsITransaction *aTransaction, PRBool *aDidMerge);
-
-  NS_IMETHOD GetTxnDescription(nsAString& aTxnDescription);
+  NS_DECL_EDITTXN
 
 protected:
 
@@ -100,8 +92,6 @@ public:
 
   static const nsIID& GetCID() { static const nsIID iid = REMOVE_STYLESHEET_TXN_CID; return iid; }
 
-	virtual ~RemoveStyleSheetTxn();
-	
   /** Initialize the transaction.
     * @param aEditor the object providing core editing operations
     * @param aSheet   the stylesheet to remove
@@ -113,16 +103,10 @@ private:
   RemoveStyleSheetTxn();
 
 public:
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(RemoveStyleSheetTxn, EditTxn)
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr);
 
-  NS_IMETHOD DoTransaction(void);
-
-  NS_IMETHOD UndoTransaction(void);
-
-  NS_IMETHOD RedoTransaction(void);
-
-  NS_IMETHOD Merge(nsITransaction *aTransaction, PRBool *aDidMerge);
-
-  NS_IMETHOD GetTxnDescription(nsAString& aTxnDescription);
+  NS_DECL_EDITTXN
 
 protected:
 

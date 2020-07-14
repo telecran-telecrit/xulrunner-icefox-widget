@@ -58,7 +58,7 @@ else
 DLL_SUFFIX		= so.1.0
 endif
 
-OS_CFLAGS		= $(DSO_CFLAGS) $(OS_REL_CFLAGS) -ansi -Wall -pipe -DNETBSD -Dunix -DHAVE_STRERROR -DHAVE_BSD_FLOCK
+OS_CFLAGS		= $(DSO_CFLAGS) $(OS_REL_CFLAGS) -ansi -Wall -Wno-switch -pipe -DNETBSD -Dunix -DHAVE_STRERROR -DHAVE_BSD_FLOCK
 
 OS_LIBS			= -lcompat
 
@@ -66,7 +66,6 @@ ARCH			= netbsd
 
 DSO_CFLAGS		= -fPIC -DPIC
 DSO_LDOPTS		= -shared
-DSO_LDFLAGS		=
 ifeq ($(OBJECT_FMT),ELF)
 DSO_LDOPTS		+= -Wl,-soname,lib$(LIBRARY_NAME)$(LIBRARY_VERSION).$(DLL_SUFFIX)
 endif

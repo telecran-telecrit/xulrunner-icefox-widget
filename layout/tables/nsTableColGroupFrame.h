@@ -62,29 +62,25 @@ public:
 
   // default constructor supplied by the compiler
 
-  /** instantiate a new instance of nsTableColGroupFrame.
-    * @param aResult    the new object is returned in this out-param
+  /** instantiate a new instance of nsTableRowFrame.
+    * @param aPresShell the pres shell for this frame
     *
-    * @return  NS_OK if the frame was properly allocated, otherwise an error code
+    * @return           the frame that was created
     */
-  friend nsresult 
-  NS_NewTableColGroupFrame(nsIPresShell* aPresShell, nsIFrame** aResult);
-
-  /** sets defaults for the colgroup.
-    * @see nsIFrame::Init
-    */
-  NS_IMETHOD Init(nsPresContext*  aPresContext,
-                  nsIContent*      aContent,
-                  nsIFrame*        aParent,
-                  nsStyleContext*  aContext,
-                  nsIFrame*        aPrevInFlow);
+  friend nsIFrame* NS_NewTableColGroupFrame(nsIPresShell* aPresShell, nsStyleContext* aContext);
 
   /** Initialize the colgroup frame with a set of children.
     * @see nsIFrame::SetInitialChildList
     */
-  NS_IMETHOD SetInitialChildList(nsPresContext* aPresContext,
-                                 nsIAtom*        aListName,
+  NS_IMETHOD SetInitialChildList(nsIAtom*        aListName,
                                  nsIFrame*       aChildList);
+
+  /**
+   * ColGroups never paint anything, nor receive events.
+   */
+  NS_IMETHOD BuildDisplayList(nsDisplayListBuilder*   aBuilder,
+                              const nsRect&           aDirtyRect,
+                              const nsDisplayListSet& aLists) { return NS_OK; }
 
   /** A colgroup can be caused by three things:
     * 1)	An element with table-column-group display
@@ -113,6 +109,9 @@ public:
   static PRBool GetLastRealColGroup(nsTableFrame* aTableFrame, 
                                     nsIFrame**    aLastColGroup);
 
+  /** @see nsIFrame::DidSetStyleContext */
+  virtual void DidSetStyleContext(nsStyleContext* aOldStyleContext);
+
   /** @see nsIFrame::AppendFrames, InsertFrames, RemoveFrame
     */
   NS_IMETHOD AppendFrames(nsIAtom*        aListName,
@@ -133,24 +132,6 @@ public:
   void RemoveChild(nsTableColFrame& aChild,
                    PRBool           aResetSubsequentColIndices);
 
-  /** @see nsIFrame::Paint
-    * all the table painting is done in nsTablePainter.cpp
-    */
-  NS_IMETHOD Paint(nsPresContext*      aPresContext,
-                   nsIRenderingContext& aRenderingContext,
-                   const nsRect&        aDirtyRect,
-                   nsFramePaintLayer    aWhichLayer,
-                   PRUint32             aFlags = 0);
-
-  // column groups don't paint their own background -- the cells do
-  virtual PRBool CanPaintBackground() { return PR_FALSE; }
-
-  /** @see nsIFrame::GetFrameForPoint
-    */
-  NS_IMETHOD GetFrameForPoint(const nsPoint& aPoint, 
-                              nsFramePaintLayer aWhichLayer,
-                              nsIFrame**     aFrame);
-
   /** reflow of a column group is a trivial matter of reflowing
     * the col group's children (columns), and setting this frame
     * to 0-size.  Since tables are row-centric, column group frames
@@ -162,10 +143,20 @@ public:
                     const nsHTMLReflowState& aReflowState,
                     nsReflowStatus&          aStatus);
 
+  /* needed only because we use Reflow in a hacky way, see
+     nsTableFrame::ReflowColGroups */
+  virtual PRBool IsContainingBlock() const;
+
+  virtual PRBool IsFrameOfType(PRUint32 aFlags) const
+  {
+    return nsHTMLContainerFrame::IsFrameOfType(aFlags &
+      ~nsIFrame::eExcludesIgnorableWhitespace);
+  }
+
   /**
    * Get the "type" of the frame
    *
-   * @see nsLayoutAtoms::tableColGroupFrame
+   * @see nsGkAtoms::tableColGroupFrame
    */
   virtual nsIAtom* GetType() const;
 
@@ -242,8 +233,7 @@ public:
    * GetContinuousBCBorderWidth will not overwrite aBorder.left
    * see nsTablePainter about continuous borders
    */
-  void GetContinuousBCBorderWidth(float     aPixelsToTwips,
-                                  nsMargin& aBorder);
+  void GetContinuousBCBorderWidth(nsMargin& aBorder);
   /**
    * Set full border widths before collapsing with cell borders
    * @param aForSide - side to set; only accepts top and bottom
@@ -251,7 +241,7 @@ public:
   void SetContinuousBCBorderWidth(PRUint8     aForSide,
                                   BCPixelSize aPixelValue);
 protected:
-  nsTableColGroupFrame();
+  nsTableColGroupFrame(nsStyleContext* aContext);
 
   void InsertColsReflow(PRInt32         aColIndex,
                         nsIFrame*       aFirstFrame,
@@ -259,24 +249,6 @@ protected:
 
   /** implement abstract method on nsHTMLContainerFrame */
   virtual PRIntn GetSkipSides() const;
-
-  NS_IMETHOD IncrementalReflow(nsHTMLReflowMetrics&     aDesiredSize,
-                               const nsHTMLReflowState& aReflowState,
-                               nsReflowStatus&          aStatus);
-
-  NS_IMETHOD IR_TargetIsMe(nsHTMLReflowMetrics&     aDesiredSize,
-                           const nsHTMLReflowState& aReflowState,
-                           nsReflowStatus&          aStatus);
-
-  NS_IMETHOD IR_StyleChanged(nsHTMLReflowMetrics&     aDesiredSize,
-                             const nsHTMLReflowState& aReflowState,
-                             nsReflowStatus&          aStatus);
-
-
-  NS_IMETHOD IR_TargetIsChild(nsHTMLReflowMetrics&     aDesiredSize,
-                              const nsHTMLReflowState& aReflowState,
-                              nsReflowStatus&          aStatus,
-                              nsIFrame *               aNextFrame);
 
   // data members
   PRInt32 mColCount;
@@ -288,8 +260,8 @@ protected:
   BCPixelSize mBottomContBorderWidth;
 };
 
-inline nsTableColGroupFrame::nsTableColGroupFrame()
-: mColCount(0), mStartColIndex(0)
+inline nsTableColGroupFrame::nsTableColGroupFrame(nsStyleContext *aContext)
+: nsHTMLContainerFrame(aContext), mColCount(0), mStartColIndex(0)
 { 
   SetColType(eColGroupContent);
 }

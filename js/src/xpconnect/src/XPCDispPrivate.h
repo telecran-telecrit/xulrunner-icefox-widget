@@ -91,7 +91,7 @@ STDMETHODIMP _class::QueryInterface(REFIID aIID, void** aInstancePtr)         \
 
 #define NS_IMPL_COM_QUERY_BODY(_interface)                                    \
   if(IsEqualIID(aIID, __uuidof(_interface)) )                                 \
-    foundInterface = NS_STATIC_CAST(_interface*, this);                       \
+    foundInterface = static_cast<_interface*>(this);                          \
   else
 
 #define NS_IMPL_COM_QUERY_TAIL_GUTS                                           \
@@ -213,7 +213,7 @@ private:
  * @param vp holds the result of the function
  * @return true if the function completes without error
  */
-JSBool JS_DLL_CALLBACK
+JSBool
 XPC_IDispatch_CallMethod(JSContext *cx, JSObject *obj, uintN argc,
                          jsval *argv, jsval *vp);
 /**
@@ -225,7 +225,7 @@ XPC_IDispatch_CallMethod(JSContext *cx, JSObject *obj, uintN argc,
  * @param vp holds the result of the function
  * @return true if the function completes without error
  */
-JSBool JS_DLL_CALLBACK
+JSBool
 XPC_IDispatch_GetterSetter(JSContext *cx, JSObject *obj, uintN argc, 
                            jsval *argv, jsval *vp);
 
@@ -275,11 +275,6 @@ public:
      */
     DISPID Find(const nsAString &target) const;
 private:
-    /**
-     * This is used by Find when it doesn't find something
-     * @see XPCDispNameArray::Find
-     */
-    static const nsString sEmpty;
     PRUint32 mCount;
     nsString* mNames;
 };
@@ -297,11 +292,13 @@ public:
      * @param array a JS array of ID's
      */
     XPCDispIDArray(XPCCallContext& ccx, JSIdArray* array);
+
     /**
      * Returns the length of the array
      * @return length of the array
      */
     PRUint32 Length() const;
+
     /**
      * Returns an ID within the array
      * @param cx a JS context
@@ -311,22 +308,19 @@ public:
     jsval Item(JSContext* cx, PRUint32 index) const;
 
     /**
-     * Called to mark the ID's during GC
+     * Called to trace jsval associated with the ID's
      */
-    void Mark();
+    void TraceJS(JSTracer* trc);
+
     /**
-     * Called to unmark the ID's after GC has been done
+     * Called to unmark the ID's marked during GC marking trace
      */
     void Unmark();
+
     /**
      * Tests whether the ID is marked
      */
     JSBool IsMarked() const;
-
-    /**
-     * NOP. This is just here to make the AutoMarkingPtr code compile.
-     */
-    inline void MarkBeforeJSFinalize(JSContext*);
 private:
     JSBool mMarked;
     nsVoidArray mIDArray;
@@ -1146,14 +1140,6 @@ public:
      */
     static void Disable() { mIsEnabled = PR_FALSE; }
     /**
-     * Initializes the IDispatch support system
-     * this exposes the ActiveXObject and COMObject to JS
-     * @param aJSContext a JS context
-     * @param aGlobalJSObj a global JS object
-     */
-    static JSBool Initialize(JSContext * aJSContext,
-                             JSObject* aGlobalJSObj);
-    /**
      * This is the define property for the IDispatch system. It called from
      * the XPConnect's DefineProperty
      * @param ccx an XPConnect call context
@@ -1234,7 +1220,7 @@ public:
      * Returns a DISPPARAMS structure pointer for the parameters
      * @return a DISPPARAMS structure pointer for the parameters
      */
-    DISPPARAMS* GetDispParams() const { return &NS_CONST_CAST(XPCDispParams*,this)->mDispParams; }
+    DISPPARAMS* GetDispParams() const { return &const_cast<XPCDispParams*>(this)->mDispParams; }
     /**
      * Returns the number of parameters
      * @return the number of parameters

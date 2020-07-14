@@ -44,29 +44,28 @@
 static PRBool gNoisy = PR_FALSE;
 #endif
 
-nsIAtom *InsertTextTxn::gInsertTextTxnName;
-
-nsresult InsertTextTxn::ClassInit()
-{
-  if (!gInsertTextTxnName)
-    gInsertTextTxnName = NS_NewAtom("NS_InsertTextTxn");
-  return NS_OK;
-}
-
-nsresult InsertTextTxn::ClassShutdown()
-{
-  NS_IF_RELEASE(gInsertTextTxnName);
-  return NS_OK;
-}
-
 InsertTextTxn::InsertTextTxn()
   : EditTxn()
 {
 }
 
-InsertTextTxn::~InsertTextTxn()
-{
-}
+NS_IMPL_CYCLE_COLLECTION_CLASS(InsertTextTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(InsertTextTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(InsertTextTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(InsertTextTxn)
+  if (aIID.Equals(InsertTextTxn::GetCID())) {
+    *aInstancePtr = (void*)(InsertTextTxn*)this;
+    NS_ADDREF_THIS();
+    return NS_OK;
+  }
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
 
 NS_IMETHODIMP InsertTextTxn::Init(nsIDOMCharacterData *aElement,
                                   PRUint32             aOffset,
@@ -162,48 +161,6 @@ NS_IMETHODIMP InsertTextTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMer
       }
       NS_RELEASE(otherInsTxn);
     }
-    else
-    { // the next InsertTextTxn might be inside an aggregate that we have special knowledge of
-      EditAggregateTxn *otherTxn = nsnull;
-      aTransaction->QueryInterface(EditAggregateTxn::GetCID(), (void **)&otherTxn);
-      if (otherTxn)
-      {
-        nsCOMPtr<nsIAtom> txnName;
-        otherTxn->GetName(getter_AddRefs(txnName));
-        if (txnName && txnName.get()==gInsertTextTxnName)
-        { // yep, it's one of ours.  By definition, it must contain only
-          // another aggregate with a single child,
-          // or a single InsertTextTxn
-          EditTxn * childTxn;
-          otherTxn->GetTxnAt(0, (&childTxn));
-          if (childTxn)
-          {
-            InsertTextTxn * otherInsertTxn = nsnull;
-            result = childTxn->QueryInterface(InsertTextTxn::GetCID(), (void**)&otherInsertTxn);
-            if (NS_SUCCEEDED(result))
-            {
-              if (otherInsertTxn)
-              {
-                if (IsSequentialInsert(otherInsertTxn))
-	              {
-	                nsAutoString otherData;
-	                otherInsertTxn->GetData(otherData);
-	                mStringToInsert += otherData;
-	                *aDidMerge = PR_TRUE;
-#ifdef NS_DEBUG
-	                if (gNoisy) { printf("InsertTextTxn assimilated %p\n", aTransaction); }
-#endif
-	              }
-	              NS_RELEASE(otherInsertTxn);
-	            }
-            }
-            
-            NS_RELEASE(childTxn);
-          }
-        }
-        NS_RELEASE(otherTxn);
-      }
-    }
   }
   return result;
 }
@@ -213,22 +170,6 @@ NS_IMETHODIMP InsertTextTxn::GetTxnDescription(nsAString& aString)
   aString.AssignLiteral("InsertTextTxn: ");
   aString += mStringToInsert;
   return NS_OK;
-}
-
-/* ============= nsISupports implementation ====================== */
-
-NS_IMETHODIMP
-InsertTextTxn::QueryInterface(REFNSIID aIID, void** aInstancePtr)
-{
-  if (!aInstancePtr) {
-    return NS_ERROR_NULL_POINTER;
-  }
-  if (aIID.Equals(InsertTextTxn::GetCID())) {
-    *aInstancePtr = (void*)(InsertTextTxn*)this;
-    NS_ADDREF_THIS();
-    return NS_OK;
-  }
-  return (EditTxn::QueryInterface(aIID, aInstancePtr));
 }
 
 /* ============ protected methods ================== */

@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
+/* -*- Mode: IDL; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -50,11 +50,11 @@
 #include "nsIInterfaceInfoManager.idl"
 #include "nsIExceptionService.idl"
 #include "nsIVariant.idl"
-#include "nsIWeakReference.idl"
 
 %{ C++
 #include "jspubtd.h"
 #include "xptinfo.h"
+#include "nsAXPCNativeCallContext.h"
 %}
 
 /***************************************************************************/
@@ -63,8 +63,13 @@
 [ptr] native JSObjectPtr(JSObject);
 [ptr] native JSValPtr(jsval);
       native JSVal(jsval);
+[ptr] native JSClassConstPtr(const JSClass);
+      native JSGetObjectOps(JSGetObjectOps);
       native JSID(jsid);
 [ptr] native voidPtrPtr(void*);
+[ptr] native nsScriptObjectTracerPtr(nsScriptObjectTracer);
+[ref] native nsCCTraversalCallbackRef(nsCycleCollectionTraversalCallback);
+[ptr] native nsAXPCNativeCallContextPtr(nsAXPCNativeCallContext);
 
 /***************************************************************************/
 
@@ -149,6 +154,11 @@ interface nsIInterfaceInfo;
 interface nsIXPCSecurityManager;
 interface nsIPrincipal;
 
+%{C++
+class nsCycleCollectionTraversalCallback;
+class nsScriptObjectTracer;
+%}
+
 /***************************************************************************/
 [uuid(8916a320-d118-11d3-8f3a-0010a4e73d9a)]
 interface nsIXPConnectJSObjectHolder : nsISupports
@@ -156,7 +166,7 @@ interface nsIXPConnectJSObjectHolder : nsISupports
     readonly attribute JSObjectPtr      JSObject;
 };
 
-[uuid(215DBE02-94A7-11d2-BA58-00805F8A5DD7)]
+[uuid(7021D99D-6344-4CC0-96E7-943ED58792B8)]
 interface nsIXPConnectWrappedNative : nsIXPConnectJSObjectHolder
 {
     /* attribute 'JSObject' inherited from nsIXPConnectJSObjectHolder */
@@ -181,12 +191,28 @@ interface nsIXPConnectWrappedNative : nsIXPConnectJSObjectHolder
      */
     voidPtrPtr GetSecurityInfoAddress();
 
+    /*
+     * NOTE: Add new IDL methods _before_ the C++ block below if you
+     * add them.  Otherwise the vtable won't be what xpidl thinks it
+     * is, since GetObjectPrincipal() is virtual.
+     */
+
 %{C++
     /**
      * Faster access to the native object from C++.  Will never return null.
      */
     nsISupports* Native() const { return mIdentity; }
 
+#ifndef XPCONNECT_STANDALONE
+    /**
+     * Get the object principal for this wrapper.  Note that this may well end
+     * up being null; in that case one should seek principals elsewhere.  Null
+     * here does NOT indicate system principal or no principals at all, just
+     * that this wrapper doesn't have an intrinsic one.
+     */
+    virtual nsIPrincipal* GetObjectPrincipal() const = 0;
+#endif
+    
 protected:
     nsISupports *mIdentity;
 public:
@@ -194,6 +220,8 @@ public:
 };
 
 %{C++
+#include "nsCOMPtr.h"
+
 inline
 const nsQueryInterface
 do_QueryWrappedNative(nsIXPConnectWrappedNative *aWrappedNative)
@@ -223,75 +251,7 @@ interface nsIXPConnectWrappedJS : nsIXPConnectJSObjectHolder
 
     void aggregatedQueryInterface(in nsIIDRef uuid,
                                   [iid_is(uuid),retval] out nsQIResult result);
-};
 
-[uuid(0f1799d3-13d3-45f7-8361-0a6f211183f4)]
-interface nsIXPConnectWrappedJS_MOZILLA_1_8_BRANCH : nsIXPConnectWrappedJS
-{
-    /* This method has the same signature and the same semantics as the
-     * one method on nsISupportsWeakReference.  However, it exists here
-     * so that callers who need to manage JS garbage collection for
-     * wrapped objects themselves can get a weak reference to the
-     * wrapped JS object:  in other words, it's for callers who know
-     * that they're dealing with a wrapper, and want a weak reference to
-     * the wrapper rather than the wrapped object.
-     */
-    nsIWeakReference GetWeakReference();
-};
-
-/**
- * This interface is a complete hack.  It is used by the DOM code to
- * call QueryReferent on a weak reference to a wrapped JS object without
- * causing reference counting, which would add and remove GC roots
- * (which can't be done in the middle of GC).
- */
-[uuid(3f32871c-d014-4f91-b358-3ece74cbebaa)]
-interface nsWeakRefToIXPConnectWrappedJS : nsIXPConnectWrappedJS_MOZILLA_1_8_BRANCH
-{
-};
-
-/***************************************************************************/
-
-/**
-* This is a somewhat special interface. It is available from the global
-* nsIXPConnect object when native methods have been called. It is only relevant
-* to the currently called native method on the given JSContext/thread. Holding
-* a reference past that time (or while other native methods are being called)
-* will not assure access to this data.
-*/
-
-[uuid(0FA68A60-8289-11d3-BB1A-00805F8A5DD7)]
-interface nsIXPCNativeCallContext : nsISupports
-{
-
-    readonly attribute nsISupports                  Callee;
-    readonly attribute PRUint16                     CalleeMethodIndex;
-    readonly attribute nsIXPConnectWrappedNative    CalleeWrapper;
-    readonly attribute JSContextPtr                 JSContext;
-    readonly attribute PRUint32                     Argc;
-    readonly attribute JSValPtr                     ArgvPtr;
-    /**
-    * This may be NULL if the JS caller is ignoring the result of the call.
-    */
-    readonly attribute JSValPtr                     RetValPtr;
-    /**
-    * Set this if JS_SetPendingException has been called. Return NS_OK or
-    * else this will be ignored and the native method's nsresult will be
-    * converted into an exception and thrown into JS as is the normal case.
-    */
-    attribute PRBool                                ExceptionWasThrown;
-
-    /**
-    * Set this to indicate that the callee has directly set the return value
-    * (using RetValPtr and the JSAPI). If set then xpconnect will not attempt
-    * to overwrite it with the converted retval from the C++ callee.
-    */
-    attribute PRBool                                ReturnValueWasSet;
-
-    // Methods added since mozilla 0.6....
-
-    readonly attribute nsIInterfaceInfo             CalleeInterface;
-    readonly attribute nsIClassInfo                 CalleeClassInfo;
 };
 
 /***************************************************************************/
@@ -445,7 +405,7 @@ interface nsIXPCFunctionThisTranslator : nsISupports
     { 0xbd, 0xd6, 0x0, 0x0, 0x64, 0x65, 0x73, 0x74 } }
 %}
 
-[uuid(DEB1D48E-7469-4B01-B186-D9854C7D3F2D)]
+[uuid(b2ddc328-194b-45d6-95c6-52e487438096)]
 interface nsIXPConnect : nsISupports
 {
 %{ C++
@@ -465,6 +425,7 @@ interface nsIXPConnect : nsISupports
 
     const PRUint32 INIT_JS_STANDARD_CLASSES  = 1 << 0;
     const PRUint32 FLAG_SYSTEM_GLOBAL_OBJECT = 1 << 1;
+    const PRUint32 OMIT_COMPONENTS_OBJECT    = 1 << 2;
 
     /**
     * wrapNative will create a new JSObject or return an existing one.
@@ -506,6 +467,23 @@ interface nsIXPConnect : nsISupports
                in JSObjectPtr  aScope,
                in nsISupports  aCOMObj,
                in nsIIDRef     aIID);
+
+    /**
+     * Same as wrapNative, but also returns the JSObject in aVal. C++ callers
+     * can pass in null for the aHolder argument, but in that case they must
+     * ensure that aVal is rooted.
+     * aIID may be null, it means the same as passing in
+     * &NS_GET_IID(nsISupports) but when passing in null certain shortcuts
+     * can be taken because we know without comparing IIDs that the caller is
+     * asking for an nsISupports wrapper.
+     */
+    void
+    wrapNativeToJSVal(in JSContextPtr aJSContext,
+                      in JSObjectPtr  aScope,
+                      in nsISupports  aCOMObj,
+                      in nsIIDPtr     aIID,
+                      out JSVal       aVal,
+                      out nsIXPConnectJSObjectHolder aHolder);
 
     /**
     * wrapJS will yield a new or previously existing xpcom interface pointer
@@ -570,16 +548,12 @@ interface nsIXPConnect : nsISupports
                              in nsIStackFrame  aCaller);
 
     /**
-    * XPConnect builds internal objects that parallel, and are one-to-one with,
-    * the JSContexts in the JSRuntime. It builds these objects as needed.
-    * This method tells XPConnect to resynchronize its representations with the
-    * list of JSContexts currently 'alive' in the JSRuntime. This allows it
-    * to cleanup any representations of JSContexts that are no longer valid.
+    * Deprecated do-nothing function.
     */
     void syncJSContexts();
 
     readonly attribute nsIStackFrame                CurrentJSStack;
-    readonly attribute nsIXPCNativeCallContext      CurrentNativeCallContext;
+    readonly attribute nsAXPCNativeCallContextPtr   CurrentNativeCallContext;
     /* pass nsnull to clear pending exception */
              attribute nsIException                 PendingException;
 
@@ -645,6 +619,10 @@ interface nsIXPConnect : nsISupports
                                  in JSObjectPtr  aScope,
                                  in JSObjectPtr  aNewParent,
                                  in nsISupports  aCOMObj);
+    void
+    moveWrappers(in JSContextPtr aJSContext,
+                 in JSObjectPtr  aOldScope,
+                 in JSObjectPtr  aNewScope);
 
     void clearAllWrappedNativeSecurityPolicies();
 
@@ -652,9 +630,6 @@ interface nsIXPConnect : nsISupports
     getWrappedNativePrototype(in JSContextPtr aJSContext,
                               in JSObjectPtr  aScope,
                               in nsIClassInfo aClassInfo);
-
-    attribute PRBool collectGarbageOnMainThreadOnly;
-    attribute PRBool deferReleasesUntilAfterGarbageCollection;
 
     void releaseJSContext(in JSContextPtr aJSContext, in PRBool noGC);
 
@@ -669,8 +644,12 @@ interface nsIXPConnect : nsISupports
      *
      * @param aFilenamePrefix the UTF-8 filename prefix to match, which
      *                        should end with a slash (/) character
+     * @param aWantNativeWrappers whether XPConnect should produce native
+     *                            wrappers for scripts whose paths begin
+     *                            with this prefix
      */
-    void flagSystemFilenamePrefix(in string aFilenamePrefix);
+    void flagSystemFilenamePrefix(in string aFilenamePrefix,
+                                  in PRBool aWantNativeWrappers);
 
     /**
      * Restore an old prototype for wrapped natives of type
@@ -682,41 +661,159 @@ interface nsIXPConnect : nsISupports
                                        in JSObjectPtr  aScope,
                                        in nsIClassInfo aClassInfo,
                                        in nsIXPConnectJSObjectHolder aPrototype);
-};
 
-[uuid(4b61f818-d260-45ab-ac4e-d27790b5be5e)]
-interface nsIXPConnect_MOZILLA_1_8_BRANCH : nsIXPConnect
-{
-    void
-    reparentScopeAwareWrappers(in JSContextPtr aJSContext,
-                               in JSObjectPtr  aOldScope,
-                               in JSObjectPtr  aNewScope);
+    /**
+     * Create a sandbox for evaluating code in isolation using
+     * evalInSandboxObject().
+     *
+     * @param cx A context to use when creating the sandbox object.
+     * @param principal The principal (or NULL to use the null principal)
+     *                  to use when evaluating code in this sandbox.
+     */
+    [noscript] nsIXPConnectJSObjectHolder createSandbox(in JSContextPtr cx,
+                                                        in nsIPrincipal principal);
 
-   /**
-    * Create a sandbox for evaluating code in isolation using
-    * evalInSandboxObject().
-    *
-    * @param cx A context to use when creating the sandbox object.
-    * @param principal The principal (or NULL to use the null principal)
-    *                  to use when evaluating code in this sandbox.
-    */
-   [noscript] nsIXPConnectJSObjectHolder createSandbox(in JSContextPtr cx,
-                                                       in nsIPrincipal principal);
+    /**
+     * Evaluate script in a sandbox, completely isolated from all
+     * other running scripts.
+     *
+     * @param source The source of the script to evaluate.
+     * @param cx The context to use when setting up the evaluation of
+     *           the script. The actual evaluation will happen on a new
+     *           temporary context.
+     * @param sandbox The sandbox object to evaluate the script in.
+     * @param returnStringOnly The only results to come out of the
+     *                         computation (including exceptions) will
+     *                         be coerced into strings created in the
+     *                         sandbox.
+     * @return The result of the evaluation as a jsval. If the caller
+     *         intends to use the return value from this call the caller
+     *         is responsible for rooting the jsval before making a call
+     *         to this method.
+     */
+    [noscript] JSVal evalInSandboxObject(in AString source, in JSContextPtr cx,
+                                         in nsIXPConnectJSObjectHolder sandbox,
+                                         in PRBool returnStringOnly);
 
-   /**
-    * Evaluate script in a sandbox, completely isolated from all
-    * other running scripts.
-    *
-    * @param source The source of the script to evaluate.
-    * @param cx The context to use when setting up the evaluation of
-    *           the script. The actual evaluation will happen on a new
-    *           temporary context.
-    * @param sandbox The sandbox object to evaluate the script in.
-    * @return The result of the evaluation as a jsval. If the caller
-    *         intends to use the return value from this call the caller
-    *         is responsible for rooting the jsval before making a call
-    *         to this method.
-    */
-   [noscript] JSVal evalInSandboxObject(in AString source, in JSContextPtr cx,
-                                        in nsIXPConnectJSObjectHolder sandbox);
+    /**
+     * Wrap a jsval in a cross origin wrapper.
+     * @param aJSContext A context to use to create objects.
+     * @param aParent The parent to create the wrapper with.
+     * @param aWrappedObj The object to wrap.
+     */
+    [noscript] JSVal getXOWForObject(in JSContextPtr aJSContext,
+                                     in JSObjectPtr aParent,
+                                     in JSObjectPtr aWrappedObj);
+
+    /**
+     * Tells updateXOWs to clear the scope of all of the XOWs it finds.
+     */
+    const PRUint32 XPC_XOW_CLEARSCOPE = 1;
+
+    /**
+     * Performs an operation over all of |object|'s XOWs such as clearing
+     * their scopes or updating their concept of the current principal.
+     *
+     * @param aJSContext A context to use to perform JS operations.
+     * @param aObject Which XPCWrappedNative we should find the XOWs for.
+     * @param aWay What operation to perform.
+     */
+    [noscript] void updateXOWs(in JSContextPtr aJSContext,
+                               in nsIXPConnectWrappedNative aObject,
+                               in PRUint32 aWay);
+
+    /**
+     * Root JS objects held by aHolder.
+     * @param aHolder The object that hold the JS objects that should be rooted.
+     * @param aTrace The tracer for aHolder.
+     */
+    [noscript] void addJSHolder(in voidPtr aHolder,
+                                in nsScriptObjectTracerPtr aTracer);
+
+    /**
+     * Stop rooting the JS objects held by aHolder.
+     * @param aHolder The object that hold the rooted JS objects.
+     */
+    [noscript] void removeJSHolder(in voidPtr aHolder);
+
+    /**
+     * Note aJSContext as a child to the cycle collector.
+     * @param aJSContext The JSContext to note.
+     * @param aCb The cycle collection traversal callback.
+     */
+    [noscript,notxpcom] void noteJSContext(in JSContextPtr aJSContext,
+                                           in nsCCTraversalCallbackRef aCb);
+
+    /**
+     * Get the JSClass and JSGetObjectOps pointers to use for
+     * identifying JSObjects that hold nsIXPConnectWrappedNative
+     * pointers in their private date. See IS_WRAPPER_CLASS in
+     * xpcprivate.h for details.
+     */
+    void GetXPCWrappedNativeJSClassInfo(out JSClassConstPtr clazz,
+                                        out JSGetObjectOps ops1,
+                                        out JSGetObjectOps ops2);
+
+    /**
+     * Whether or not XPConnect should report all JS exceptions when returning
+     * from JS into C++. False by default, although any value set in the
+     * MOZ_REPORT_ALL_JS_EXCEPTIONS environment variable will override the value
+     * passed here.
+     */
+    void setReportAllJSExceptions(in boolean reportAllJSExceptions);
+
+    /**
+     * Define quick stubs on the given object, @a proto.
+     *
+     * @param cx
+     *     A context.  Requires request.
+     * @param proto
+     *     The (newly created) prototype object for a DOM class.  The JS half
+     *     of an XPCWrappedNativeProto.
+     * @param flags
+     *     Property flags for the quick stub properties--should be either
+     *     JSPROP_ENUMERATE or 0.
+     * @param interfaceCount
+     *     The number of interfaces the class implements.
+     * @param interfaceArray
+     *     The interfaces the class implements; interfaceArray and
+     *     interfaceCount are like what nsIClassInfo.getInterfaces returns.
+     */
+    [noscript,notxpcom] PRBool defineDOMQuickStubs(
+        in JSContextPtr cx,
+        in JSObjectPtr proto,
+        in PRUint32 flags,
+        in PRUint32 interfaceCount,
+        [array, size_is(interfaceCount)] in nsIIDPtr interfaceArray);
+
+    /**
+     * Returns a XPCNativeWrapper, XPCSafeJSObjectWrapper, or
+     * XPCCrossOriginWrapper for the given object based on the principal, scope,
+     * and filename flags that are passed in.
+     *
+     * Note: In C++, the out jsval parameter must already be a strong GC root.
+     *
+     * @param aJSContext
+     *     A JSContext.
+     * @param aObject
+     *     The object to wrap.
+     * @param aScope
+     *     The scope to be used in the event that we create a
+     *     XPCCrossOriginWrapper. Can be null.
+     * @param aPrincipal
+     *     The principal that should be used for the wrapper. If this parameter
+     *     is given then aFilenameFlags will not be calculated and will be
+     *     assumed to be 0 unless another value is given. If this parameter is
+     *     null then aFilenameFlags will be calculated and the value of that
+     *     argument will be ignored.
+     * @param aFilenameFlags
+     *     The filename flags from the script that will use this wrapper. See
+     *     above (aPrincipal) for details.
+     */
+    [noscript] JSVal getWrapperForObject(
+        in JSContextPtr aJSContext,
+        in JSObjectPtr aObject,
+        in JSObjectPtr aScope,
+        in nsIPrincipal aPrincipal,
+        in unsigned long aFilenameFlags);
 };

@@ -34,171 +34,48 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-#include "nsSVGTSpanFrame.h"
+#include "nsSVGTextPathFrame.h"
 #include "nsIDOMSVGTextPathElement.h"
-#include "nsIDOMSVGAnimatedLength.h"
-#include "nsIDOMSVGAnimatedString.h"
-#include "nsSVGLengthList.h"
-#include "nsISVGPathFlatten.h"
-#include "nsSVGLength.h"
-
-#include "nsIDOMSVGAnimatedPathData.h"
-#include "nsIDOMSVGPathSegList.h"
+#include "nsSVGLength2.h"
 #include "nsIDOMSVGURIReference.h"
-#include "nsIDOMDocument.h"
-#include "nsIDocument.h"
-
-typedef nsSVGTSpanFrame nsSVGTextPathFrameBase;
-
-class nsSVGTextPathFrame : public nsSVGTextPathFrameBase,
-                           public nsISVGPathFlatten
-{
-public:
-
-  /**
-   * Get the "type" of the frame
-   *
-   * @see nsLayoutAtoms::svgGFrame
-   */
-  virtual nsIAtom* GetType() const;
-  virtual PRBool IsFrameOfType(PRUint32 aFlags) const;
-
-#ifdef DEBUG
-  NS_IMETHOD GetFrameName(nsAString& aResult) const
-  {
-    return MakeFrameName(NS_LITERAL_STRING("SVGTextPath"), aResult);
-  }
-#endif
-
-  // nsISVGValueObserver interface:
-  NS_IMETHOD DidModifySVGObservable(nsISVGValue* observable,
-                                    nsISVGValue::modificationType aModType);
-
-  // nsISVGPathFlatten interface
-  NS_IMETHOD GetFlattenedPath(nsSVGPathData **data, PRBool useLocalTransform);
-
-   // nsISupports interface:
-  NS_IMETHOD QueryInterface(const nsIID& aIID, void** aInstancePtr);
-
-private:
-  NS_IMETHOD_(nsrefcnt) AddRef() { return NS_OK; }
-  NS_IMETHOD_(nsrefcnt) Release() { return NS_OK; }
-
-protected:
-  virtual ~nsSVGTextPathFrame();
-  virtual nsresult InitSVG();
-
-  NS_IMETHOD_(already_AddRefed<nsIDOMSVGLengthList>) GetX();
-  NS_IMETHOD_(already_AddRefed<nsIDOMSVGLengthList>) GetY();
-  NS_IMETHOD_(already_AddRefed<nsIDOMSVGLengthList>) GetDx();
-  NS_IMETHOD_(already_AddRefed<nsIDOMSVGLengthList>) GetDy();
-
-private:
-
-  nsCOMPtr<nsIDOMSVGLength> mStartOffset;
-  nsCOMPtr<nsIDOMSVGAnimatedString> mHref;
-  nsCOMPtr<nsIDOMSVGPathSegList> mSegments;
-
-  nsCOMPtr<nsISVGLengthList> mX;
-};
-
-NS_INTERFACE_MAP_BEGIN(nsSVGTextPathFrame)
-  NS_INTERFACE_MAP_ENTRY(nsISVGPathFlatten)
-NS_INTERFACE_MAP_END_INHERITING(nsSVGTSpanFrame)
-
+#include "nsSVGEffects.h"
+#include "nsContentUtils.h"
+#include "nsSVGPathElement.h"
+#include "nsSVGTextPathElement.h"
 
 //----------------------------------------------------------------------
 // Implementation
 
-nsresult
+nsIFrame*
 NS_NewSVGTextPathFrame(nsIPresShell* aPresShell, nsIContent* aContent,
-                       nsIFrame* parentFrame, nsIFrame** aNewFrame)
+                       nsIFrame* parentFrame, nsStyleContext* aContext)
 {
-  *aNewFrame = nsnull;
-
   NS_ASSERTION(parentFrame, "null parent");
-  nsISVGTextFrame *text_container;
-  parentFrame->QueryInterface(NS_GET_IID(nsISVGTextFrame), (void**)&text_container);
-  if (!text_container) {
+  if (parentFrame->GetType() != nsGkAtoms::svgTextFrame) {
     NS_ERROR("trying to construct an SVGTextPathFrame for an invalid container");
-    return NS_ERROR_FAILURE;
+    return nsnull;
+  }
+  
+  nsCOMPtr<nsIDOMSVGTextPathElement> textPath = do_QueryInterface(aContent);
+  if (!textPath) {
+    NS_ERROR("Can't create frame! Content is not an SVG textPath");
+    return nsnull;
   }
 
-  nsCOMPtr<nsIDOMSVGTextPathElement> tspan_elem = do_QueryInterface(aContent);
-  if (!tspan_elem) {
-    NS_ERROR("Trying to construct an SVGTextPathFrame for a "
-             "content element that doesn't support the right interfaces");
-    return NS_ERROR_FAILURE;
-  }
-
-  nsSVGTextPathFrame* it = new (aPresShell) nsSVGTextPathFrame;
-  if (nsnull == it)
-    return NS_ERROR_OUT_OF_MEMORY;
-
-  *aNewFrame = it;
-
-  return NS_OK;
-}
-
-nsSVGTextPathFrame::~nsSVGTextPathFrame()
-{
-  NS_REMOVE_SVGVALUE_OBSERVER(mStartOffset);
-  NS_REMOVE_SVGVALUE_OBSERVER(mHref);
-  NS_REMOVE_SVGVALUE_OBSERVER(mSegments);
-}
-
-nsresult
-nsSVGTextPathFrame::InitSVG()
-{
-  nsCOMPtr<nsIDOMSVGTextPathElement> tpath = do_QueryInterface(mContent);
-
-  {
-    nsCOMPtr<nsIDOMSVGAnimatedLength> length;
-    tpath->GetStartOffset(getter_AddRefs(length));
-    length->GetAnimVal(getter_AddRefs(mStartOffset));
-    NS_ASSERTION(mStartOffset, "no startOffset");
-    if (!mStartOffset)
-      return NS_ERROR_FAILURE;
-
-    NS_NewSVGLengthList(getter_AddRefs(mX));
-    if (mX) {
-      nsCOMPtr<nsIDOMSVGLength> length;
-      mX->AppendItem(mStartOffset, getter_AddRefs(length));
-    }
-
-    NS_ADD_SVGVALUE_OBSERVER(mStartOffset);
-  }
-
-  {
-    nsCOMPtr<nsIDOMSVGURIReference> aRef = do_QueryInterface(mContent);
-    if (aRef)
-      aRef->GetHref(getter_AddRefs(mHref));
-    if (!mHref)
-      return NS_ERROR_FAILURE;
-    NS_ADD_SVGVALUE_OBSERVER(mHref);
-  }
-
-  return NS_OK;
+  return new (aPresShell) nsSVGTextPathFrame(aContext);
 }
 
 nsIAtom *
 nsSVGTextPathFrame::GetType() const
 {
-  return nsLayoutAtoms::svgTextPathFrame;
+  return nsGkAtoms::svgTextPathFrame;
 }
 
-PRBool
-nsSVGTextPathFrame::IsFrameOfType(PRUint32 aFlags) const
-{
-  return !(aFlags & ~nsIFrame::eSVG);
-}
 
 NS_IMETHODIMP_(already_AddRefed<nsIDOMSVGLengthList>)
 nsSVGTextPathFrame::GetX()
 {
-  nsISVGLengthList *retval = mX;
-  NS_IF_ADDREF(retval);
-  return retval;
+  return nsnull;
 }
 
 NS_IMETHODIMP_(already_AddRefed<nsIDOMSVGLengthList>)
@@ -220,101 +97,110 @@ nsSVGTextPathFrame::GetDy()
 }
 
 //----------------------------------------------------------------------
-// nsISVGPathFlatten methods:
+// nsSVGTextPathFrame methods:
 
-nsresult GetReferencedFrame(nsIFrame **aServer, nsCAutoString& uriSpec, nsIContent *aContent,
-                                        nsIPresShell *aPresShell)
+nsIFrame *
+nsSVGTextPathFrame::GetPathFrame()
 {
-  nsresult rv = NS_OK;
-  *aServer = nsnull;
+  nsSVGTextPathProperty *property =
+    static_cast<nsSVGTextPathProperty*>(GetProperty(nsGkAtoms::href));
 
-  // Get the ID from the spec (no ID = an error)
-  PRInt32 pos = uriSpec.FindChar('#');
-  if (pos == -1) {
-    NS_ASSERTION(pos != -1, "URI Spec not a reference");
-    return NS_ERROR_FAILURE;
+  if (!property) {
+    nsSVGTextPathElement *tp = static_cast<nsSVGTextPathElement*>(mContent);
+    const nsString &href = tp->mStringAttributes[nsSVGTextPathElement::HREF].GetAnimValue();
+    if (href.IsEmpty()) {
+      return nsnull; // no URL
+    }
+
+    nsCOMPtr<nsIURI> targetURI;
+    nsCOMPtr<nsIURI> base = mContent->GetBaseURI();
+    nsContentUtils::NewURIWithDocumentCharset(getter_AddRefs(targetURI), href,
+                                              mContent->GetCurrentDoc(), base);
+
+    property = nsSVGEffects::GetTextPathProperty(
+                               targetURI, this, nsGkAtoms::href);
+    if (!property)
+      return nsnull;
   }
 
-  // Strip off the hash and get the name
-  nsCAutoString aURICName;
-  uriSpec.Right(aURICName, uriSpec.Length()-(pos + 1));
+  nsIFrame *result = property->GetReferencedFrame();
+  if (!result || result->GetType() != nsGkAtoms::svgPathGeometryFrame)
+    return nsnull;
 
-  // Get a unicode string
-  nsAutoString  aURIName;
-  CopyUTF8toUTF16(aURICName, aURIName);
-
-  // Get the domDocument
-  nsCOMPtr<nsIDOMDocument>domDoc = do_QueryInterface(aContent->GetDocument());
-  NS_ASSERTION(domDoc, "Content doesn't reference a dom Document");
-  if (domDoc == nsnull) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Get the element
-  nsCOMPtr<nsIDOMElement> element;
-  rv = domDoc->GetElementById(aURIName, getter_AddRefs(element));
-  if (!NS_SUCCEEDED(rv) || element == nsnull) {
-    return rv;
-  }
-
-  // Get the Primary Frame
-  nsCOMPtr<nsIContent> aGContent = do_QueryInterface(element);
-  NS_ASSERTION(aPresShell, "Get referenced SVG frame -- no pres shell provided");
-  if (!aPresShell)
-    return NS_ERROR_FAILURE;
-
-  rv = aPresShell->GetPrimaryFrameFor(aGContent, aServer);
-  if (!(*aServer)) return NS_ERROR_FAILURE;
-  return rv;
+  return result;
 }
 
-NS_IMETHODIMP
-nsSVGTextPathFrame::GetFlattenedPath(nsSVGPathData **data,
-                                     PRBool useLocalTransform) {
-  *data = nsnull;
-  nsIFrame *path = nsnull;
+already_AddRefed<gfxFlattenedPath>
+nsSVGTextPathFrame::GetFlattenedPath()
+{
+  nsIFrame *path = GetPathFrame();
+  return path ? GetFlattenedPath(path) : nsnull;
+}
+ 
+already_AddRefed<gfxFlattenedPath>
+nsSVGTextPathFrame::GetFlattenedPath(nsIFrame *path)
+{
+  NS_PRECONDITION(path, "Unexpected null path");
+  nsSVGPathGeometryElement *element = static_cast<nsSVGPathGeometryElement*>
+                                                 (path->GetContent());
 
-  nsAutoString aStr;
-  mHref->GetAnimVal(aStr);
+  nsCOMPtr<nsIDOMSVGMatrix> localTM = element->GetLocalTransformMatrix();
 
-  nsCAutoString aCStr;
-  CopyUTF16toUTF8(aStr, aCStr);
+  return element->GetFlattenedPath(localTM);
+}
 
-  GetReferencedFrame(&path, aCStr, mContent, GetPresContext()->PresShell());
+gfxFloat
+nsSVGTextPathFrame::GetStartOffset()
+{
+  nsSVGTextPathElement *tp = static_cast<nsSVGTextPathElement*>(mContent);
+  nsSVGLength2 *length = &tp->mLengthAttributes[nsSVGTextPathElement::STARTOFFSET];
+  float val = length->GetAnimValInSpecifiedUnits();
 
-  if (!path)
-    return NS_ERROR_FAILURE;
+  if (val == 0.0f)
+    return 0.0;
 
-  if (!mSegments) {
-    nsCOMPtr<nsIDOMSVGAnimatedPathData> data =
-      do_QueryInterface(path->GetContent());
-    if (data) {
-      data->GetAnimatedPathSegList(getter_AddRefs(mSegments));
-      NS_ADD_SVGVALUE_OBSERVER(mSegments);
-    }
+  if (length->IsPercentage()) {
+    nsRefPtr<gfxFlattenedPath> data = GetFlattenedPath();
+    return data ? (val * data->GetLength() / 100.0) : 0.0;
+  } else {
+    return val * GetPathScale();
   }
+}
 
-  nsISVGPathFlatten *flatten;
-  CallQueryInterface(path, &flatten);
+gfxFloat
+nsSVGTextPathFrame::GetPathScale() 
+{
+  nsIFrame *pathFrame = GetPathFrame();
+  if (!pathFrame)
+    return 1.0;
 
-  if (!flatten)
-    return NS_ERROR_FAILURE;
+  nsSVGPathElement *path = static_cast<nsSVGPathElement*>(pathFrame->GetContent());
+  float pl = path->mPathLength.GetAnimValue();
 
-  return flatten->GetFlattenedPath(data, PR_TRUE);
+  if (pl == 0.0f)
+    return 1.0;
+
+  nsRefPtr<gfxFlattenedPath> data = GetFlattenedPath(pathFrame);
+  return data ? data->GetLength() / pl : 1.0; 
 }
 
 //----------------------------------------------------------------------
-// nsISVGValueObserver methods:
+// nsIFrame methods
 
 NS_IMETHODIMP
-nsSVGTextPathFrame::DidModifySVGObservable(nsISVGValue* observable,
-                                           nsISVGValue::modificationType aModType)
+nsSVGTextPathFrame::AttributeChanged(PRInt32         aNameSpaceID,
+                                     nsIAtom*        aAttribute,
+                                     PRInt32         aModType)
 {
-  nsCOMPtr<nsIDOMSVGAnimatedString> s = do_QueryInterface(observable);
-  if (s && mHref==s) {
-    NS_REMOVE_SVGVALUE_OBSERVER(mSegments);
-    mSegments = nsnull;
+  if (aNameSpaceID == kNameSpaceID_None &&
+      aAttribute == nsGkAtoms::startOffset) {
+    NotifyGlyphMetricsChange();
+  } else if (aNameSpaceID == kNameSpaceID_XLink &&
+             aAttribute == nsGkAtoms::href) {
+    // Blow away our reference, if any
+    DeleteProperty(nsGkAtoms::href);
+    NotifyGlyphMetricsChange();
   }
 
-  return nsSVGTextPathFrameBase::DidModifySVGObservable(observable, aModType);
+  return NS_OK;
 }

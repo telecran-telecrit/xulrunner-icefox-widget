@@ -104,6 +104,14 @@ typedef PRUint8 nsHttpVersion;
 // preventing it from being reclaimed, even after the transaction completes.
 #define NS_HTTP_STICKY_CONNECTION    (1<<2)
 
+// a transaction with this caps flag will, upon opening a new connection,
+// bypass the local DNS cache
+#define NS_HTTP_REFRESH_DNS          (1<<3)
+
+// a transaction with this caps flag will not pass SSL client-certificates
+// to the server (see bug #466080), but is may also be used for other things
+#define NS_HTTP_LOAD_ANONYMOUS       (1<<4)
+
 //-----------------------------------------------------------------------------
 // some default values
 //-----------------------------------------------------------------------------
@@ -122,8 +130,8 @@ typedef PRUint8 nsHttpVersion;
 
 struct nsHttpAtom
 {
-    operator const char *() { return _val; }
-    const char *get() { return _val; }
+    operator const char *() const { return _val; }
+    const char *get() const { return _val; }
 
     void operator=(const char *v) { _val = v; }
     void operator=(const nsHttpAtom &a) { _val = a._val; }
@@ -153,6 +161,14 @@ struct nsHttp
         return IsValidToken(start, start + s.Length());
     }
 
+    // find the first instance (case-insensitive comparison) of the given
+    // |token| in the |input| string.  the |token| is bounded by elements of
+    // |separators| and may appear at the beginning or end of the |input|
+    // string.  null is returned if the |token| is not found.  |input| may be
+    // null, in which case null is returned.
+    static const char *FindToken(const char *input, const char *token,
+                                 const char *separators);
+
     // This function parses a string containing a decimal-valued, non-negative
     // 64-bit integer.  If the value would exceed LL_MAXINT, then PR_FALSE is
     // returned.  Otherwise, this function returns PR_TRUE and stores the
@@ -171,13 +187,12 @@ struct nsHttp
         return ParseInt64(input, &next, result) && *next == '\0';
     }
 
-    /* Declare all atoms
-     *
-     * The atom names and values are stored in nsHttpAtomList.h and
-     * are brought to you by the magic of C preprocessing
-     *
-     * Add new atoms to nsHttpAtomList and all support logic will be auto-generated
-     */
+    // Declare all atoms
+    // 
+    // The atom names and values are stored in nsHttpAtomList.h and are brought
+    // to you by the magic of C preprocessing.  Add new atoms to nsHttpAtomList
+    // and all support logic will be auto-generated.
+    //
 #define HTTP_ATOM(_name, _value) static nsHttpAtom _name;
 #include "nsHttpAtomList.h"
 #undef HTTP_ATOM
@@ -190,12 +205,7 @@ struct nsHttp
 static inline PRUint32
 PRTimeToSeconds(PRTime t_usec)
 {
-    PRTime usec_per_sec;
-    PRUint32 t_sec;
-    LL_I2L(usec_per_sec, PR_USEC_PER_SEC);
-    LL_DIV(t_usec, t_usec, usec_per_sec);
-    LL_L2I(t_sec, t_usec);
-    return t_sec;
+    return PRUint32( t_usec / PR_USEC_PER_SEC );
 }
 
 #define NowInSeconds() PRTimeToSeconds(PR_Now())
@@ -204,12 +214,10 @@ PRTimeToSeconds(PRTime t_usec)
 #undef  CLAMP
 #define CLAMP(x, low, high)  (((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
 
-// nsCRT::strdup likes to convert nsnull to "" 
-#define strdup_if(s) (s ? nsCRT::strdup(s) : nsnull)
-
 // round q-value to one decimal place; return most significant digit as uint.
 #define QVAL_TO_UINT(q) ((unsigned int) ((q + 0.05) * 10.0))
 
 #define HTTP_LWS " \t"
+#define HTTP_HEADER_VALUE_SEPS HTTP_LWS ","
 
 #endif // nsHttp_h__

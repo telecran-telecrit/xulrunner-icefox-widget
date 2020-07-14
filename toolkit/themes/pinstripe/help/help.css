@@ -37,32 +37,31 @@
 @import url("chrome://global/skin/");
 @namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
 
-toolbar#HelpToolbar{
+#HelpToolbar {
   -moz-padding-start: 5px;
 }
 
-toolbar#HelpToolbar toolbarbutton {
+#HelpToolbar toolbarbutton {
   min-width: 0px;
   list-style-image: url("chrome://help/skin/Toolbar.png");
   -moz-box-orient: horizontal !important;
 }
 
-toolbar#HelpToolbar toolbarbutton[type="menu-button"] {
+#HelpToolbar toolbarbutton[type="menu-button"] {
   margin: 0px;
   padding: 0px;
 }
 
 /* this element contains the icon and the label */
-toolbar#HelpToolbar .toolbarbutton-menubutton-button {
+#HelpToolbar .toolbarbutton-menubutton-button {
   margin: 0px !important;
   padding: 0px !important;
   border: 0px !important;
 }
 
-
 /* Hide labels for the toolbar because we really don't need them what with the
    tooltips */
-toolbar#HelpToolbar .toolbarbutton-text{
+#HelpToolbar .toolbarbutton-text {
   display: none;
 }
 
@@ -72,37 +71,30 @@ toolbar#HelpToolbar .toolbarbutton-text{
 #help-back-button { -moz-image-region: rect(0px 24px 24px 0px); }
 #help-back-button:not([disabled="true"]):hover { -moz-image-region: rect(24px 24px 48px 0px); }
 #help-back-button[disabled="true"] { -moz-image-region: rect(48px 24px 72px 0px); }
-#help-back-button:not([disabled="true"]):active { -moz-image-region: rect(72px 24px 96px 0px); }
+#help-back-button:not([disabled="true"]):hover:active { -moz-image-region: rect(72px 24px 96px 0px); }
 
 #help-forward-button { -moz-image-region: rect(0px 48px 24px 24px); }
 #help-forward-button:not([disabled="true"]):hover { -moz-image-region: rect(24px 48px 48px 24px); }
 #help-forward-button[disabled="true"] { -moz-image-region: rect(48px 48px 72px 24px); }
-#help-forward-button:not([disabled="true"]):active { -moz-image-region: rect(72px 48px 96px 24px); }
+#help-forward-button:not([disabled="true"]):hover:active { -moz-image-region: rect(72px 48px 96px 24px); }
 
 #help-home-button { -moz-image-region: rect(0px 72px 24px 48px); }
 #help-home-button:not([disabled="true"]):hover { -moz-image-region: rect(24px 72px 48px 48px); }
 #help-home-button[disabled="true"] { -moz-image-region: rect(48px 72px 72px 48px); }
-#help-home-button:not([disabled="true"]):active { -moz-image-region: rect(72px 72px 96px 48px); }
+#help-home-button:not([disabled="true"]):hover:active { -moz-image-region: rect(72px 72px 96px 48px); }
 
 #help-print-button { -moz-image-region: rect(0px 96px 24px 72px); }
 #help-print-button:not([disabled="true"]):hover { -moz-image-region: rect(24px 96px 48px 72px); }
 #help-print-button[disabled="true"] { -moz-image-region: rect(48px 96px 72px 72px); }
-#help-print-button:not([disabled="true"]):active { -moz-image-region: rect(72px 96px 96px 72px); }
+#help-print-button:not([disabled="true"]):hover:active { -moz-image-region: rect(72px 96px 96px 72px); }
 
 /* Style the back/forward dropmarks to connect them to the buttons */
-
-/* affects where the dropmark will appear */
-toolbar#HelpToolbar .toolbarbutton-menubutton-stack {
-  margin: 0px !important;
-  padding: 0px;
-  -moz-box-orient: horizontal;
-}
 
 /* Style the back dropmark */
 
 #help-back-button .toolbarbutton-menubutton-dropmarker {
   margin-top: 3px;
-  list-style-image: url("chrome://browser/skin/dropmark-nav.png");
+  list-style-image: url("chrome://global/skin/toolbar/dropmark-nav.png");
   -moz-image-region: rect(0px, 14px, 24px, 0px);
 }
 
@@ -112,7 +104,7 @@ toolbar#HelpToolbar .toolbarbutton-menubutton-stack {
 }
 
 #help-back-button[disabled="true"] .toolbarbutton-menubutton-dropmarker {
-  list-style-image: url("chrome://browser/skin/dropmark-nav.png") !important;
+  list-style-image: url("chrome://global/skin/toolbar/dropmark-nav.png") !important;
   -moz-image-region: rect(48px, 14px, 72px, 0px) !important;
 }
 
@@ -125,7 +117,7 @@ toolbar#HelpToolbar .toolbarbutton-menubutton-stack {
 
 #help-forward-button .toolbarbutton-menubutton-dropmarker {
   margin-top: 3px;
-  list-style-image: url("chrome://browser/skin/dropmark-nav.png");
+  list-style-image: url("chrome://global/skin/toolbar/dropmark-nav.png");
   -moz-image-region: rect(0px, 14px, 24px, 0px);
 }
 #help-forward-button:hover .toolbarbutton-menubutton-dropmarker, 
@@ -133,7 +125,7 @@ toolbar#HelpToolbar .toolbarbutton-menubutton-stack {
   -moz-image-region: rect(24px, 14px, 48px, 0px);
 }
 #help-forward-button[disabled="true"] .toolbarbutton-menubutton-dropmarker {
-  list-style-image: url("chrome://browser/skin/dropmark-nav.png") !important;
+  list-style-image: url("chrome://global/skin/toolbar/dropmark-nav.png") !important;
   -moz-image-region: rect(48px, 14px, 72px, 0px) !important;
 }
 #help-forward-button:hover:active .toolbarbutton-menubutton-dropmarker, 
@@ -141,33 +133,6 @@ toolbar#HelpToolbar .toolbarbutton-menubutton-stack {
   -moz-image-region: rect(72px, 14px, 96px, 0px);
 }
 
-
 #helpsidebar-splitter {
   border-right: 1px solid #bebebe;
-}
-
-#helpsidebar-box toolbarbutton {
-  background-image: url("chrome://global/skin/icons/white-gray-gradient.gif");
-  background-repeat: repeat-x;
-  background-position: bottom right;
-  background-color: rgb(246, 246, 246);
-  border-bottom: 1px solid #b3b3b3;
-  border-right: 1px solid #bebebe;
-  margin: 0px;
-  text-align: left;
-  color: #505050;
-}
-
-#helpsidebar-box toolbarbutton[selected="true"] {
-  color: #000;
-}
-
-#helpsidebar-box tree {
-  margin: 0px !important;
-  padding: 0px !important;
-}
-
-#appcontent {
-  margin-bottom: 14px;
-  border-bottom: 1px solid #bebebe;
 }

@@ -49,8 +49,6 @@ IS_COMPONENT	= 1
 MODULE_NAME	= nsMorkModule
 LIBXUL_LIBRARY = 1
 
-PACKAGE_FILE = mork.pkg
-
 REQUIRES	= xpcom \
 		  $(NULL)
 
@@ -61,7 +59,7 @@ EXPORTS		= \
 		nsIMdbFactoryFactory.h \
 		$(NULL)
 
-SHARED_LIBRARY_LIBS = $(DIST)/lib/$(LIB_PREFIX)msgmork_s.$(LIB_SUFFIX)
+SHARED_LIBRARY_LIBS = ../src/$(LIB_PREFIX)msgmork_s.$(LIB_SUFFIX)
 
 EXTRA_DSO_LDOPTS = \
 		$(LIBS_DIR) \

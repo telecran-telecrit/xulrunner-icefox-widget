@@ -38,7 +38,7 @@
 #
 # ***** END LICENSE BLOCK *****
 #
-#ident	"$Id: Makefile.com,v 1.7.28.2 2006/12/06 21:04:22 christophe.ravel.bugs%sun.com Exp $"
+#ident	"$Id: Makefile.com,v 1.8 2006/12/06 21:14:54 christophe.ravel.bugs%sun.com Exp $"
 #
 
 MACH = $(shell mach)

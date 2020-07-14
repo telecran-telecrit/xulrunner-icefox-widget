@@ -1,3 +1,7 @@
+// This file tests bug 250375
+
+do_load_httpd_js();
+
 function check_request_header(chan, name, value) {
   var chanValue;
   try {
@@ -28,8 +32,12 @@ var listener = {
   },
 
   onStopRequest: function test_onStopR(request, ctx, status) {
-    if (this._iteration == 1 && Components.isSuccessCode(status))
+    if (this._iteration == 1) {
       run_test_continued();
+    } else {
+      do_test_pending();
+      httpserv.stop(do_test_finished);
+    }
     do_test_finished();
   },
 
@@ -39,14 +47,17 @@ var listener = {
 function makeChan() {
   var ios = Components.classes["@mozilla.org/network/io-service;1"]
                       .getService(Components.interfaces.nsIIOService);
-  var chan = ios.newChannel("http://www.mozilla.org/", null, null)
+  var chan = ios.newChannel("http://localhost:4444/", null, null)
                 .QueryInterface(Components.interfaces.nsIHttpChannel);
 
   return chan;
 }
 
+var httpserv = null;
+
 function run_test() {
-  dump("Note: This test needs a network connection\n");
+  httpserv = new nsHttpServer();
+  httpserv.start(4444);
 
   var chan = makeChan();
 
@@ -75,4 +86,3 @@ function run_test_continued() {
 
   do_test_pending();
 }
-

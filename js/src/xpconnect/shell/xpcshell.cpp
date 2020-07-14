@@ -26,6 +26,7 @@
  *   John Bandhauer <jband@netscape.com>
  *   Pierre Phaneuf <pp@ludusdesign.com>
  *   IBM Corp.
+ *   Dan Mosedale <dan.mosedale@oracle.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -44,6 +45,10 @@
 /* XPConnect JavaScript interactive shell. */
 
 #include <stdio.h>
+#include "nsXULAppAPI.h"
+#include "nsServiceManagerUtils.h"
+#include "nsComponentManagerUtils.h"
+#include "nsStringAPI.h"
 #include "nsIXPConnect.h"
 #include "nsIXPCScriptable.h"
 #include "nsIInterfaceInfo.h"
@@ -52,14 +57,28 @@
 #include "nsIServiceManager.h"
 #include "nsIComponentManager.h"
 #include "nsIComponentRegistrar.h"
+#include "nsILocalFile.h"
+#include "nsStringAPI.h"
+#include "nsIDirectoryService.h"
+#include "nsILocalFile.h"
+#include "nsDirectoryServiceDefs.h"
 #include "jsapi.h"
+#include "jsdbgapi.h"
 #include "jsprf.h"
 #include "nscore.h"
 #include "nsMemory.h"
 #include "nsIGenericFactory.h"
+#include "nsISupportsImpl.h"
 #include "nsIJSRuntimeService.h"
 #include "nsCOMPtr.h"
+#include "nsAutoPtr.h"
 #include "nsIXPCSecurityManager.h"
+#ifdef XP_MACOSX
+#include "xpcshellMacUtils.h"
+#endif
+#ifdef XP_WIN
+#include <windows.h>
+#endif
 
 #ifndef XPCONNECT_STANDALONE
 #include "nsIScriptSecurityManager.h"
@@ -77,6 +96,22 @@
 
 #include "nsIJSContextStack.h"
 
+class XPCShellDirProvider : public nsIDirectoryServiceProvider
+{
+public:
+    NS_DECL_ISUPPORTS_INHERITED
+    NS_DECL_NSIDIRECTORYSERVICEPROVIDER
+
+    XPCShellDirProvider() { }
+    ~XPCShellDirProvider() { }
+
+    PRBool SetGREDir(const char *dir);
+    void ClearGREDir() { mGREDir = nsnull; }
+
+private:
+    nsCOMPtr<nsILocalFile> mGREDir;
+};
+
 /***************************************************************************/
 
 #ifdef JS_THREADSAFE
@@ -89,11 +124,14 @@
 
 /***************************************************************************/
 
+static const char kXPConnectServiceContractID[] = "@mozilla.org/js/xpc/XPConnect;1";
+
 #define EXITCODE_RUNTIME_ERROR 3
 #define EXITCODE_FILE_NOT_FOUND 4
 
 FILE *gOutFile = NULL;
 FILE *gErrFile = NULL;
+FILE *gInFile = NULL;
 
 int gExitCode = 0;
 JSBool gQuitting = JS_FALSE;
@@ -101,13 +139,155 @@ static JSBool reportWarnings = JS_TRUE;
 static JSBool compileOnly = JS_FALSE;
 
 JSPrincipals *gJSPrincipals = nsnull;
+nsAutoString *gWorkingDirectory = nsnull;
 
-JS_STATIC_DLL_CALLBACK(void)
+static JSBool
+GetLocationProperty(JSContext *cx, JSObject *obj, jsval id, jsval *vp)
+{
+#if (!defined(XP_WIN) && !defined(XP_UNIX)) || defined(WINCE)
+    //XXX: your platform should really implement this
+    return JS_FALSE;
+#else
+    JSStackFrame *fp = JS_GetScriptedCaller(cx, NULL);
+    JSScript *script = JS_GetFrameScript(cx, fp);
+    const char *filename = JS_GetScriptFilename(cx, script);
+
+    if (filename) {
+        nsresult rv;
+        nsCOMPtr<nsIXPConnect> xpc =
+            do_GetService(kXPConnectServiceContractID, &rv);
+
+#if defined(XP_WIN)
+        // convert from the system codepage to UTF-16
+        int bufferSize = MultiByteToWideChar(CP_ACP, 0, filename,
+                                             -1, NULL, 0);
+        nsAutoString filenameString;
+        filenameString.SetLength(bufferSize);
+        MultiByteToWideChar(CP_ACP, 0, filename,
+                            -1, (LPWSTR)filenameString.BeginWriting(),
+                            filenameString.Length());
+        // remove the null terminator
+        filenameString.SetLength(bufferSize - 1);
+
+        // replace forward slashes with backslashes,
+        // since nsLocalFileWin chokes on them
+        PRUnichar *start, *end;
+
+        filenameString.BeginWriting(&start, &end);
+        
+        while (start != end) {
+            if (*start == L'/')
+                *start = L'\\';
+            start++;
+        }
+#elif defined(XP_UNIX)
+        NS_ConvertUTF8toUTF16 filenameString(filename);
+#endif
+
+        nsCOMPtr<nsILocalFile> location;
+        if (NS_SUCCEEDED(rv)) {
+            rv = NS_NewLocalFile(filenameString,
+                                 PR_FALSE, getter_AddRefs(location));
+        }
+
+        if (!location && gWorkingDirectory) {
+            // could be a relative path, try appending it to the cwd
+            // and then normalize
+            nsAutoString absolutePath(*gWorkingDirectory);
+            absolutePath.Append(filenameString);
+
+            rv = NS_NewLocalFile(absolutePath,
+                                 PR_FALSE, getter_AddRefs(location));
+        }
+
+        if (location) {
+            nsCOMPtr<nsIXPConnectJSObjectHolder> locationHolder;
+            JSObject *locationObj = NULL;
+
+            PRBool symlink;
+            // don't normalize symlinks, because that's kind of confusing
+            if (NS_SUCCEEDED(location->IsSymlink(&symlink)) &&
+                !symlink)
+                location->Normalize();
+            rv = xpc->WrapNative(cx, obj, location,
+                                 NS_GET_IID(nsILocalFile),
+                                 getter_AddRefs(locationHolder));
+
+            if (NS_SUCCEEDED(rv) &&
+                NS_SUCCEEDED(locationHolder->GetJSObject(&locationObj))) {
+                *vp = OBJECT_TO_JSVAL(locationObj);
+            }
+        }
+    }
+
+    return JS_TRUE;
+#endif
+}
+
+static JSBool
+GetLine(JSContext *cx, char *bufp, FILE *file, const char *prompt) {
+#ifdef EDITLINE
+    /*
+     * Use readline only if file is stdin, because there's no way to specify
+     * another handle.  Are other filehandles interactive?
+     */
+    if (file == stdin) {
+        char *linep = readline(prompt);
+        if (!linep)
+            return JS_FALSE;
+        if (*linep)
+            add_history(linep);
+        strcpy(bufp, linep);
+        JS_free(cx, linep);
+        bufp += strlen(bufp);
+        *bufp++ = '\n';
+        *bufp = '\0';
+    } else
+#endif
+    {
+        char line[256];
+        fprintf(gOutFile, prompt);
+        fflush(gOutFile);
+        if (!fgets(line, sizeof line, file))
+            return JS_FALSE;
+        strcpy(bufp, line);
+    }
+    return JS_TRUE;
+}
+
+static void
 my_ErrorReporter(JSContext *cx, const char *message, JSErrorReport *report)
 {
     int i, j, k, n;
     char *prefix = NULL, *tmp;
     const char *ctmp;
+    JSStackFrame * fp = nsnull;
+    nsCOMPtr<nsIXPConnect> xpc;
+
+    // Don't report an exception from inner JS frames as the callers may intend
+    // to handle it.
+    while ((fp = JS_FrameIterator(cx, &fp))) {
+        if (!JS_IsNativeFrame(cx, fp)) {
+            return;
+        }
+    }
+
+    // In some cases cx->fp is null here so use XPConnect to tell us about inner
+    // frames.
+    if ((xpc = do_GetService(nsIXPConnect::GetCID()))) {
+        nsAXPCNativeCallContext *cc = nsnull;
+        xpc->GetCurrentNativeCallContext(&cc);
+        if (cc) {
+            nsAXPCNativeCallContext *prev = cc;
+            while (NS_SUCCEEDED(prev->GetPreviousCallContext(&prev)) && prev) {
+                PRUint16 lang;
+                if (NS_SUCCEEDED(prev->GetLanguage(&lang)) &&
+                    lang == nsAXPCNativeCallContext::LANG_JS) {
+                    return;
+                }
+            }
+        }
+    }
 
     if (!report) {
         fprintf(gErrFile, "%s\n", message);
@@ -169,7 +349,49 @@ my_ErrorReporter(JSContext *cx, const char *message, JSErrorReport *report)
     JS_free(cx, prefix);
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
+ReadLine(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
+{
+    // While 4096 might be quite arbitrary, this is something to be fixed in
+    // bug 105707. It is also the same limit as in ProcessFile.
+    char buf[4096];
+    JSString *str;
+
+    /* If a prompt was specified, construct the string */
+    if (argc > 0) {
+        str = JS_ValueToString(cx, argv[0]);
+        if (!str)
+            return JS_FALSE;
+        argv[0] = STRING_TO_JSVAL(str);
+    } else {
+        str = JSVAL_TO_STRING(JS_GetEmptyStringValue(cx));
+    }
+
+    /* Get a line from the infile */
+    if (!GetLine(cx, buf, gInFile, JS_GetStringBytes(str)))
+        return JS_FALSE;
+
+    /* Strip newline character added by GetLine() */
+    unsigned int buflen = strlen(buf);
+    if (buflen == 0) {
+        if (feof(gInFile)) {
+            *rval = JSVAL_NULL;
+            return JS_TRUE;
+        }
+    } else if (buf[buflen - 1] == '\n') {
+        --buflen;
+    }
+
+    /* Turn buf into a JSString */
+    str = JS_NewStringCopyN(cx, buf, buflen);
+    if (!str)
+        return JS_FALSE;
+
+    *rval = STRING_TO_JSVAL(str);
+    return JS_TRUE;
+}
+
+static JSBool
 Print(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     uintN i, n;
@@ -187,7 +409,7 @@ Print(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 Dump(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     JSString *str;
@@ -206,7 +428,7 @@ Dump(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 Load(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     uintN i;
@@ -224,23 +446,27 @@ Load(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
         argv[i] = STRING_TO_JSVAL(str);
         filename = JS_GetStringBytes(str);
         file = fopen(filename, "r");
+        if (!file) {
+            JS_ReportError(cx, "cannot open file '%s' for reading", filename);
+            return JS_FALSE;
+        }
         script = JS_CompileFileHandleForPrincipals(cx, obj, filename, file,
                                                    gJSPrincipals);
+        fclose(file);
         if (!script)
-            ok = JS_FALSE;
-        else {
-            ok = !compileOnly
-                 ? JS_ExecuteScript(cx, obj, script, &result)
-                 : JS_TRUE;
-            JS_DestroyScript(cx, script);
-        }
+            return JS_FALSE;
+
+        ok = !compileOnly
+             ? JS_ExecuteScript(cx, obj, script, &result)
+             : JS_TRUE;
+        JS_DestroyScript(cx, script);
         if (!ok)
             return JS_FALSE;
     }
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 Version(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     if (argc > 0 && JSVAL_IS_INT(argv[0]))
@@ -250,14 +476,14 @@ Version(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 BuildDate(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     fprintf(gOutFile, "built on %s at %s\n", __DATE__, __TIME__);
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 Quit(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
 #ifdef LIVECONNECT
@@ -272,7 +498,7 @@ Quit(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     return JS_FALSE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 DumpXPC(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     int32 depth = 2;
@@ -291,11 +517,7 @@ DumpXPC(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 /* XXX needed only by GC() */
 #include "jscntxt.h"
 
-#ifdef GC_MARK_DEBUG
-extern "C" JS_FRIEND_DATA(FILE *) js_DumpGCHeap;
-#endif
-
-JS_STATIC_DLL_CALLBACK(JSBool)
+static JSBool
 GC(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     JSRuntime *rt;
@@ -303,25 +525,7 @@ GC(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 
     rt = cx->runtime;
     preBytes = rt->gcBytes;
-#ifdef GC_MARK_DEBUG
-    if (argc && JSVAL_IS_STRING(argv[0])) {
-        char *name = JS_GetStringBytes(JSVAL_TO_STRING(argv[0]));
-        FILE *file = fopen(name, "w");
-        if (!file) {
-            fprintf(gErrFile, "gc: can't open %s: %s\n", strerror(errno));
-            return JS_FALSE;
-        }
-        js_DumpGCHeap = file;
-    } else {
-        js_DumpGCHeap = stdout;
-    }
-#endif
     JS_GC(cx);
-#ifdef GC_MARK_DEBUG
-    if (js_DumpGCHeap != stdout)
-        fclose(js_DumpGCHeap);
-    js_DumpGCHeap = NULL;
-#endif
     fprintf(gOutFile, "before %lu, after %lu, break %08lx\n",
            (unsigned long)preBytes, (unsigned long)rt->gcBytes,
 #ifdef XP_UNIX
@@ -336,7 +540,90 @@ GC(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
     return JS_TRUE;
 }
 
-JS_STATIC_DLL_CALLBACK(JSBool)
+#ifdef DEBUG
+
+static JSBool
+DumpHeap(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
+{
+    char *fileName = NULL;
+    void* startThing = NULL;
+    uint32 startTraceKind = 0;
+    void *thingToFind = NULL;
+    size_t maxDepth = (size_t)-1;
+    void *thingToIgnore = NULL;
+    jsval *vp;
+    FILE *dumpFile;
+    JSBool ok;
+
+    vp = &argv[0];
+    if (*vp != JSVAL_NULL && *vp != JSVAL_VOID) {
+        JSString *str;
+
+        str = JS_ValueToString(cx, *vp);
+        if (!str)
+            return JS_FALSE;
+        *vp = STRING_TO_JSVAL(str);
+        fileName = JS_GetStringBytes(str);
+    }
+
+    vp = &argv[1];
+    if (*vp != JSVAL_NULL && *vp != JSVAL_VOID) {
+        if (!JSVAL_IS_TRACEABLE(*vp))
+            goto not_traceable_arg;
+        startThing = JSVAL_TO_TRACEABLE(*vp);
+        startTraceKind = JSVAL_TRACE_KIND(*vp);
+    }
+
+    vp = &argv[2];
+    if (*vp != JSVAL_NULL && *vp != JSVAL_VOID) {
+        if (!JSVAL_IS_TRACEABLE(*vp))
+            goto not_traceable_arg;
+        thingToFind = JSVAL_TO_TRACEABLE(*vp);
+    }
+
+    vp = &argv[3];
+    if (*vp != JSVAL_NULL && *vp != JSVAL_VOID) {
+        uint32 depth;
+
+        if (!JS_ValueToECMAUint32(cx, *vp, &depth))
+            return JS_FALSE;
+        maxDepth = depth;
+    }
+
+    vp = &argv[4];
+    if (*vp != JSVAL_NULL && *vp != JSVAL_VOID) {
+        if (!JSVAL_IS_TRACEABLE(*vp))
+            goto not_traceable_arg;
+        thingToIgnore = JSVAL_TO_TRACEABLE(*vp);
+    }
+
+    if (!fileName) {
+        dumpFile = gOutFile;
+    } else {
+        dumpFile = fopen(fileName, "w");
+        if (!dumpFile) {
+            fprintf(gErrFile, "dumpHeap: can't open %s: %s\n",
+                    fileName, strerror(errno));
+            return JS_FALSE;
+        }
+    }
+
+    ok = JS_DumpHeap(cx, dumpFile, startThing, startTraceKind, thingToFind,
+                     maxDepth, thingToIgnore);
+    if (dumpFile != gOutFile)
+        fclose(dumpFile);
+    return ok;
+
+  not_traceable_arg:
+    fprintf(gErrFile,
+            "dumpHeap: argument %u is not null or a heap-allocated thing\n",
+            (unsigned)(vp - argv));
+    return JS_FALSE;
+}
+
+#endif /* DEBUG */
+
+static JSBool
 Clear(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
     if (argc > 0 && !JSVAL_IS_PRIMITIVE(argv[0])) {
@@ -349,16 +636,31 @@ Clear(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 }
 
 static JSFunctionSpec glob_functions[] = {
-    {"print",           Print,          0},
-    {"load",            Load,           1},
-    {"quit",            Quit,           0},
-    {"version",         Version,        1},
-    {"build",           BuildDate,      0},
-    {"dumpXPC",         DumpXPC,        1},
-    {"dump",            Dump,           1},
-    {"gc",              GC,             0},
-    {"clear",           Clear,          1},
-    {0}
+    {"print",           Print,          0,0,0},
+    {"readline",        ReadLine,       1,0,0},
+    {"load",            Load,           1,0,0},
+    {"quit",            Quit,           0,0,0},
+    {"version",         Version,        1,0,0},
+    {"build",           BuildDate,      0,0,0},
+    {"dumpXPC",         DumpXPC,        1,0,0},
+    {"dump",            Dump,           1,0,0},
+    {"gc",              GC,             0,0,0},
+    {"clear",           Clear,          1,0,0},
+#ifdef DEBUG
+    {"dumpHeap",        DumpHeap,       5,0,0},
+#endif
+#ifdef MOZ_SHARK
+    {"startShark",      js_StartShark,      0,0,0},
+    {"stopShark",       js_StopShark,       0,0,0},
+    {"connectShark",    js_ConnectShark,    0,0,0},
+    {"disconnectShark", js_DisconnectShark, 0,0,0},
+#endif
+#ifdef MOZ_CALLGRIND
+    {"startCallgrind",  js_StartCallgrind,  0,0,0},
+    {"stopCallgrind",   js_StopCallgrind,   0,0,0},
+    {"dumpCallgrind",   js_DumpCallgrind,   1,0,0},
+#endif
+    {nsnull,nsnull,0,0,0}
 };
 
 JSClass global_class = {
@@ -382,7 +684,8 @@ env_setProperty(JSContext *cx, JSObject *obj, jsval id, jsval *vp)
         return JS_FALSE;
     name = JS_GetStringBytes(idstr);
     value = JS_GetStringBytes(valstr);
-#if defined XP_WIN || defined HPUX || defined OSF1 || defined IRIX
+#if defined XP_WIN || defined HPUX || defined OSF1 || defined IRIX \
+    || defined SCO
     {
         char *waste = JS_smprintf("%s=%s", name, value);
         if (!waste) {
@@ -493,18 +796,13 @@ typedef enum JSShellErrNum {
 } JSShellErrNum;
 
 JSErrorFormatString jsShell_ErrorFormatString[JSErr_Limit] = {
-#if JS_HAS_DFLT_MSG_STRINGS
 #define MSG_DEF(name, number, count, exception, format) \
     { format, count } ,
-#else
-#define MSG_DEF(name, number, count, exception, format) \
-    { NULL, count } ,
-#endif
 #include "jsshell.msg"
 #undef MSG_DEF
 };
 
-JS_STATIC_DLL_CALLBACK(const JSErrorFormatString *)
+static const JSErrorFormatString *
 my_GetErrorMessage(void *userRef, const char *locale, const uintN errorNumber)
 {
     if ((errorNumber > 0) && (errorNumber < JSShellErr_Limit))
@@ -520,39 +818,9 @@ extern void     add_history(char *line);
 }
 #endif
 
-static JSBool
-GetLine(JSContext *cx, char *bufp, FILE *file, const char *prompt) {
-#ifdef EDITLINE
-    /*
-     * Use readline only if file is stdin, because there's no way to specify
-     * another handle.  Are other filehandles interactive?
-     */
-    if (file == stdin) {
-        char *linep = readline(prompt);
-        if (!linep)
-            return JS_FALSE;
-        if (*linep)
-            add_history(linep);
-        strcpy(bufp, linep);
-        JS_free(cx, linep);
-        bufp += strlen(bufp);
-        *bufp++ = '\n';
-        *bufp = '\0';
-    } else
-#endif
-    {
-        char line[256];
-        fprintf(gOutFile, prompt);
-        fflush(gOutFile);
-        if (!fgets(line, sizeof line, file))
-            return JS_FALSE;
-        strcpy(bufp, line);
-    }
-    return JS_TRUE;
-}
-
 static void
-ProcessFile(JSContext *cx, JSObject *obj, const char *filename, FILE *file)
+ProcessFile(JSContext *cx, JSObject *obj, const char *filename, FILE *file,
+            JSBool forceTTY)
 {
     JSScript *script;
     jsval result;
@@ -561,7 +829,9 @@ ProcessFile(JSContext *cx, JSObject *obj, const char *filename, FILE *file)
     char *bufp, buffer[4096];
     JSString *str;
 
-    if (!isatty(fileno(file))) {
+    if (forceTTY) {
+        file = stdin;
+    } else if (!isatty(fileno(file))) {
         /*
          * It's not interactive - just execute it.
          *
@@ -589,6 +859,7 @@ ProcessFile(JSContext *cx, JSObject *obj, const char *filename, FILE *file)
             JS_DestroyScript(cx, script);
         }
         DoEndRequest(cx);
+
         return;
     }
 
@@ -636,36 +907,21 @@ ProcessFile(JSContext *cx, JSObject *obj, const char *filename, FILE *file)
                     else
                         ok = JS_FALSE;
                 }
-#if 0
-#if JS_HAS_ERROR_EXCEPTIONS
-                /*
-                 * Require that any time we return failure, an exception has
-                 * been set.
-                 */
-                JS_ASSERT(ok || JS_IsExceptionPending(cx));
-    
-                /*
-                 * Also that any time an exception has been set, we've
-                 * returned failure.
-                 */
-                JS_ASSERT(!JS_IsExceptionPending(cx) || !ok);
-#endif /* JS_HAS_ERROR_EXCEPTIONS */
-#endif
             }
             JS_DestroyScript(cx, script);
         }
         DoEndRequest(cx);
     } while (!hitEOF && !gQuitting);
+
     fprintf(gOutFile, "\n");
-    return;
 }
 
 static void
-Process(JSContext *cx, JSObject *obj, const char *filename)
+Process(JSContext *cx, JSObject *obj, const char *filename, JSBool forceTTY)
 {
     FILE *file;
 
-    if (!filename || strcmp(filename, "-") == 0) {
+    if (forceTTY || !filename || strcmp(filename, "-") == 0) {
         file = stdin;
     } else {
         file = fopen(filename, "r");
@@ -678,14 +934,16 @@ Process(JSContext *cx, JSObject *obj, const char *filename)
         }
     }
 
-    ProcessFile(cx, obj, filename, file);
+    ProcessFile(cx, obj, filename, file, forceTTY);
+    if (file != stdin)
+        fclose(file);
 }
 
 static int
 usage(void)
 {
     fprintf(gErrFile, "%s\n", JS_GetImplementationVersion());
-    fprintf(gErrFile, "usage: xpcshell [-PswWxC] [-v version] [-f scriptfile] [-e script] [scriptfile] [scriptarg...]\n");
+    fprintf(gErrFile, "usage: xpcshell [-g gredir] [-PswWxCij] [-v version] [-f scriptfile] [-e script] [scriptfile] [scriptarg...]\n");
     return 2;
 }
 
@@ -700,11 +958,13 @@ ProcessArgs(JSContext *cx, JSObject *obj, char **argv, int argc)
     JSObject *argsObj;
     char *filename = NULL;
     JSBool isInteractive = JS_TRUE;
+    JSBool forceTTY = JS_FALSE;
 
     rcfile = fopen(rcfilename, "r");
     if (rcfile) {
         printf("[loading '%s'...]\n", rcfilename);
-        ProcessFile(cx, obj, rcfilename, rcfile);
+        ProcessFile(cx, obj, rcfilename, rcfile, JS_FALSE);
+        fclose(rcfile);
     }
 
     /*
@@ -796,7 +1056,7 @@ ProcessArgs(JSContext *cx, JSObject *obj, char **argv, int argc)
             if (++i == argc) {
                 return usage();
             }
-            Process(cx, obj, argv[i]);
+            Process(cx, obj, argv[i], JS_FALSE);
             /*
              * XXX: js -f foo.js should interpret foo.js and then
              * drop into interactive mode, but that breaks test
@@ -804,7 +1064,9 @@ ProcessArgs(JSContext *cx, JSObject *obj, char **argv, int argc)
              */
             isInteractive = JS_FALSE;
             break;
-
+        case 'i':
+            isInteractive = forceTTY = JS_TRUE;
+            break;
         case 'e':
         {
             jsval rval;
@@ -813,8 +1075,8 @@ ProcessArgs(JSContext *cx, JSObject *obj, char **argv, int argc)
                 return usage();
             }
 
-            JS_EvaluateScript(cx, obj, argv[i], strlen(argv[i]), 
-                              "-e", 1, &rval);
+            JS_EvaluateScriptForPrincipals(cx, obj, gJSPrincipals, argv[i],
+                                           strlen(argv[i]), "-e", 1, &rval);
 
             isInteractive = JS_FALSE;
             break;
@@ -823,35 +1085,81 @@ ProcessArgs(JSContext *cx, JSObject *obj, char **argv, int argc)
             compileOnly = JS_TRUE;
             isInteractive = JS_FALSE;
             break;
-
+        case 'j':
+            JS_ToggleOptions(cx, JSOPTION_JIT);
+            break;
+#ifdef MOZ_SHARK
+        case 'k':
+            JS_ConnectShark();
+            break;
+#endif
         default:
             return usage();
         }
     }
 
     if (filename || isInteractive)
-        Process(cx, obj, filename);
+        Process(cx, obj, filename, forceTTY);
     return gExitCode;
 }
 
 /***************************************************************************/
 
-class FullTrustSecMan : public nsIXPCSecurityManager
+class FullTrustSecMan
+#ifndef XPCONNECT_STANDALONE
+  : public nsIScriptSecurityManager_1_9_2
+#else
+  : public nsIXPCSecurityManager
+#endif
 {
 public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIXPCSECURITYMANAGER
+  NS_DECL_NSISCRIPTSECURITYMANAGER_1_9_2
+#ifndef XPCONNECT_STANDALONE
+  NS_DECL_NSISCRIPTSECURITYMANAGER
+#endif
+
   FullTrustSecMan();
+  virtual ~FullTrustSecMan();
+
+#ifndef XPCONNECT_STANDALONE
+  void SetSystemPrincipal(nsIPrincipal *aPrincipal) {
+    mSystemPrincipal = aPrincipal;
+  }
+
+private:
+  nsCOMPtr<nsIPrincipal> mSystemPrincipal;
+#endif
 };
 
-NS_IMPL_ISUPPORTS1(FullTrustSecMan, nsIXPCSecurityManager)
+NS_INTERFACE_MAP_BEGIN(FullTrustSecMan)
+  NS_INTERFACE_MAP_ENTRY(nsIXPCSecurityManager)
+#ifndef XPCONNECT_STANDALONE
+  NS_INTERFACE_MAP_ENTRY(nsIScriptSecurityManager)
+  NS_INTERFACE_MAP_ENTRY(nsIScriptSecurityManager_1_9_2)
+#endif
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXPCSecurityManager)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_ADDREF(FullTrustSecMan)
+NS_IMPL_RELEASE(FullTrustSecMan)
 
 FullTrustSecMan::FullTrustSecMan()
+{
+#ifndef XPCONNECT_STANDALONE
+  mSystemPrincipal = nsnull;
+#endif
+}
+
+FullTrustSecMan::~FullTrustSecMan()
 {
 }
 
 NS_IMETHODIMP
-FullTrustSecMan::CanCreateWrapper(JSContext * aJSContext, const nsIID & aIID, nsISupports *aObj, nsIClassInfo *aClassInfo, void * *aPolicy)
+FullTrustSecMan::CanCreateWrapper(JSContext * aJSContext, const nsIID & aIID,
+                                  nsISupports *aObj, nsIClassInfo *aClassInfo,
+                                  void * *aPolicy)
 {
     return NS_OK;
 }
@@ -868,12 +1176,259 @@ FullTrustSecMan::CanGetService(JSContext * aJSContext, const nsCID & aCID)
     return NS_OK;
 }
 
+#ifndef XPCONNECT_STANDALONE
 /* void CanAccess (in PRUint32 aAction, in nsIXPCNativeCallContext aCallContext, in JSContextPtr aJSContext, in JSObjectPtr aJSObject, in nsISupports aObj, in nsIClassInfo aClassInfo, in JSVal aName, inout voidPtr aPolicy); */
-NS_IMETHODIMP 
-FullTrustSecMan::CanAccess(PRUint32 aAction, nsIXPCNativeCallContext *aCallContext, JSContext * aJSContext, JSObject * aJSObject, nsISupports *aObj, nsIClassInfo *aClassInfo, jsval aName, void * *aPolicy)
+NS_IMETHODIMP
+FullTrustSecMan::CanAccess(PRUint32 aAction,
+                           nsAXPCNativeCallContext *aCallContext,
+                           JSContext * aJSContext, JSObject * aJSObject,
+                           nsISupports *aObj, nsIClassInfo *aClassInfo,
+                           jsval aName, void * *aPolicy)
 {
     return NS_OK;
 }
+
+/* [noscript] void checkPropertyAccess (in JSContextPtr aJSContext, in JSObjectPtr aJSObject, in string aClassName, in JSVal aProperty, in PRUint32 aAction); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckPropertyAccess(JSContext * aJSContext,
+                                     JSObject * aJSObject,
+                                     const char *aClassName,
+                                     jsval aProperty, PRUint32 aAction)
+{
+    return NS_OK;
+}
+
+/* [noscript] void checkConnect (in JSContextPtr aJSContext, in nsIURI aTargetURI, in string aClassName, in string aProperty); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckConnect(JSContext * aJSContext, nsIURI *aTargetURI,
+                              const char *aClassName, const char *aProperty)
+{
+    return NS_OK;
+}
+
+/* [noscript] void checkLoadURIFromScript (in JSContextPtr cx, in nsIURI uri); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckLoadURIFromScript(JSContext * cx, nsIURI *uri)
+{
+    return NS_OK;
+}
+
+/* void checkLoadURIWithPrincipal (in nsIPrincipal aPrincipal, in nsIURI uri, in unsigned long flags); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckLoadURIWithPrincipal(nsIPrincipal *aPrincipal,
+                                           nsIURI *uri, PRUint32 flags)
+{
+    return NS_OK;
+}
+
+/* void checkLoadURI (in nsIURI from, in nsIURI uri, in unsigned long flags); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckLoadURI(nsIURI *from, nsIURI *uri, PRUint32 flags)
+{
+    return NS_OK;
+}
+
+/* void checkLoadURIStrWithPrincipal (in nsIPrincipal aPrincipal, in AUTF8String uri, in unsigned long flags); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckLoadURIStrWithPrincipal(nsIPrincipal *aPrincipal,
+                                              const nsACString & uri,
+                                              PRUint32 flags)
+{
+    return NS_OK;
+}
+
+/* void checkLoadURIStr (in AUTF8String from, in AUTF8String uri, in unsigned long flags); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckLoadURIStr(const nsACString & from,
+                                 const nsACString & uri, PRUint32 flags)
+{
+    return NS_OK;
+}
+
+/* [noscript] void checkFunctionAccess (in JSContextPtr cx, in voidPtr funObj, in voidPtr targetObj); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckFunctionAccess(JSContext * cx, void * funObj,
+                                     void * targetObj)
+{
+    return NS_OK;
+}
+
+/* [noscript] boolean canExecuteScripts (in JSContextPtr cx, in nsIPrincipal principal); */
+NS_IMETHODIMP
+FullTrustSecMan::CanExecuteScripts(JSContext * cx, nsIPrincipal *principal,
+                                   PRBool *_retval)
+{
+    *_retval = PR_TRUE;
+    return NS_OK;
+}
+
+/* [noscript] nsIPrincipal getSubjectPrincipal (); */
+NS_IMETHODIMP
+FullTrustSecMan::GetSubjectPrincipal(nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] void pushContextPrincipal (in JSContextPtr cx, in JSStackFramePtr fp, in nsIPrincipal principal); */
+NS_IMETHODIMP
+FullTrustSecMan::PushContextPrincipal(JSContext * cx, JSStackFrame * fp, nsIPrincipal *principal)
+{
+    return NS_OK;
+}
+
+/* [noscript] void popContextPrincipal (in JSContextPtr cx); */
+NS_IMETHODIMP
+FullTrustSecMan::PopContextPrincipal(JSContext * cx)
+{
+    return NS_OK;
+}
+
+/* [noscript] nsIPrincipal getSystemPrincipal (); */
+NS_IMETHODIMP
+FullTrustSecMan::GetSystemPrincipal(nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] nsIPrincipal getCertificatePrincipal (in AUTF8String aCertFingerprint, in AUTF8String aSubjectName, in AUTF8String aPrettyName, in nsISupports aCert, in nsIURI aURI); */
+NS_IMETHODIMP
+FullTrustSecMan::GetCertificatePrincipal(const nsACString & aCertFingerprint,
+                                         const nsACString & aSubjectName,
+                                         const nsACString & aPrettyName,
+                                         nsISupports *aCert, nsIURI *aURI,
+                                         nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] nsIPrincipal getCodebasePrincipal (in nsIURI aURI); */
+NS_IMETHODIMP
+FullTrustSecMan::GetCodebasePrincipal(nsIURI *aURI, nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] short requestCapability (in nsIPrincipal principal, in string capability); */
+NS_IMETHODIMP
+FullTrustSecMan::RequestCapability(nsIPrincipal *principal,
+                                   const char *capability, PRInt16 *_retval)
+{
+    *_retval = nsIPrincipal::ENABLE_GRANTED;
+    return NS_OK;
+}
+
+/* boolean isCapabilityEnabled (in string capability); */
+NS_IMETHODIMP
+FullTrustSecMan::IsCapabilityEnabled(const char *capability, PRBool *_retval)
+{
+    *_retval = PR_TRUE;
+    return NS_OK;
+}
+
+/* void enableCapability (in string capability); */
+NS_IMETHODIMP
+FullTrustSecMan::EnableCapability(const char *capability)
+{
+    return NS_OK;;
+}
+
+/* void revertCapability (in string capability); */
+NS_IMETHODIMP
+FullTrustSecMan::RevertCapability(const char *capability)
+{
+    return NS_OK;
+}
+
+/* void disableCapability (in string capability); */
+NS_IMETHODIMP
+FullTrustSecMan::DisableCapability(const char *capability)
+{
+    return NS_OK;
+}
+
+/* void setCanEnableCapability (in AUTF8String certificateFingerprint, in string capability, in short canEnable); */
+NS_IMETHODIMP
+FullTrustSecMan::SetCanEnableCapability(const nsACString & certificateFingerprint,
+                                        const char *capability,
+                                        PRInt16 canEnable)
+{
+    return NS_OK;
+}
+
+/* [noscript] nsIPrincipal getObjectPrincipal (in JSContextPtr cx, in JSObjectPtr obj); */
+NS_IMETHODIMP
+FullTrustSecMan::GetObjectPrincipal(JSContext * cx, JSObject * obj,
+                                    nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] boolean subjectPrincipalIsSystem (); */
+NS_IMETHODIMP
+FullTrustSecMan::SubjectPrincipalIsSystem(PRBool *_retval)
+{
+    *_retval = PR_TRUE;
+    return NS_OK;
+}
+
+/* [noscript] void checkSameOrigin (in JSContextPtr aJSContext, in nsIURI aTargetURI); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckSameOrigin(JSContext * aJSContext, nsIURI *aTargetURI)
+{
+    return NS_OK;
+}
+
+/* void checkSameOriginURI (in nsIURI aSourceURI, in nsIURI aTargetURI); */
+NS_IMETHODIMP
+FullTrustSecMan::CheckSameOriginURI(nsIURI *aSourceURI, nsIURI *aTargetURI,
+                                    PRBool reportError)
+{
+    return NS_OK;
+}
+
+/* [noscript] nsIPrincipal getPrincipalFromContext (in JSContextPtr cx); */
+NS_IMETHODIMP
+FullTrustSecMan::GetPrincipalFromContext(JSContext * cx, nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* [noscript] nsIPrincipal getChannelPrincipal (in nsIChannel aChannel); */
+NS_IMETHODIMP
+FullTrustSecMan::GetChannelPrincipal(nsIChannel *aChannel, nsIPrincipal **_retval)
+{
+    NS_IF_ADDREF(*_retval = mSystemPrincipal);
+    return *_retval ? NS_OK : NS_ERROR_FAILURE;
+}
+
+/* boolean isSystemPrincipal (in nsIPrincipal aPrincipal); */
+NS_IMETHODIMP
+FullTrustSecMan::IsSystemPrincipal(nsIPrincipal *aPrincipal, PRBool *_retval)
+{
+    *_retval = aPrincipal == mSystemPrincipal;
+    return NS_OK;
+}
+
+NS_IMETHODIMP_(nsIPrincipal *)
+FullTrustSecMan::GetCxSubjectPrincipal(JSContext *cx)
+{
+    return mSystemPrincipal;
+}
+
+NS_IMETHODIMP_(nsIPrincipal *)
+FullTrustSecMan::GetCxSubjectPrincipalAndFrame(JSContext *cx, JSStackFrame **fp)
+{
+    *fp = nsnull;
+    return mSystemPrincipal;
+}
+
+#endif
 
 /***************************************************************************/
 
@@ -959,20 +1514,112 @@ nsXPCFunctionThisTranslator::TranslateThis(nsISupports *aInitialThis,
 
 #endif
 
+// ContextCallback calls are chained
+static JSContextCallback gOldJSContextCallback;
+
+static JSBool
+ContextCallback(JSContext *cx, uintN contextOp)
+{
+    if (gOldJSContextCallback && !gOldJSContextCallback(cx, contextOp))
+        return JS_FALSE;
+
+    if (contextOp == JSCONTEXT_NEW) {
+        JS_SetErrorReporter(cx, my_ErrorReporter);
+        JS_SetVersion(cx, JSVERSION_LATEST);
+    }
+    return JS_TRUE;
+}
+
+static bool
+GetCurrentWorkingDirectory(nsAString& workingDirectory)
+{
+#if (!defined(XP_WIN) && !defined(XP_UNIX)) || defined(WINCE)
+    //XXX: your platform should really implement this
+    return false;
+#elif XP_WIN
+    DWORD requiredLength = GetCurrentDirectoryW(0, NULL);
+    workingDirectory.SetLength(requiredLength);
+    GetCurrentDirectoryW(workingDirectory.Length(),
+                         (LPWSTR)workingDirectory.BeginWriting());
+    // we got a trailing null there
+    workingDirectory.SetLength(requiredLength);
+    workingDirectory.Replace(workingDirectory.Length() - 1, 1, L'\\');
+#elif defined(XP_UNIX)
+    nsCAutoString cwd;
+    // 1024 is just a guess at a sane starting value
+    size_t bufsize = 1024;
+    char* result = nsnull;
+    while (result == nsnull) {
+        if (!cwd.SetLength(bufsize))
+            return false;
+        result = getcwd(cwd.BeginWriting(), cwd.Length());
+        if (!result) {
+            if (errno != ERANGE)
+                return false;
+            // need to make the buffer bigger
+            bufsize *= 2;
+        }
+    }
+    // size back down to the actual string length
+    cwd.SetLength(strlen(result) + 1);
+    cwd.Replace(cwd.Length() - 1, 1, '/');
+    workingDirectory = NS_ConvertUTF8toUTF16(cwd);
+#endif
+    return true;
+}
+
 int
 main(int argc, char **argv, char **envp)
 {
+#ifdef XP_MACOSX
+    InitAutoreleasePool();
+#endif
     JSRuntime *rt;
     JSContext *cx;
     JSObject *glob, *envobj;
     int result;
     nsresult rv;
 
+    // unbuffer stdout so that output is in the correct order; note that stderr
+    // is unbuffered by default
+    setbuf(stdout, 0);
+
     gErrFile = stderr;
     gOutFile = stdout;
+    gInFile = stdin;
+
+    NS_LogInit();
+
+    nsCOMPtr<nsILocalFile> appFile;
+    rv = XRE_GetBinaryPath(argv[0], getter_AddRefs(appFile));
+    if (NS_FAILED(rv)) {
+        printf("Couldn't find application file.\n");
+        return 1;
+    }
+    nsCOMPtr<nsIFile> appDir;
+    rv = appFile->GetParent(getter_AddRefs(appDir));
+    if (NS_FAILED(rv)) {
+        printf("Couldn't get application directory.\n");
+        return 1;
+    }
+
+    XPCShellDirProvider dirprovider;
+
+    if (argc > 1 && !strcmp(argv[1], "-g")) {
+        if (argc < 3)
+            return usage();
+
+        if (!dirprovider.SetGREDir(argv[2])) {
+            printf("SetGREDir failed.\n");
+            return 1;
+        }
+        argc -= 2;
+        argv += 2;
+    }
+
     {
         nsCOMPtr<nsIServiceManager> servMan;
-        rv = NS_InitXPCOM2(getter_AddRefs(servMan), nsnull, nsnull);
+        rv = NS_InitXPCOM2(getter_AddRefs(servMan), appDir, &dirprovider);
         if (NS_FAILED(rv)) {
             printf("NS_InitXPCOM failed!\n");
             return 1;
@@ -996,13 +1643,13 @@ main(int argc, char **argv, char **envp)
             return 1;
         }
 
+        gOldJSContextCallback = JS_SetContextCallback(rt, ContextCallback);
+
         cx = JS_NewContext(rt, 8192);
         if (!cx) {
             printf("JS_NewContext failed!\n");
             return 1;
         }
-
-        JS_SetErrorReporter(cx, my_ErrorReporter);
 
         nsCOMPtr<nsIXPConnect> xpc = do_GetService(nsIXPConnect::GetCID());
         if (!xpc) {
@@ -1012,15 +1659,8 @@ main(int argc, char **argv, char **envp)
 
         // Since the caps security system might set a default security manager
         // we will be sure that the secman on this context gives full trust.
-        // That way we can avoid getting principals from the caps security manager
-        // just to shut it up. Also, note that even though our secman will allow
-        // anything, we set the flags to '0' so it ought never get called anyway.
-        nsCOMPtr<nsIXPCSecurityManager> secman =
-            NS_STATIC_CAST(nsIXPCSecurityManager*, new FullTrustSecMan());
-        xpc->SetSecurityManagerForJSContext(cx, secman, 0);
-
-        //    xpc->SetCollectGarbageOnMainThreadOnly(PR_TRUE);
-        //    xpc->SetDeferReleasesUntilAfterGarbageCollection(PR_TRUE);
+        nsRefPtr<FullTrustSecMan> secman = new FullTrustSecMan();
+        xpc->SetSecurityManagerForJSContext(cx, secman, 0xFFFF);
 
 #ifndef XPCONNECT_STANDALONE
         // Fetch the system principal and store it away in a global, to use for
@@ -1041,6 +1681,7 @@ main(int argc, char **argv, char **envp)
                     if (NS_FAILED(rv)) {
                         fprintf(gErrFile, "+++ Failed to obtain JS principals from SystemPrincipal.\n");
                     }
+                    secman->SetSystemPrincipal(princ);
                 }
             } else {
                 fprintf(gErrFile, "+++ Failed to get ScriptSecurityManager service, running without principals");
@@ -1087,12 +1728,26 @@ main(int argc, char **argv, char **envp)
             NS_ASSERTION(glob == nsnull, "bad GetJSObject?");
             return 1;
         }
-        if (!JS_DefineFunctions(cx, glob, glob_functions))
+
+        JS_BeginRequest(cx);
+
+        if (!JS_DefineFunctions(cx, glob, glob_functions)) {
+            JS_EndRequest(cx);
             return 1;
+        }
 
         envobj = JS_DefineObject(cx, glob, "environment", &env_class, NULL, 0);
-        if (!envobj || !JS_SetPrivate(cx, envobj, envp))
+        if (!envobj || !JS_SetPrivate(cx, envobj, envp)) {
+            JS_EndRequest(cx);
             return 1;
+        }
+
+        nsAutoString workingDirectory;
+        if (GetCurrentWorkingDirectory(workingDirectory))
+            gWorkingDirectory = &workingDirectory;
+
+        JS_DefineProperty(cx, glob, "__LOCATION__", JSVAL_VOID,
+                          GetLocationProperty, NULL, 0);
 
         argc--;
         argv++;
@@ -1109,6 +1764,7 @@ main(int argc, char **argv, char **envp)
                     (void**) getter_AddRefs(bogus));
 #endif
 
+        JSPRINCIPALS_DROP(cx, gJSPrincipals);
         JS_ClearScope(cx, glob);
         JS_GC(cx);
         JSContext *oldcx;
@@ -1117,7 +1773,6 @@ main(int argc, char **argv, char **envp)
         cxstack = nsnull;
         JS_GC(cx);
         JS_DestroyContext(cx);
-        xpc->SyncJSContexts();
     } // this scopes the nsCOMPtrs
     // no nsCOMPtrs are allowed to be alive when you call NS_ShutdownXPCOM
     rv = NS_ShutdownXPCOM( NULL );
@@ -1130,5 +1785,49 @@ main(int argc, char **argv, char **envp)
     bogus = nsnull;
 #endif
 
+    appDir = nsnull;
+    appFile = nsnull;
+    dirprovider.ClearGREDir();
+
+    NS_LogTerm();
+
+#ifdef XP_MACOSX
+    FinishAutoreleasePool();
+#endif
+
     return result;
+}
+
+PRBool
+XPCShellDirProvider::SetGREDir(const char *dir)
+{
+    nsresult rv = XRE_GetFileFromPath(dir, getter_AddRefs(mGREDir));
+    return NS_SUCCEEDED(rv);
+}
+
+NS_IMETHODIMP_(nsrefcnt)
+XPCShellDirProvider::AddRef()
+{
+    return 2;
+}
+
+NS_IMETHODIMP_(nsrefcnt)
+XPCShellDirProvider::Release()
+{
+    return 1;
+}
+
+NS_IMPL_QUERY_INTERFACE1(XPCShellDirProvider, nsIDirectoryServiceProvider)
+
+NS_IMETHODIMP
+XPCShellDirProvider::GetFile(const char *prop, PRBool *persistent,
+                             nsIFile* *result)
+{
+    if (mGREDir && !strcmp(prop, NS_GRE_DIR)) {
+        *persistent = PR_TRUE;
+        NS_ADDREF(*result = mGREDir);
+        return NS_OK;
+    }
+
+    return NS_ERROR_FAILURE;
 }

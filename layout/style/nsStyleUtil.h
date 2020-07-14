@@ -44,8 +44,8 @@
 struct nsStyleBackground;
 
 enum nsFontSizeType {
-  eFontSize_HTML  	= 1,
-  eFontSize_CSS			= 2
+  eFontSize_HTML = 1,
+  eFontSize_CSS = 2
 };
 
 
@@ -69,8 +69,11 @@ public:
 
   static PRInt32 ConstrainFontWeight(PRInt32 aWeight);
 
-  static PRBool IsHTMLLink(nsIContent *aContent, nsIAtom *aTag, nsPresContext *aPresContext, nsLinkState *aState);
-  static PRBool IsSimpleXlink(nsIContent *aContent, nsPresContext *aPresContext, nsLinkState *aState);
+  static PRBool IsHTMLLink(nsIContent *aContent, nsIAtom *aTag,
+                           nsILinkHandler *aLinkHandler,
+                           nsLinkState *aState);
+  static PRBool IsLink(nsIContent *aContent, nsILinkHandler *aLinkHandler,
+                       nsLinkState *aState);
 
  static PRBool DashMatchCompare(const nsAString& aAttributeValue,
                                 const nsAString& aSelectorValue,
@@ -78,6 +81,31 @@ public:
                                 
   static void EscapeCSSString(const nsString& aString, nsAString& aReturn);
 
+  /*
+   * Convert an author-provided floating point number to an integer (0
+   * ... 255) appropriate for use in the alpha component of a color.
+   */
+  static PRUint8 FloatToColorComponent(float aAlpha)
+  {
+    NS_ASSERTION(0.0 <= aAlpha && aAlpha <= 1.0, "out of range");
+    return NSToIntRound(aAlpha * 255);
+  }
+
+  /*
+   * Convert the alpha component of an nscolor (0 ... 255) to the
+   * floating point number with the least accurate *decimal*
+   * representation that is converted to that color.
+   *
+   * Should be used only by serialization code.
+   */
+  static float ColorComponentToFloat(PRUint8 aAlpha);
+
+  /*
+   * Does this child count as significant for selector matching?
+   */
+  static PRBool IsSignificantChild(nsIContent* aChild,
+                                   PRBool aTextIsSignificant,
+                                   PRBool aWhitespaceIsSignificant);
 };
 
 

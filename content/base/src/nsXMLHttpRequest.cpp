@@ -38,29 +38,24 @@
 #include "nsXMLHttpRequest.h"
 #include "nsISimpleEnumerator.h"
 #include "nsIXPConnect.h"
-#include "nsIUnicodeEncoder.h"
-#include "nsIServiceManager.h"
 #include "nsICharsetConverterManager.h"
 #include "nsLayoutCID.h"
-#include "nsIDOMDOMImplementation.h"
-#include "nsIPrivateDOMImplementation.h"
 #include "nsXPIDLString.h"
 #include "nsReadableUtils.h"
-#include "nsCRT.h"
 #include "nsIURI.h"
 #include "nsILoadGroup.h"
 #include "nsNetUtil.h"
+#include "nsThreadUtils.h"
 #include "nsIUploadChannel.h"
 #include "nsIDOMSerializer.h"
 #include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
-#include "nsIDOMEventReceiver.h"
-#include "nsIEventListenerManager.h"
 #include "nsGUIEvent.h"
 #include "nsIPrivateDOMEvent.h"
 #include "prprf.h"
 #include "nsIDOMEventListener.h"
 #include "nsIJSContextStack.h"
+#include "nsJSEnvironment.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsWeakPtr.h"
 #include "nsICharsetAlias.h"
@@ -69,26 +64,43 @@
 #include "nsIDOMElement.h"
 #include "nsIDOMWindow.h"
 #include "nsIVariant.h"
+#include "nsVariant.h"
 #include "nsIParser.h"
 #include "nsLoadListenerProxy.h"
-#include "nsIWindowWatcher.h"
-#include "nsIAuthPrompt.h"
-#include "nsIStringStream.h"
+#include "nsStringStream.h"
 #include "nsIStreamConverterService.h"
 #include "nsICachingChannel.h"
 #include "nsContentUtils.h"
+#include "nsEventDispatcher.h"
+#include "nsDOMJSUtils.h"
 #include "nsCOMArray.h"
 #include "nsDOMClassInfo.h"
+#include "nsIScriptableUConv.h"
+#include "nsCycleCollectionParticipant.h"
+#include "nsIContentPolicy.h"
+#include "nsContentPolicyUtils.h"
+#include "nsContentErrors.h"
+#include "nsLayoutStatics.h"
+#include "nsCrossSiteListenerProxy.h"
+#include "nsDOMError.h"
+#include "nsIHTMLDocument.h"
+#include "nsIDOM3Document.h"
+#include "nsIMultiPartChannel.h"
+#include "nsIScriptObjectPrincipal.h"
+#include "nsIStorageStream.h"
+#include "nsIPromptFactory.h"
+#include "nsIWindowWatcher.h"
+#include "nsCommaSeparatedTokenizer.h"
 
-static const char* kLoadAsData = "loadAsData";
-#define LOADSTR NS_LITERAL_STRING("load")
-#define ERRORSTR NS_LITERAL_STRING("error")
+#define LOAD_STR "load"
+#define ERROR_STR "error"
+#define ABORT_STR "abort"
+#define LOADSTART_STR "loadstart"
+#define PROGRESS_STR "progress"
+#define UPLOADPROGRESS_STR "uploadprogress"
+#define READYSTATE_STR "readystatechange"
 
 // CIDs
-static NS_DEFINE_CID(kCharsetAliasCID, NS_CHARSETALIAS_CID);
-static NS_DEFINE_CID(kIDOMDOMImplementationCID, NS_DOM_IMPLEMENTATION_CID);
-static NS_DEFINE_CID(kCharsetConverterManagerCID, NS_ICHARSETCONVERTERMANAGER_CID);
-static NS_DEFINE_CID(kEventQueueServiceCID, NS_EVENTQUEUESERVICE_CID);
 
 // State
 #define XML_HTTP_REQUEST_UNINITIALIZED  (1 << 0)  // 0
@@ -103,10 +115,19 @@ static NS_DEFINE_CID(kEventQueueServiceCID, NS_EVENTQUEUESERVICE_CID);
 #define XML_HTTP_REQUEST_ABORTED        (1 << 7)  // Internal
 #define XML_HTTP_REQUEST_ASYNC          (1 << 8)  // Internal
 #define XML_HTTP_REQUEST_PARSEBODY      (1 << 9)  // Internal
-#define XML_HTTP_REQUEST_XSITEENABLED   (1 << 10) // Internal
+#define XML_HTTP_REQUEST_XSITEENABLED   (1 << 10) // Internal, Is any cross-site request allowed?
+                                                  //           Even if this is false the
+                                                  //           access-control spec is supported
 #define XML_HTTP_REQUEST_SYNCLOOPING    (1 << 11) // Internal
 #define XML_HTTP_REQUEST_MULTIPART      (1 << 12) // Internal
-#define XML_HTTP_REQUEST_ROOTED         (1 << 13) // Internal
+#define XML_HTTP_REQUEST_GOT_FINAL_STOP (1 << 13) // Internal
+#define XML_HTTP_REQUEST_BACKGROUND     (1 << 14) // Internal
+// This is set when we've got the headers for a multipart XMLHttpRequest,
+// but haven't yet started to process the first part.
+#define XML_HTTP_REQUEST_MPART_HEADERS  (1 << 15) // Internal
+#define XML_HTTP_REQUEST_USE_XSITE_AC   (1 << 16) // Internal
+#define XML_HTTP_REQUEST_NEED_AC_PREFLIGHT (1 << 17) // Internal
+#define XML_HTTP_REQUEST_AC_WITH_CREDENTIALS (1 << 18) // Internal
 
 #define XML_HTTP_REQUEST_LOADSTATES         \
   (XML_HTTP_REQUEST_UNINITIALIZED |         \
@@ -117,6 +138,51 @@ static NS_DEFINE_CID(kEventQueueServiceCID, NS_EVENTQUEUESERVICE_CID);
    XML_HTTP_REQUEST_SENT |                  \
    XML_HTTP_REQUEST_STOPPED)
 
+#define ACCESS_CONTROL_CACHE_SIZE 100
+
+#define NS_BADCERTHANDLER_CONTRACTID \
+  "@mozilla.org/content/xmlhttprequest-bad-cert-handler;1"
+
+#define NS_PROGRESS_EVENT_INTERVAL 50
+
+class nsResumeTimeoutsEvent : public nsRunnable
+{
+public:
+  nsResumeTimeoutsEvent(nsPIDOMWindow* aWindow) : mWindow(aWindow) {}
+
+  NS_IMETHOD Run()
+  {
+    mWindow->ResumeTimeouts(PR_FALSE);
+    return NS_OK;
+  }
+
+private:
+  nsCOMPtr<nsPIDOMWindow> mWindow;
+};
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsDOMEventListenerWrapper)
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsDOMEventListenerWrapper)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMEventListener)
+NS_INTERFACE_MAP_END_AGGREGATED(mListener)
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF(nsDOMEventListenerWrapper)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(nsDOMEventListenerWrapper)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsDOMEventListenerWrapper)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mListener)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsDOMEventListenerWrapper)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mListener)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMETHODIMP
+nsDOMEventListenerWrapper::HandleEvent(nsIDOMEvent* aEvent)
+{
+  return mListener->HandleEvent(aEvent);
+}
+
 // This helper function adds the given load flags to the request's existing
 // load flags.
 static void AddLoadFlags(nsIRequest *request, nsLoadFlags newFlags)
@@ -125,6 +191,15 @@ static void AddLoadFlags(nsIRequest *request, nsLoadFlags newFlags)
   request->GetLoadFlags(&flags);
   flags |= newFlags;
   request->SetLoadFlags(flags);
+}
+
+static nsresult IsCapabilityEnabled(const char *capability, PRBool *enabled)
+{
+  nsIScriptSecurityManager *secMan = nsContentUtils::GetSecurityManager();
+  if (!secMan)
+    return NS_ERROR_FAILURE;
+
+  return secMan->IsCapabilityEnabled(capability, enabled);
 }
 
 // Helper proxy class to be used when expecting an
@@ -178,6 +253,8 @@ nsMultipartProxyListener::OnStartRequest(nsIRequest *aRequest,
   // decoder in the pipeline to handle the content and pass it along
   // to our original listener.
 
+  nsCOMPtr<nsIXMLHttpRequest> xhr = do_QueryInterface(mDestListener);
+
   nsCOMPtr<nsIStreamConverterService> convServ =
     do_GetService("@mozilla.org/streamConverters;1", &rv);
   if (NS_SUCCEEDED(rv)) {
@@ -193,6 +270,11 @@ nsMultipartProxyListener::OnStartRequest(nsIRequest *aRequest,
 
     mDestListener = fromListener;
   }
+
+  if (xhr) {
+    static_cast<nsXMLHttpRequest*>(xhr.get())->mState |=
+      XML_HTTP_REQUEST_MPART_HEADERS;
+   }
 
   return mDestListener->OnStartRequest(aRequest, ctxt);
 }
@@ -218,25 +300,219 @@ nsMultipartProxyListener::OnDataAvailable(nsIRequest *aRequest,
                                         count);
 }
 
-
-static nsIScriptContext *
-GetCurrentContext()
+// Class used as streamlistener and notification callback when
+// doing the initial GET request for an access-control check
+class nsACProxyListener : public nsIStreamListener,
+                          public nsIInterfaceRequestor,
+                          public nsIChannelEventSink
 {
-  // Get JSContext from stack.
-  nsCOMPtr<nsIJSContextStack> stack =
-    do_GetService("@mozilla.org/js/xpc/ContextStack;1");
+public:
+  nsACProxyListener(nsIChannel* aOuterChannel,
+                    nsIStreamListener* aOuterListener,
+                    nsISupports* aOuterContext,
+                    nsIPrincipal* aReferrerPrincipal,
+                    const nsACString& aRequestMethod,
+                    PRBool aWithCredentials)
+   : mOuterChannel(aOuterChannel), mOuterListener(aOuterListener),
+     mOuterContext(aOuterContext), mReferrerPrincipal(aReferrerPrincipal),
+     mRequestMethod(aRequestMethod), mWithCredentials(aWithCredentials)
+  { }
 
-  if (!stack) {
-    return nsnull;
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSISTREAMLISTENER
+  NS_DECL_NSIREQUESTOBSERVER
+  NS_DECL_NSIINTERFACEREQUESTOR
+  NS_DECL_NSICHANNELEVENTSINK
+
+private:
+  void AddResultToCache(nsIRequest* aRequest);
+
+  nsCOMPtr<nsIChannel> mOuterChannel;
+  nsCOMPtr<nsIStreamListener> mOuterListener;
+  nsCOMPtr<nsISupports> mOuterContext;
+  nsCOMPtr<nsIPrincipal> mReferrerPrincipal;
+  nsCString mRequestMethod;
+  PRBool mWithCredentials;
+};
+
+NS_IMPL_ISUPPORTS4(nsACProxyListener, nsIStreamListener, nsIRequestObserver,
+                   nsIInterfaceRequestor, nsIChannelEventSink)
+
+void
+nsACProxyListener::AddResultToCache(nsIRequest *aRequest)
+{
+  nsCOMPtr<nsIHttpChannel> http = do_QueryInterface(aRequest);
+  NS_ASSERTION(http, "Request was not http");
+
+  // The "Access-Control-Max-Age" header should return an age in seconds.
+  nsCAutoString headerVal;
+  http->GetResponseHeader(NS_LITERAL_CSTRING("Access-Control-Max-Age"),
+                          headerVal);
+  if (headerVal.IsEmpty()) {
+    return;
   }
 
-  JSContext *cx;
-
-  if (NS_FAILED(stack->Peek(&cx)) || !cx) {
-    return nsnull;
+  // Sanitize the string. We only allow 'delta-seconds' as specified by
+  // http://dev.w3.org/2006/waf/access-control (digits 0-9 with no leading or
+  // trailing non-whitespace characters).
+  PRUint32 age = 0;
+  nsCSubstring::const_char_iterator iter, end;
+  headerVal.BeginReading(iter);
+  headerVal.EndReading(end);
+  while (iter != end) {
+    if (*iter < '0' || *iter > '9') {
+      return;
+    }
+    age = age * 10 + (*iter - '0');
+    // Cap at 24 hours. This also avoids overflow
+    age = PR_MIN(age, 86400);
+    ++iter;
   }
 
-  return GetScriptContextFromJSContext(cx);
+  if (!age || !nsXMLHttpRequest::EnsureACCache()) {
+    return;
+  }
+
+
+  // String seems fine, go ahead and cache.
+  // Note that we have already checked that these headers follow the correct
+  // syntax.
+
+  nsCOMPtr<nsIURI> uri;
+  http->GetURI(getter_AddRefs(uri));
+
+  // PR_Now gives microseconds
+  PRTime expirationTime = PR_Now() + (PRUint64)age * PR_USEC_PER_SEC;
+
+  nsAccessControlLRUCache::CacheEntry* entry =
+    nsXMLHttpRequest::sAccessControlCache->
+    GetEntry(uri, mReferrerPrincipal, mWithCredentials, PR_TRUE);
+  if (!entry) {
+    return;
+  }
+
+  // The "Access-Control-Allow-Methods" header contains a comma separated
+  // list of method names.
+  http->GetResponseHeader(NS_LITERAL_CSTRING("Access-Control-Allow-Methods"),
+                          headerVal);
+
+  nsCCommaSeparatedTokenizer methods(headerVal);
+  while(methods.hasMoreTokens()) {
+    const nsDependentCSubstring& method = methods.nextToken();
+    if (method.IsEmpty()) {
+      continue;
+    }
+    PRUint32 i;
+    for (i = 0; i < entry->mMethods.Length(); ++i) {
+      if (entry->mMethods[i].token.Equals(method)) {
+        entry->mMethods[i].expirationTime = expirationTime;
+        break;
+      }
+    }
+    if (i == entry->mMethods.Length()) {
+      nsAccessControlLRUCache::TokenTime* newMethod =
+        entry->mMethods.AppendElement();
+      if (!newMethod) {
+        return;
+      }
+
+      newMethod->token = method;
+      newMethod->expirationTime = expirationTime;
+    }
+  }
+
+  // The "Access-Control-Allow-Headers" header contains a comma separated
+  // list of method names.
+  http->GetResponseHeader(NS_LITERAL_CSTRING("Access-Control-Allow-Headers"),
+                          headerVal);
+
+  nsCCommaSeparatedTokenizer headers(headerVal);
+  while(headers.hasMoreTokens()) {
+    const nsDependentCSubstring& header = headers.nextToken();
+    if (header.IsEmpty()) {
+      continue;
+    }
+    PRUint32 i;
+    for (i = 0; i < entry->mHeaders.Length(); ++i) {
+      if (entry->mHeaders[i].token.Equals(header)) {
+        entry->mHeaders[i].expirationTime = expirationTime;
+        break;
+      }
+    }
+    if (i == entry->mHeaders.Length()) {
+      nsAccessControlLRUCache::TokenTime* newHeader =
+        entry->mHeaders.AppendElement();
+      if (!newHeader) {
+        return;
+      }
+
+      newHeader->token = header;
+      newHeader->expirationTime = expirationTime;
+    }
+  }
+}
+
+NS_IMETHODIMP
+nsACProxyListener::OnStartRequest(nsIRequest *aRequest, nsISupports *aContext)
+{
+  nsresult status;
+  nsresult rv = aRequest->GetStatus(&status);
+
+  if (NS_SUCCEEDED(rv)) {
+    rv = status;
+  }
+
+  if (NS_SUCCEEDED(rv)) {
+    // Everything worked, try to cache and then fire off the actual request.
+    AddResultToCache(aRequest);
+
+    rv = mOuterChannel->AsyncOpen(mOuterListener, mOuterContext);
+  }
+
+  if (NS_FAILED(rv)) {
+    mOuterChannel->Cancel(rv);
+    mOuterListener->OnStartRequest(mOuterChannel, mOuterContext);
+    mOuterListener->OnStopRequest(mOuterChannel, mOuterContext, rv);
+    
+    return rv;
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsACProxyListener::OnStopRequest(nsIRequest *aRequest, nsISupports *aContext,
+                                 nsresult aStatus)
+{
+  return NS_OK;
+}
+
+/** nsIStreamListener methods **/
+
+NS_IMETHODIMP
+nsACProxyListener::OnDataAvailable(nsIRequest *aRequest,
+                                   nsISupports *ctxt,
+                                   nsIInputStream *inStr,
+                                   PRUint32 sourceOffset,
+                                   PRUint32 count)
+{
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsACProxyListener::OnChannelRedirect(nsIChannel *aOldChannel,
+                                     nsIChannel *aNewChannel,
+                                     PRUint32 aFlags)
+{
+  // Only internal redirects allowed for now.
+  return NS_IsInternalSameURIRedirect(aOldChannel, aNewChannel, aFlags) ?
+         NS_OK : NS_ERROR_DOM_BAD_URI;
+}
+
+NS_IMETHODIMP
+nsACProxyListener::GetInterface(const nsIID & aIID, void **aResult)
+{
+  return QueryInterface(aIID, aResult);
 }
 
 /**
@@ -266,17 +542,547 @@ GetDocumentFromScriptContext(nsIScriptContext *aScriptContext)
 }
 
 /////////////////////////////////////////////
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsXHREventTarget)
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsXHREventTarget)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_PRESERVED_WRAPPER
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnLoadListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnErrorListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnAbortListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnLoadStartListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnProgressListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mListenerManager)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mScriptContext)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOwner)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsXHREventTarget)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnLoadListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnErrorListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnAbortListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnLoadStartListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnProgressListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mListenerManager)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mScriptContext)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOwner)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_INTERFACE_MAP_BEGIN(nsXHREventTarget)
+  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_INTERFACE_MAP_ENTRIES_CYCLE_COLLECTION(nsXHREventTarget)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXMLHttpRequestEventTarget)
+  NS_INTERFACE_MAP_ENTRY(nsIXMLHttpRequestEventTarget)
+  NS_INTERFACE_MAP_ENTRY(nsPIDOMEventTarget)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMEventTarget)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMNSEventTarget)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF_AMBIGUOUS(nsXHREventTarget,
+                                          nsIXMLHttpRequestEventTarget)
+NS_IMPL_CYCLE_COLLECTING_RELEASE_AMBIGUOUS(nsXHREventTarget,
+                                           nsIXMLHttpRequestEventTarget)
+
+NS_IMETHODIMP
+nsXHREventTarget::AddEventListener(const nsAString& aType,
+                                   nsIDOMEventListener* aListener,
+                                   PRBool aUseCapture)
+{
+  nsCOMPtr<nsIScriptContext> context;
+  GetContextForEventHandlers(getter_AddRefs(context));
+  nsCOMPtr<nsIDocument> doc = GetDocumentFromScriptContext(context);
+  PRBool wantsUntrusted = doc && !nsContentUtils::IsChromeDoc(doc);
+  return AddEventListener(aType, aListener, aUseCapture, wantsUntrusted);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::RemoveEventListener(const nsAString& aType,
+                                      nsIDOMEventListener* aListener,
+                                      PRBool aUseCapture)
+{
+  nsCOMPtr<nsIEventListenerManager> elm;
+  GetListenerManager(PR_FALSE, getter_AddRefs(elm));
+  if (elm) {
+    PRInt32 flags = aUseCapture ? NS_EVENT_FLAG_CAPTURE : NS_EVENT_FLAG_BUBBLE;
+    elm->RemoveEventListenerByType(aListener, aType, flags, nsnull);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::AddEventListener(const nsAString& aType,
+                                   nsIDOMEventListener *aListener,
+                                   PRBool aUseCapture,
+                                   PRBool aWantsUntrusted)
+{
+  nsCOMPtr<nsIEventListenerManager> elm;
+  GetListenerManager(PR_TRUE, getter_AddRefs(elm));
+  NS_ENSURE_STATE(elm);
+  PRInt32 flags = aUseCapture ? NS_EVENT_FLAG_CAPTURE : NS_EVENT_FLAG_BUBBLE;
+  if (aWantsUntrusted) {
+    flags |= NS_PRIV_EVENT_UNTRUSTED_PERMITTED;
+  }
+  return elm->AddEventListenerByType(aListener, aType, flags, nsnull);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::GetScriptTypeID(PRUint32 *aLang)
+{
+  *aLang = mLang;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::SetScriptTypeID(PRUint32 aLang)
+{
+  mLang = aLang;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::DispatchEvent(nsIDOMEvent* aEvent, PRBool* aRetVal)
+{
+  nsEventStatus status = nsEventStatus_eIgnore;
+  nsresult rv =
+    nsEventDispatcher::DispatchDOMEvent(static_cast<nsPIDOMEventTarget*>(this),
+                                        nsnull, aEvent, nsnull, &status);
+
+  *aRetVal = (status != nsEventStatus_eConsumeNoDefault);
+  return rv;
+}
+
+nsresult
+nsXHREventTarget::RemoveAddEventListener(const nsAString& aType,
+                                         nsRefPtr<nsDOMEventListenerWrapper>& aCurrent,
+                                         nsIDOMEventListener* aNew)
+{
+  if (aCurrent) {
+    RemoveEventListener(aType, aCurrent, PR_FALSE);
+    aCurrent = nsnull;
+  }
+  if (aNew) {
+    aCurrent = new nsDOMEventListenerWrapper(aNew);
+    NS_ENSURE_TRUE(aCurrent, NS_ERROR_OUT_OF_MEMORY);
+    AddEventListener(aType, aCurrent, PR_FALSE);
+  }
+  return NS_OK;
+}
+
+nsresult
+nsXHREventTarget::GetInnerEventListener(nsRefPtr<nsDOMEventListenerWrapper>& aWrapper,
+                                        nsIDOMEventListener** aListener)
+{
+  NS_ENSURE_ARG_POINTER(aListener);
+  if (aWrapper) {
+    NS_ADDREF(*aListener = aWrapper->GetInner());
+  } else {
+    *aListener = nsnull;
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::GetOnload(nsIDOMEventListener** aOnLoad)
+{
+  return GetInnerEventListener(mOnLoadListener, aOnLoad);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::SetOnload(nsIDOMEventListener* aOnLoad)
+{
+  return RemoveAddEventListener(NS_LITERAL_STRING(LOAD_STR),
+                                mOnLoadListener, aOnLoad);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::GetOnerror(nsIDOMEventListener** aOnerror)
+{
+  return GetInnerEventListener(mOnErrorListener, aOnerror);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::SetOnerror(nsIDOMEventListener* aOnerror)
+{
+  return RemoveAddEventListener(NS_LITERAL_STRING(ERROR_STR),
+                                mOnErrorListener, aOnerror);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::GetOnabort(nsIDOMEventListener** aOnabort)
+{
+  return GetInnerEventListener(mOnAbortListener, aOnabort);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::SetOnabort(nsIDOMEventListener* aOnabort)
+{
+  return RemoveAddEventListener(NS_LITERAL_STRING(ABORT_STR),
+                                mOnAbortListener, aOnabort);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::GetOnloadstart(nsIDOMEventListener** aOnloadstart)
+{
+  return GetInnerEventListener(mOnLoadStartListener, aOnloadstart);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::SetOnloadstart(nsIDOMEventListener* aOnloadstart)
+{
+  return RemoveAddEventListener(NS_LITERAL_STRING(LOADSTART_STR),
+                                mOnLoadStartListener, aOnloadstart);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::GetOnprogress(nsIDOMEventListener** aOnprogress)
+{
+  return GetInnerEventListener(mOnProgressListener, aOnprogress);
+}
+
+NS_IMETHODIMP
+nsXHREventTarget::SetOnprogress(nsIDOMEventListener* aOnprogress)
+{
+  return RemoveAddEventListener(NS_LITERAL_STRING(PROGRESS_STR),
+                                mOnProgressListener, aOnprogress);
+}
+
+nsresult
+nsXHREventTarget::PreHandleEvent(nsEventChainPreVisitor& aVisitor)
+{
+  aVisitor.mCanHandle = PR_TRUE;
+  aVisitor.mParentTarget = nsnull;
+  return NS_OK;
+}
+
+nsresult
+nsXHREventTarget::PostHandleEvent(nsEventChainPostVisitor& aVisitor)
+{
+  return NS_OK;
+}
+
+nsresult
+nsXHREventTarget::DispatchDOMEvent(nsEvent* aEvent, nsIDOMEvent* aDOMEvent,
+                                   nsPresContext* aPresContext,
+                                   nsEventStatus* aEventStatus)
+{
+  return
+    nsEventDispatcher::DispatchDOMEvent(static_cast<nsPIDOMEventTarget*>(this),
+                                        aEvent, aDOMEvent, aPresContext,
+                                        aEventStatus);
+}
+
+nsresult
+nsXHREventTarget::GetListenerManager(PRBool aCreateIfNotFound,
+                                     nsIEventListenerManager** aResult)
+{
+  if (!mListenerManager) {
+    if (!aCreateIfNotFound) {
+      *aResult = nsnull;
+      return NS_OK;
+    }
+    nsresult rv = NS_NewEventListenerManager(getter_AddRefs(mListenerManager));
+    NS_ENSURE_SUCCESS(rv, rv);
+    mListenerManager->SetListenerTarget(static_cast<nsPIDOMEventTarget*>(this));
+  }
+
+  NS_ADDREF(*aResult = mListenerManager);
+  return NS_OK;
+}
+
+nsresult
+nsXHREventTarget::AddEventListenerByIID(nsIDOMEventListener *aListener,
+                                        const nsIID& aIID)
+{
+  nsCOMPtr<nsIEventListenerManager> elm;
+  GetListenerManager(PR_TRUE, getter_AddRefs(elm));
+  if (elm) {
+    elm->AddEventListenerByIID(aListener, aIID, NS_EVENT_FLAG_BUBBLE);
+  }
+  return NS_OK;
+}
+
+nsresult
+nsXHREventTarget::RemoveEventListenerByIID(nsIDOMEventListener *aListener,
+                                           const nsIID& aIID)
+{
+  nsCOMPtr<nsIEventListenerManager> elm;
+  GetListenerManager(PR_FALSE, getter_AddRefs(elm));
+  if (elm) {
+    return elm->RemoveEventListenerByIID(aListener, aIID, NS_EVENT_FLAG_BUBBLE);
+  }
+  return NS_OK;
+}
+
+nsresult
+nsXHREventTarget::GetSystemEventGroup(nsIDOMEventGroup** aGroup)
+{
+  nsCOMPtr<nsIEventListenerManager> elm;
+  nsresult rv = GetListenerManager(PR_TRUE, getter_AddRefs(elm));
+  if (elm) {
+    return elm->GetSystemEventGroupLM(aGroup);
+  }
+  return rv;
+}
+
+nsresult
+nsXHREventTarget::GetContextForEventHandlers(nsIScriptContext** aContext)
+{
+  nsresult rv = CheckInnerWindowCorrectness();
+  NS_ENSURE_SUCCESS(rv, rv);
+  NS_IF_ADDREF(*aContext = mScriptContext);
+  return NS_OK;
+}
+
+/////////////////////////////////////////////
+
+nsXMLHttpRequestUpload::~nsXMLHttpRequestUpload()
+{
+  if (mListenerManager) {
+    mListenerManager->Disconnect();
+  }
+}
+
+NS_INTERFACE_MAP_BEGIN(nsXMLHttpRequestUpload)
+  NS_INTERFACE_MAP_ENTRY(nsIXMLHttpRequestUpload)
+  NS_INTERFACE_MAP_ENTRY_CONTENT_CLASSINFO(XMLHttpRequestUpload)
+NS_INTERFACE_MAP_END_INHERITING(nsXHREventTarget)
+
+NS_IMPL_ADDREF_INHERITED(nsXMLHttpRequestUpload, nsXHREventTarget)
+NS_IMPL_RELEASE_INHERITED(nsXMLHttpRequestUpload, nsXHREventTarget)
+
+void
+nsAccessControlLRUCache::CacheEntry::PurgeExpired(PRTime now)
+{
+  PRUint32 i;
+  for (i = 0; i < mMethods.Length(); ++i) {
+    if (now >= mMethods[i].expirationTime) {
+      mMethods.RemoveElementAt(i--);
+    }
+  }
+  for (i = 0; i < mHeaders.Length(); ++i) {
+    if (now >= mHeaders[i].expirationTime) {
+      mHeaders.RemoveElementAt(i--);
+    }
+  }
+}
+
+PRBool
+nsAccessControlLRUCache::CacheEntry::CheckRequest(const nsCString& aMethod,
+                                                  const nsTArray<nsCString>& aHeaders)
+{
+  PurgeExpired(PR_Now());
+
+  if (!aMethod.EqualsLiteral("GET") && !aMethod.EqualsLiteral("POST")) {
+    PRUint32 i;
+    for (i = 0; i < mMethods.Length(); ++i) {
+      if (aMethod.Equals(mMethods[i].token))
+        break;
+    }
+    if (i == mMethods.Length()) {
+      return PR_FALSE;
+    }
+  }
+
+  for (PRUint32 i = 0; i < aHeaders.Length(); ++i) {
+    PRUint32 j;
+    for (j = 0; j < mHeaders.Length(); ++j) {
+      if (aHeaders[i].Equals(mHeaders[j].token,
+                             nsCaseInsensitiveCStringComparator())) {
+        break;
+      }
+    }
+    if (j == mHeaders.Length()) {
+      return PR_FALSE;
+    }
+  }
+
+  return PR_TRUE;
+}
+
+nsAccessControlLRUCache::CacheEntry*
+nsAccessControlLRUCache::GetEntry(nsIURI* aURI,
+                                  nsIPrincipal* aPrincipal,
+                                  PRBool aWithCredentials,
+                                  PRBool aCreate)
+{
+  nsCString key;
+  if (!GetCacheKey(aURI, aPrincipal, aWithCredentials, key)) {
+    NS_WARNING("Invalid cache key!");
+    return nsnull;
+  }
+
+  CacheEntry* entry;
+
+  if (mTable.Get(key, &entry)) {
+    // Entry already existed so just return it. Also update the LRU list.
+
+    // Move to the head of the list.
+    PR_REMOVE_LINK(entry);
+    PR_INSERT_LINK(entry, &mList);
+
+    return entry;
+  }
+
+  if (!aCreate) {
+    return nsnull;
+  }
+
+  // This is a new entry, allocate and insert into the table now so that any
+  // failures don't cause items to be removed from a full cache.
+  entry = new CacheEntry(key);
+  if (!entry) {
+    NS_WARNING("Failed to allocate new cache entry!");
+    return nsnull;
+  }
+
+  if (!mTable.Put(key, entry)) {
+    // Failed, clean up the new entry.
+    delete entry;
+
+    NS_WARNING("Failed to add entry to the access control cache!");
+    return nsnull;
+  }
+
+  PR_INSERT_LINK(entry, &mList);
+
+  NS_ASSERTION(mTable.Count() <= ACCESS_CONTROL_CACHE_SIZE + 1,
+               "Something is borked, too many entries in the cache!");
+
+  // Now enforce the max count.
+  if (mTable.Count() > ACCESS_CONTROL_CACHE_SIZE) {
+    // Try to kick out all the expired entries.
+    PRTime now = PR_Now();
+    mTable.Enumerate(RemoveExpiredEntries, &now);
+
+    // If that didn't remove anything then kick out the least recently used
+    // entry.
+    if (mTable.Count() > ACCESS_CONTROL_CACHE_SIZE) {
+      CacheEntry* lruEntry = static_cast<CacheEntry*>(PR_LIST_TAIL(&mList));
+      PR_REMOVE_LINK(lruEntry);
+
+      // This will delete 'lruEntry'.
+      mTable.Remove(lruEntry->mKey);
+
+      NS_ASSERTION(mTable.Count() == ACCESS_CONTROL_CACHE_SIZE,
+                   "Somehow tried to remove an entry that was never added!");
+    }
+  }
+  
+  return entry;
+}
+
+void
+nsAccessControlLRUCache::RemoveEntries(nsIURI* aURI, nsIPrincipal* aPrincipal)
+{
+  CacheEntry* entry;
+  nsCString key;
+  if (GetCacheKey(aURI, aPrincipal, PR_TRUE, key) &&
+      mTable.Get(key, &entry)) {
+    PR_REMOVE_LINK(entry);
+    mTable.Remove(key);
+  }
+
+  if (GetCacheKey(aURI, aPrincipal, PR_FALSE, key) &&
+      mTable.Get(key, &entry)) {
+    PR_REMOVE_LINK(entry);
+    mTable.Remove(key);
+  }
+}
+
+void
+nsAccessControlLRUCache::Clear()
+{
+  PR_INIT_CLIST(&mList);
+  mTable.Clear();
+}
+
+/* static */ PLDHashOperator
+nsAccessControlLRUCache::RemoveExpiredEntries(const nsACString& aKey,
+                                              nsAutoPtr<CacheEntry>& aValue,
+                                              void* aUserData)
+{
+  PRTime* now = static_cast<PRTime*>(aUserData);
+  
+  aValue->PurgeExpired(*now);
+  
+  if (aValue->mHeaders.IsEmpty() &&
+      aValue->mHeaders.IsEmpty()) {
+    // Expired, remove from the list as well as the hash table.
+    PR_REMOVE_LINK(aValue);
+    return PL_DHASH_REMOVE;
+  }
+  
+  return PL_DHASH_NEXT;
+}
+
+/* static */ PRBool
+nsAccessControlLRUCache::GetCacheKey(nsIURI* aURI,
+                                     nsIPrincipal* aPrincipal,
+                                     PRBool aWithCredentials,
+                                     nsACString& _retval)
+{
+  NS_ASSERTION(aURI, "Null uri!");
+  NS_ASSERTION(aPrincipal, "Null principal!");
+  
+  NS_NAMED_LITERAL_CSTRING(space, " ");
+
+  nsCOMPtr<nsIURI> uri;
+  nsresult rv = aPrincipal->GetURI(getter_AddRefs(uri));
+  NS_ENSURE_SUCCESS(rv, PR_FALSE);
+  
+  nsCAutoString scheme, host, port;
+  if (uri) {
+    uri->GetScheme(scheme);
+    uri->GetHost(host);
+    port.AppendInt(NS_GetRealPort(uri));
+  }
+
+  nsCAutoString cred;
+  if (aWithCredentials) {
+    _retval.AssignLiteral("cred");
+  }
+  else {
+    _retval.AssignLiteral("nocred");
+  }
+
+  nsCAutoString spec;
+  rv = aURI->GetSpec(spec);
+  NS_ENSURE_SUCCESS(rv, PR_FALSE);
+
+  _retval.Assign(cred + space + scheme + space + host + space + port + space +
+                 spec);
+
+  return PR_TRUE;
+}
+
+/////////////////////////////////////////////
 //
 //
 /////////////////////////////////////////////
 
+// Will be initialized in nsXMLHttpRequest::EnsureACCache.
+nsAccessControlLRUCache* nsXMLHttpRequest::sAccessControlCache = nsnull;
+
 nsXMLHttpRequest::nsXMLHttpRequest()
-  : mState(XML_HTTP_REQUEST_UNINITIALIZED)
+  : mRequestObserver(nsnull), mState(XML_HTTP_REQUEST_UNINITIALIZED),
+    mUploadTransferred(0), mUploadTotal(0), mUploadComplete(PR_TRUE),
+    mUploadProgress(0), mUploadProgressMax(0),
+    mErrorLoad(PR_FALSE), mTimerIsActive(PR_FALSE),
+    mProgressEventWasDelayed(PR_FALSE),
+    mLoadLengthComputable(PR_FALSE), mLoadTotal(0),
+    mFirstStartRequestSeen(PR_FALSE)
 {
+  nsLayoutStatics::AddRef();
 }
 
 nsXMLHttpRequest::~nsXMLHttpRequest()
 {
+  if (mListenerManager) {
+    mListenerManager->Disconnect();
+  }
+
   if (mState & (XML_HTTP_REQUEST_STOPPED |
                 XML_HTTP_REQUEST_SENT |
                 XML_HTTP_REQUEST_INTERACTIVE)) {
@@ -286,188 +1092,204 @@ nsXMLHttpRequest::~nsXMLHttpRequest()
   NS_ABORT_IF_FALSE(!(mState & XML_HTTP_REQUEST_SYNCLOOPING), "we rather crash than hang");
   mState &= ~XML_HTTP_REQUEST_SYNCLOOPING;
 
-  // Needed to free the two arrays.
-  ClearEventListeners();
+  nsLayoutStatics::Release();
 }
 
-
-// QueryInterface implementation for nsXMLHttpRequest
-NS_INTERFACE_MAP_BEGIN(nsXMLHttpRequest)
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIXMLHttpRequest)
-  NS_INTERFACE_MAP_ENTRY(nsIXMLHttpRequest)
-  NS_INTERFACE_MAP_ENTRY(nsIJSXMLHttpRequest)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMLoadListener)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMEventTarget)
-  NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
-  NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
-  NS_INTERFACE_MAP_ENTRY(nsIChannelEventSink)
-  NS_INTERFACE_MAP_ENTRY(nsIProgressEventSink)
-  NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMGCParticipant)
-  NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
-  NS_INTERFACE_MAP_ENTRY_CONTENT_CLASSINFO(XMLHttpRequest)
-NS_INTERFACE_MAP_END
-
-
-NS_IMPL_ADDREF(nsXMLHttpRequest)
-NS_IMPL_RELEASE(nsXMLHttpRequest)
-
-
-/* void addEventListener (in string type, in nsIDOMEventListener
-   listener); */
-NS_IMETHODIMP
-nsXMLHttpRequest::AddEventListener(const nsAString& type,
-                                   nsIDOMEventListener *listener,
-                                   PRBool useCapture)
+/**
+ * This Init method is called from the factory constructor.
+ */
+nsresult
+nsXMLHttpRequest::Init()
 {
-  NS_ENSURE_ARG(listener);
+  // Set the original mScriptContext and mPrincipal, if available.
+  // Get JSContext from stack.
+  nsCOMPtr<nsIJSContextStack> stack =
+    do_GetService("@mozilla.org/js/xpc/ContextStack;1");
 
-  nsTArray<ListenerHolder*> *array;
-  if (type.Equals(LOADSTR)) {
-    array = &mLoadEventListeners;
-  }
-  else if (type.Equals(ERRORSTR)) {
-    array = &mErrorEventListeners;
-  }
-  else {
-    return NS_ERROR_INVALID_ARG;
+  if (!stack) {
+    return NS_OK;
   }
 
-  ListenerHolder *holder = new ListenerHolder;
-  NS_ENSURE_TRUE(holder, NS_ERROR_OUT_OF_MEMORY);
-  holder->Set(listener, this);
-  array->AppendElement(holder);
+  JSContext *cx;
 
-  mScriptContext = GetCurrentContext();
-
-  return NS_OK;
-}
-
-/* void removeEventListener (in string type, in nsIDOMEventListener
-   listener); */
-NS_IMETHODIMP
-nsXMLHttpRequest::RemoveEventListener(const nsAString & type,
-                                      nsIDOMEventListener *listener,
-                                      PRBool useCapture)
-{
-  NS_ENSURE_ARG(listener);
-
-  nsTArray<ListenerHolder*> *array;
-  if (type.Equals(LOADSTR)) {
-    array = &mLoadEventListeners;
-  }
-  else if (type.Equals(ERRORSTR)) {
-    array = &mLoadEventListeners;
-  }
-  else {
-    return NS_ERROR_INVALID_ARG;
+  if (NS_FAILED(stack->Peek(&cx)) || !cx) {
+    return NS_OK;
   }
 
-  // Allow a caller to remove O(N^2) behavior by removing end-to-start.
-  for (PRUint32 i = array->Length() - 1; i != PRUint32(-1); --i) {
-    ListenerHolder *holder = array->ElementAt(i);
-    if (nsCOMPtr<nsIDOMEventListener>(holder->Get()) == listener) {
-      array->RemoveElementAt(i);
-      delete holder;
-      break;
+  nsIScriptSecurityManager *secMan = nsContentUtils::GetSecurityManager();
+  nsCOMPtr<nsIPrincipal> subjectPrincipal;
+  if (secMan) {
+    secMan->GetSubjectPrincipal(getter_AddRefs(subjectPrincipal));
+  }
+  NS_ENSURE_STATE(subjectPrincipal);
+  mPrincipal = subjectPrincipal;
+
+  nsIScriptContext* context = GetScriptContextFromJSContext(cx);
+  if (context) {
+    mScriptContext = context;
+    nsCOMPtr<nsPIDOMWindow> window =
+      do_QueryInterface(context->GetGlobalObject());
+    if (window) {
+      mOwner = window->GetCurrentInnerWindow();
     }
   }
 
   return NS_OK;
 }
-
-/* boolean dispatchEvent (in nsIDOMEvent evt); */
+/**
+ * This Init method should only be called by C++ consumers.
+ */
 NS_IMETHODIMP
-nsXMLHttpRequest::DispatchEvent(nsIDOMEvent *evt, PRBool *_retval)
+nsXMLHttpRequest::Init(nsIPrincipal* aPrincipal,
+                       nsIScriptContext* aScriptContext,
+                       nsPIDOMWindow* aOwnerWindow,
+                       nsIURI* aBaseURI)
 {
-  // Ignored
+  NS_ENSURE_ARG_POINTER(aPrincipal);
+
+  // This object may have already been initialized in the other Init call above
+  // if JS was on the stack. Clear the old values for mScriptContext and mOwner
+  // if new ones are not supplied here.
+
+  mPrincipal = aPrincipal;
+  mScriptContext = aScriptContext;
+  if (aOwnerWindow) {
+    mOwner = aOwnerWindow->GetCurrentInnerWindow();
+  }
+  else {
+    mOwner = nsnull;
+  }
+  mBaseURI = aBaseURI;
 
   return NS_OK;
 }
 
-/* attribute nsIOnReadyStateChangeHandler onreadystatechange; */
+/**
+ * This Initialize method is called from XPConnect via nsIJSNativeInitializer.
+ */
 NS_IMETHODIMP
-nsXMLHttpRequest::GetOnreadystatechange(nsIOnReadyStateChangeHandler * *aOnreadystatechange)
+nsXMLHttpRequest::Initialize(nsISupports* aOwner, JSContext* cx, JSObject* obj,
+                             PRUint32 argc, jsval *argv)
 {
-  NS_ENSURE_ARG_POINTER(aOnreadystatechange);
+  mOwner = do_QueryInterface(aOwner);
+  if (!mOwner) {
+    NS_WARNING("Unexpected nsIJSNativeInitializer owner");
+    return NS_OK;
+  }
 
-  mOnReadystatechangeListener.Get(aOnreadystatechange);
+  // This XHR object is bound to a |window|,
+  // so re-set principal and script context.
+  nsCOMPtr<nsIScriptObjectPrincipal> scriptPrincipal = do_QueryInterface(aOwner);
+  NS_ENSURE_STATE(scriptPrincipal);
+  mPrincipal = scriptPrincipal->GetPrincipal();
+  nsCOMPtr<nsIScriptGlobalObject> sgo = do_QueryInterface(aOwner);
+  NS_ENSURE_STATE(sgo);
+  mScriptContext = sgo->GetContext();
+  NS_ENSURE_STATE(mScriptContext);
+  return NS_OK; 
+}
 
-  return NS_OK;
+void
+nsXMLHttpRequest::SetRequestObserver(nsIRequestObserver* aObserver)
+{
+  mRequestObserver = aObserver;
+}
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsXMLHttpRequest)
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsXMLHttpRequest,
+                                                  nsXHREventTarget)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mContext)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mChannel)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mReadRequest)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mResponseXML)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mACGetChannel)
+
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnUploadProgressListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mOnReadystatechangeListener)
+
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mXMLParserStreamListener)
+
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mChannelEventSink)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mProgressEventSink)
+
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR_AMBIGUOUS(mUpload,
+                                                       nsIXMLHttpRequestUpload)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsXMLHttpRequest,
+                                                nsXHREventTarget)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mContext)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mChannel)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mReadRequest)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mResponseXML)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mACGetChannel)
+
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnUploadProgressListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mOnReadystatechangeListener)
+
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mXMLParserStreamListener)
+
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mChannelEventSink)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mProgressEventSink)
+
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mUpload)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+
+// QueryInterface implementation for nsXMLHttpRequest
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsXMLHttpRequest)
+  NS_INTERFACE_MAP_ENTRY(nsIXMLHttpRequest)
+  NS_INTERFACE_MAP_ENTRY(nsIJSXMLHttpRequest)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMLoadListener)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMEventListener)
+  NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
+  NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
+  NS_INTERFACE_MAP_ENTRY(nsIChannelEventSink)
+  NS_INTERFACE_MAP_ENTRY(nsIProgressEventSink)
+  NS_INTERFACE_MAP_ENTRY(nsIInterfaceRequestor)
+  NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
+  NS_INTERFACE_MAP_ENTRY(nsIJSNativeInitializer)
+  NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
+  NS_INTERFACE_MAP_ENTRY_CONTENT_CLASSINFO(XMLHttpRequest)
+NS_INTERFACE_MAP_END_INHERITING(nsXHREventTarget)
+
+NS_IMPL_ADDREF_INHERITED(nsXMLHttpRequest, nsXHREventTarget)
+NS_IMPL_RELEASE_INHERITED(nsXMLHttpRequest, nsXHREventTarget)
+
+NS_IMETHODIMP
+nsXMLHttpRequest::GetOnreadystatechange(nsIDOMEventListener * *aOnreadystatechange)
+{
+  return
+    nsXHREventTarget::GetInnerEventListener(mOnReadystatechangeListener,
+                                            aOnreadystatechange);
 }
 
 NS_IMETHODIMP
-nsXMLHttpRequest::SetOnreadystatechange(nsIOnReadyStateChangeHandler * aOnreadystatechange)
+nsXMLHttpRequest::SetOnreadystatechange(nsIDOMEventListener * aOnreadystatechange)
 {
-  mOnReadystatechangeListener.Set(aOnreadystatechange, this);
-
-  mScriptContext = GetCurrentContext();
-
-  return NS_OK;
-}
-
-
-/* attribute nsIDOMEventListener onload; */
-NS_IMETHODIMP
-nsXMLHttpRequest::GetOnload(nsIDOMEventListener * *aOnLoad)
-{
-  NS_ENSURE_ARG_POINTER(aOnLoad);
-
-  mOnLoadListener.Get(aOnLoad);
-
-  return NS_OK;
+  return
+    nsXHREventTarget::RemoveAddEventListener(NS_LITERAL_STRING(READYSTATE_STR),
+                                             mOnReadystatechangeListener,
+                                             aOnreadystatechange);
 }
 
 NS_IMETHODIMP
-nsXMLHttpRequest::SetOnload(nsIDOMEventListener * aOnLoad)
+nsXMLHttpRequest::GetOnuploadprogress(nsIDOMEventListener * *aOnuploadprogress)
 {
-  mOnLoadListener.Set(aOnLoad, this);
-
-  mScriptContext = GetCurrentContext();
-
-  return NS_OK;
-}
-
-/* attribute nsIDOMEventListener onerror; */
-NS_IMETHODIMP
-nsXMLHttpRequest::GetOnerror(nsIDOMEventListener * *aOnerror)
-{
-  NS_ENSURE_ARG_POINTER(aOnerror);
-
-  mOnErrorListener.Get(aOnerror);
-
-  return NS_OK;
+  return
+    nsXHREventTarget::GetInnerEventListener(mOnUploadProgressListener,
+                                            aOnuploadprogress);
 }
 
 NS_IMETHODIMP
-nsXMLHttpRequest::SetOnerror(nsIDOMEventListener * aOnerror)
+nsXMLHttpRequest::SetOnuploadprogress(nsIDOMEventListener * aOnuploadprogress)
 {
-  mOnErrorListener.Set(aOnerror, this);
-
-  mScriptContext = GetCurrentContext();
-
-  return NS_OK;
-}
-
-/* attribute nsIDOMEventListener onprogress; */
-NS_IMETHODIMP
-nsXMLHttpRequest::GetOnprogress(nsIDOMEventListener * *aOnprogress)
-{
-  NS_ENSURE_ARG_POINTER(aOnprogress);
-
-  mOnProgressListener.Get(aOnprogress);
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsXMLHttpRequest::SetOnprogress(nsIDOMEventListener * aOnprogress)
-{
-  mOnProgressListener.Set(aOnprogress, this);
-
-  mScriptContext = GetCurrentContext();
-
-  return NS_OK;
+  return
+    nsXHREventTarget::RemoveAddEventListener(NS_LITERAL_STRING(UPLOADPROGRESS_STR),
+                                             mOnUploadProgressListener,
+                                             aOnuploadprogress);
 }
 
 /* readonly attribute nsIChannel channel; */
@@ -475,8 +1297,7 @@ NS_IMETHODIMP
 nsXMLHttpRequest::GetChannel(nsIChannel **aChannel)
 {
   NS_ENSURE_ARG_POINTER(aChannel);
-  *aChannel = mChannel;
-  NS_IF_ADDREF(*aChannel);
+  NS_IF_ADDREF(*aChannel = mChannel);
 
   return NS_OK;
 }
@@ -487,8 +1308,8 @@ nsXMLHttpRequest::GetResponseXML(nsIDOMDocument **aResponseXML)
 {
   NS_ENSURE_ARG_POINTER(aResponseXML);
   *aResponseXML = nsnull;
-  if ((XML_HTTP_REQUEST_COMPLETED & mState) && mDocument) {
-    *aResponseXML = mDocument;
+  if ((XML_HTTP_REQUEST_COMPLETED & mState) && mResponseXML) {
+    *aResponseXML = mResponseXML;
     NS_ADDREF(*aResponseXML);
   }
 
@@ -517,7 +1338,7 @@ nsXMLHttpRequest::DetectCharset(nsACString& aCharset)
 
   rv = channel->GetContentCharset(charsetVal);
   if (NS_SUCCEEDED(rv)) {
-    nsCOMPtr<nsICharsetAlias> calias(do_GetService(kCharsetAliasCID,&rv));
+    nsCOMPtr<nsICharsetAlias> calias(do_GetService(NS_CHARSETALIAS_CONTRACTID,&rv));
     if(NS_SUCCEEDED(rv) && calias) {
       rv = calias->GetPreferred(charsetVal, aCharset);
     }
@@ -540,7 +1361,7 @@ nsXMLHttpRequest::ConvertBodyToText(nsAString& aOutBuffer)
   nsresult rv = NS_OK;
 
   nsCAutoString dataCharset;
-  nsCOMPtr<nsIDocument> document(do_QueryInterface(mDocument));
+  nsCOMPtr<nsIDocument> document(do_QueryInterface(mResponseXML));
   if (document) {
     dataCharset = document->GetDocumentCharacterSet();
   } else {
@@ -574,7 +1395,7 @@ nsXMLHttpRequest::ConvertBodyToText(nsAString& aOutBuffer)
     return rv;
 
   PRUnichar * outBuffer =
-    NS_STATIC_CAST(PRUnichar*, nsMemory::Alloc((outBufferLength + 1) *
+    static_cast<PRUnichar*>(nsMemory::Alloc((outBufferLength + 1) *
                                                sizeof(PRUnichar)));
   if (!outBuffer) {
     return NS_ERROR_OUT_OF_MEMORY;
@@ -636,12 +1457,38 @@ NS_IMETHODIMP nsXMLHttpRequest::GetResponseText(nsAString& aResponseText)
 NS_IMETHODIMP
 nsXMLHttpRequest::GetStatus(PRUint32 *aStatus)
 {
+  *aStatus = 0;
+
+  if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
+    // Make sure we don't leak status information from denied cross-site
+    // requests.
+    if (mChannel) {
+      nsresult status;
+      mChannel->GetStatus(&status);
+      if (NS_FAILED(status)) {
+        return NS_OK;
+      }
+    }
+  }
+
   nsCOMPtr<nsIHttpChannel> httpChannel = GetCurrentHttpChannel();
 
   if (httpChannel) {
-    return httpChannel->GetResponseStatus(aStatus);
+    nsresult rv = httpChannel->GetResponseStatus(aStatus);
+    if (rv == NS_ERROR_NOT_AVAILABLE) {
+      // Someone's calling this before we got a response... Check our
+      // ReadyState.  If we're at 3 or 4, then this means the connection
+      // errored before we got any data; return 0 in that case.
+      PRInt32 readyState;
+      GetReadyState(&readyState);
+      if (readyState >= 3) {
+        *aStatus = 0;
+        return NS_OK;
+      }
+    }
+
+    return rv;
   }
-  *aStatus = 0;
 
   return NS_OK;
 }
@@ -657,6 +1504,18 @@ nsXMLHttpRequest::GetStatusText(nsACString& aStatusText)
   nsresult rv = NS_OK;
 
   if (httpChannel) {
+    if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
+      // Make sure we don't leak status information from denied cross-site
+      // requests.
+      if (mChannel) {
+        nsresult status;
+        mChannel->GetStatus(&status);
+        if (NS_FAILED(status)) {
+          return NS_ERROR_NOT_AVAILABLE;
+        }
+      }
+    }
+
     rv = httpChannel->GetResponseStatusText(aStatusText);
   }
 
@@ -673,12 +1532,39 @@ nsXMLHttpRequest::Abort()
   if (mChannel) {
     mChannel->Cancel(NS_BINDING_ABORTED);
   }
-  mDocument = nsnull;
+  if (mACGetChannel) {
+    mACGetChannel->Cancel(NS_BINDING_ABORTED);
+  }
+  mResponseXML = nsnull;
+  PRUint32 responseLength = mResponseBody.Length();
+  mResponseBody.Truncate();
   mState |= XML_HTTP_REQUEST_ABORTED;
 
-  ChangeState(XML_HTTP_REQUEST_COMPLETED, PR_TRUE, PR_TRUE);
+  if (!(mState & (XML_HTTP_REQUEST_UNINITIALIZED |
+                  XML_HTTP_REQUEST_OPENED |
+                  XML_HTTP_REQUEST_COMPLETED))) {
+    ChangeState(XML_HTTP_REQUEST_COMPLETED, PR_TRUE);
+  }
 
-  ChangeState(XML_HTTP_REQUEST_UNINITIALIZED, PR_FALSE);  // IE seems to do it
+  if (!(mState & XML_HTTP_REQUEST_SYNCLOOPING)) {
+    NS_NAMED_LITERAL_STRING(abortStr, ABORT_STR);
+    DispatchProgressEvent(this, abortStr, mLoadLengthComputable, responseLength,
+                          mLoadTotal);
+    if (mUpload && !mUploadComplete) {
+      mUploadComplete = PR_TRUE;
+      DispatchProgressEvent(mUpload, abortStr, PR_TRUE, mUploadTransferred,
+                            mUploadTotal);
+    }
+  }
+
+  // The ChangeState call above calls onreadystatechange handlers which
+  // if they load a new url will cause nsXMLHttpRequest::OpenRequest to clear
+  // the abort state bit. If this occurs we're not uninitialized (bug 361773).
+  if (mState & XML_HTTP_REQUEST_ABORTED) {
+    ChangeState(XML_HTTP_REQUEST_UNINITIALIZED, PR_FALSE);  // IE seems to do it
+  }
+
+  mState &= ~XML_HTTP_REQUEST_SYNCLOOPING;
 
   return NS_OK;
 }
@@ -689,6 +1575,10 @@ nsXMLHttpRequest::GetAllResponseHeaders(char **_retval)
 {
   NS_ENSURE_ARG_POINTER(_retval);
   *_retval = nsnull;
+
+  if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
+    return NS_OK;
+  }
 
   nsCOMPtr<nsIHttpChannel> httpChannel = GetCurrentHttpChannel();
 
@@ -718,6 +1608,48 @@ nsXMLHttpRequest::GetResponseHeader(const nsACString& header,
   nsresult rv = NS_OK;
   _retval.Truncate();
 
+  // See bug #380418. Hide "Set-Cookie" headers from non-chrome scripts.
+  PRBool chrome = PR_FALSE; // default to false in case IsCapabilityEnabled fails
+  IsCapabilityEnabled("UniversalXPConnect", &chrome);
+  if (!chrome &&
+       (header.LowerCaseEqualsASCII("set-cookie") ||
+        header.LowerCaseEqualsASCII("set-cookie2"))) {
+    NS_WARNING("blocked access to response header");
+    _retval.SetIsVoid(PR_TRUE);
+    return NS_OK;
+  }
+
+  // Check for dangerous headers
+  if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
+    
+    // Make sure we don't leak header information from denied cross-site
+    // requests.
+    if (mChannel) {
+      nsresult status;
+      mChannel->GetStatus(&status);
+      if (NS_FAILED(status)) {
+        return NS_OK;
+      }
+    }
+
+    const char *kCrossOriginSafeHeaders[] = {
+      "cache-control", "content-language", "content-type", "expires",
+      "last-modified", "pragma"
+    };
+    PRBool safeHeader = PR_FALSE;
+    PRUint32 i;
+    for (i = 0; i < NS_ARRAY_LENGTH(kCrossOriginSafeHeaders); ++i) {
+      if (header.LowerCaseEqualsASCII(kCrossOriginSafeHeaders[i])) {
+        safeHeader = PR_TRUE;
+        break;
+      }
+    }
+
+    if (!safeHeader) {
+      return NS_OK;
+    }
+  }
+
   nsCOMPtr<nsIHttpChannel> httpChannel = GetCurrentHttpChannel();
 
   if (httpChannel) {
@@ -739,8 +1671,8 @@ nsXMLHttpRequest::GetLoadGroup(nsILoadGroup **aLoadGroup)
   NS_ENSURE_ARG_POINTER(aLoadGroup);
   *aLoadGroup = nsnull;
 
-  if (!mScriptContext) {
-    mScriptContext = GetCurrentContext();
+  if (mState & XML_HTTP_REQUEST_BACKGROUND) {
+    return NS_OK;
   }
 
   nsCOMPtr<nsIDocument> doc = GetDocumentFromScriptContext(mScriptContext);
@@ -751,43 +1683,12 @@ nsXMLHttpRequest::GetLoadGroup(nsILoadGroup **aLoadGroup)
   return NS_OK;
 }
 
-nsIURI *
-nsXMLHttpRequest::GetBaseURI()
-{
-  if (!mScriptContext) {
-    mScriptContext = GetCurrentContext();
-    if (!mScriptContext) {
-      return nsnull;
-    }
-  }
-
-  nsCOMPtr<nsIDocument> doc = GetDocumentFromScriptContext(mScriptContext);
-  if (!doc) {
-    return nsnull;
-  }
-
-  return doc->GetBaseURI();
-}
-
 nsresult
-nsXMLHttpRequest::CreateEvent(nsEvent* aEvent, nsIDOMEvent** aDOMEvent)
+nsXMLHttpRequest::CreateReadystatechangeEvent(nsIDOMEvent** aDOMEvent)
 {
-  nsresult rv;
-
-  nsCOMPtr<nsIDOMEventReceiver> receiver(do_QueryInterface(mDocument));
-  if (!receiver) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIEventListenerManager> manager;
-  rv = receiver->GetListenerManager(getter_AddRefs(manager));
-  if (!manager) {
-    return NS_ERROR_FAILURE;
-  }
-
-  rv = manager->CreateEvent(nsnull, aEvent,
-                            NS_LITERAL_STRING("HTMLEvents"),
-                            aDOMEvent);
+  nsresult rv = nsEventDispatcher::CreateEvent(nsnull, nsnull,
+                                               NS_LITERAL_STRING("Events"),
+                                               aDOMEvent);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -797,85 +1698,62 @@ nsXMLHttpRequest::CreateEvent(nsEvent* aEvent, nsIDOMEvent** aDOMEvent)
     NS_IF_RELEASE(*aDOMEvent);
     return NS_ERROR_FAILURE;
   }
-  privevent->SetTarget(this);
-  privevent->SetCurrentTarget(this);
-  privevent->SetOriginalTarget(this);
 
-  // We're not marking these events trusted as there is no way for us
-  // to tell if we're called through the code that normally calls us
-  // (i.e. necko) or if script on a webpage QI'd this object to say,
-  // nsIProgressEventSink and called onProgress(...).
-  //
-  // privevent->SetTrusted(?);
+  (*aDOMEvent)->InitEvent(NS_LITERAL_STRING(READYSTATE_STR),
+                          PR_FALSE, PR_FALSE);
+
+  // We assume anyone who managed to call CreateReadystatechangeEvent is trusted
+  privevent->SetTrusted(PR_TRUE);
 
   return NS_OK;
 }
 
 void
-nsXMLHttpRequest::NotifyEventListeners(nsIDOMEventListener* aHandler,
-                                       const nsCOMArray<nsIDOMEventListener>* aListeners,
-                                       nsIDOMEvent* aEvent)
+nsXMLHttpRequest::DispatchProgressEvent(nsPIDOMEventTarget* aTarget,
+                                        const nsAString& aType,
+                                        PRBool aUseLSEventWrapper,
+                                        PRBool aLengthComputable,
+                                        PRUint64 aLoaded, PRUint64 aTotal,
+                                        PRUint64 aPosition, PRUint64 aTotalSize)
 {
-  if (!aEvent)
+  NS_ASSERTION(aTarget, "null target");
+  if (aType.IsEmpty() ||
+      (!AllowUploadProgress() &&
+       (aTarget == mUpload || aType.EqualsLiteral(UPLOADPROGRESS_STR)))) {
     return;
+  }
 
-  nsCOMPtr<nsIJSContextStack> stack;
-  JSContext *cx = nsnull;
+  nsCOMPtr<nsIDOMEvent> event;
+  nsresult rv = nsEventDispatcher::CreateEvent(nsnull, nsnull,
+                                               NS_LITERAL_STRING("ProgressEvent"),
+                                               getter_AddRefs(event));
+  if (NS_FAILED(rv)) {
+    return;
+  }
 
-  if (mScriptContext) {
-    stack = do_GetService("@mozilla.org/js/xpc/ContextStack;1");
+  nsCOMPtr<nsIPrivateDOMEvent> privevent(do_QueryInterface(event));
+  if (!privevent) {
+    return;
+  }
+  privevent->SetTrusted(PR_TRUE);
 
-    if (stack) {
-      cx = (JSContext *)mScriptContext->GetNativeContext();
+  nsCOMPtr<nsIDOMProgressEvent> progress = do_QueryInterface(event);
+  if (!progress) {
+    return;
+  }
 
-      if (cx) {
-        stack->Push(cx);
-      }
+  progress->InitProgressEvent(aType, PR_FALSE, PR_FALSE, aLengthComputable,
+                              aLoaded, (aTotal == LL_MAXUINT) ? 0 : aTotal);
+
+  if (aUseLSEventWrapper) {
+    nsCOMPtr<nsIDOMProgressEvent> xhrprogressEvent =
+      new nsXMLHttpProgressEvent(progress, aPosition, aTotalSize);
+    if (!xhrprogressEvent) {
+      return;
     }
+    event = xhrprogressEvent;
   }
-
-  if (aHandler) {
-    aHandler->HandleEvent(aEvent);
-  }
-
-  if (aListeners) {
-    for (PRInt32 i = 0, i_end = aListeners->Count(); i < i_end; ++i) {
-      nsIDOMEventListener *listener = aListeners->ObjectAt(i);
-      if (listener) {
-        listener->HandleEvent(aEvent);
-      }
-    }
-  }
-
-  if (cx) {
-    stack->Pop(&cx);
-  }
-}
-
-void
-nsXMLHttpRequest::ClearEventListeners()
-{
-  if (mState & XML_HTTP_REQUEST_ROOTED) {
-    nsDOMClassInfo::UnsetExternallyReferenced(this);
-    mState &= ~XML_HTTP_REQUEST_ROOTED;
-  }
-
-  // This isn't *really* needed anymore now that we use
-  // nsMarkedJSFunctionHolder, but we may as well keep it for safety
-  // (against leaks) and compatibility, and also for the code to clear
-  // the first two arrays (called from the destructor).
-  PRUint32 i, i_end;
-  for (i = 0, i_end = mLoadEventListeners.Length(); i < i_end; ++i)
-    delete mLoadEventListeners[i];
-  mLoadEventListeners.Clear();
-  for (i = 0, i_end = mErrorEventListeners.Length(); i < i_end; ++i)
-    delete mErrorEventListeners[i];
-  mErrorEventListeners.Clear();
-
-  mOnLoadListener.Set(nsnull, this);
-  mOnErrorListener.Set(nsnull, this);
-  mOnReadystatechangeListener.Set(nsnull, this);
-  mOnProgressListener.Set(nsnull, this);
+  aTarget->DispatchDOMEvent(nsnull, event, nsnull, nsnull);
 }
 
 already_AddRefed<nsIHttpChannel>
@@ -894,6 +1772,79 @@ nsXMLHttpRequest::GetCurrentHttpChannel()
   return httpChannel;
 }
 
+inline PRBool
+IsSystemPrincipal(nsIPrincipal* aPrincipal)
+{
+  PRBool isSystem = PR_FALSE;
+  nsContentUtils::GetSecurityManager()->
+    IsSystemPrincipal(aPrincipal, &isSystem);
+  return isSystem;
+}
+
+static PRBool
+CheckMayLoad(nsIPrincipal* aPrincipal, nsIChannel* aChannel)
+{
+  NS_ASSERTION(!IsSystemPrincipal(aPrincipal), "Shouldn't get here!");
+
+  nsCOMPtr<nsIURI> channelURI, originalURI;
+  nsresult rv = aChannel->GetURI(getter_AddRefs(channelURI));
+  NS_ENSURE_SUCCESS(rv, PR_FALSE);
+  rv = aChannel->GetOriginalURI(getter_AddRefs(originalURI));
+  NS_ENSURE_SUCCESS(rv, PR_FALSE);
+
+  rv = aPrincipal->CheckMayLoad(channelURI, PR_FALSE);
+  if (NS_SUCCEEDED(rv) && originalURI != channelURI) {
+    rv = aPrincipal->CheckMayLoad(originalURI, PR_FALSE);
+  }
+  return NS_SUCCEEDED(rv);
+}
+
+nsresult
+nsXMLHttpRequest::CheckChannelForCrossSiteRequest(nsIChannel* aChannel)
+{
+  nsresult rv;
+
+  // First check if this is a same-origin request, or if cross-site requests
+  // are enabled.
+  if ((mState & XML_HTTP_REQUEST_XSITEENABLED) ||
+      CheckMayLoad(mPrincipal, aChannel)) {
+    return NS_OK;
+  }
+
+  // This is a cross-site request
+  mState |= XML_HTTP_REQUEST_USE_XSITE_AC;
+
+  // Check if we need to do a preflight request.
+  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
+  NS_ENSURE_TRUE(httpChannel, NS_ERROR_DOM_BAD_URI);
+    
+  nsCAutoString method;
+  httpChannel->GetRequestMethod(method);
+  if (!mACUnsafeHeaders.IsEmpty() ||
+      HasListenersFor(NS_LITERAL_STRING(UPLOADPROGRESS_STR)) ||
+      (mUpload && mUpload->HasListeners())) {
+    mState |= XML_HTTP_REQUEST_NEED_AC_PREFLIGHT;
+  }
+  else if (method.LowerCaseEqualsLiteral("post")) {
+    nsCAutoString contentTypeHeader;
+    httpChannel->GetRequestHeader(NS_LITERAL_CSTRING("Content-Type"),
+                                  contentTypeHeader);
+
+    nsCAutoString contentType, charset;
+    rv = NS_ParseContentType(contentTypeHeader, contentType, charset);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    if (!contentType.LowerCaseEqualsLiteral("text/plain")) {
+      mState |= XML_HTTP_REQUEST_NEED_AC_PREFLIGHT;
+    }
+  }
+  else if (!method.LowerCaseEqualsLiteral("get") &&
+           !method.LowerCaseEqualsLiteral("head")) {
+    mState |= XML_HTTP_REQUEST_NEED_AC_PREFLIGHT;
+  }
+
+  return NS_OK;
+}
 
 /* noscript void openRequest (in AUTF8String method, in AUTF8String url, in boolean async, in AString user, in AString password); */
 NS_IMETHODIMP
@@ -906,8 +1857,12 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
   NS_ENSURE_ARG(!method.IsEmpty());
   NS_ENSURE_ARG(!url.IsEmpty());
 
-  // Disallow HTTP/1.1 TRACE method (see bug 302489).
-  if (method.LowerCaseEqualsASCII("trace")) {
+  NS_ENSURE_TRUE(mPrincipal, NS_ERROR_NOT_INITIALIZED);
+
+  // Disallow HTTP/1.1 TRACE method (see bug 302489)
+  // and MS IIS equivalent TRACK (see bug 381264)
+  if (method.LowerCaseEqualsLiteral("trace") ||
+      method.LowerCaseEqualsLiteral("track")) {
     return NS_ERROR_INVALID_ARG;
   }
 
@@ -915,18 +1870,11 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
   nsCOMPtr<nsIURI> uri;
   PRBool authp = PR_FALSE;
 
-  if (mState & XML_HTTP_REQUEST_ABORTED) {
-    // Something caused this request to abort (e.g the current request
-    // was caceled, channels closed etc), most likely the abort()
-    // function was called by script. Unset our aborted state, and
-    // proceed as normal
-
-    mState &= ~XML_HTTP_REQUEST_ABORTED;
-  } else if (mState & (XML_HTTP_REQUEST_OPENED |
-                       XML_HTTP_REQUEST_LOADED |
-                       XML_HTTP_REQUEST_INTERACTIVE |
-                       XML_HTTP_REQUEST_SENT |
-                       XML_HTTP_REQUEST_STOPPED)) {
+  if (mState & (XML_HTTP_REQUEST_OPENED |
+                XML_HTTP_REQUEST_LOADED |
+                XML_HTTP_REQUEST_INTERACTIVE |
+                XML_HTTP_REQUEST_SENT |
+                XML_HTTP_REQUEST_STOPPED)) {
     // IE aborts as well
     Abort();
 
@@ -935,8 +1883,15 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
     //     since this looks like a situation that could happen
     //     by accident and you could spend a lot of time wondering
     //     why things didn't work.
+  }
 
-    return NS_OK;
+  if (mState & XML_HTTP_REQUEST_ABORTED) {
+    // Something caused this request to abort (e.g the current request
+    // was caceled, channels closed etc), most likely the abort()
+    // function was called by script. Unset our aborted state, and
+    // proceed as normal
+
+    mState &= ~XML_HTTP_REQUEST_ABORTED;
   }
 
   if (async) {
@@ -945,8 +1900,40 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
     mState &= ~XML_HTTP_REQUEST_ASYNC;
   }
 
-  rv = NS_NewURI(getter_AddRefs(uri), url, nsnull, GetBaseURI());
+  mState &= ~XML_HTTP_REQUEST_MPART_HEADERS;
+
+  nsCOMPtr<nsIDocument> doc = GetDocumentFromScriptContext(mScriptContext);
+  
+  nsCOMPtr<nsIURI> baseURI;
+  if (mBaseURI) {
+    baseURI = mBaseURI;
+  }
+  else if (doc) {
+    baseURI = doc->GetBaseURI();
+  }
+
+  rv = NS_NewURI(getter_AddRefs(uri), url, nsnull, baseURI);
   if (NS_FAILED(rv)) return rv;
+
+  // mScriptContext should be initialized because of GetBaseURI() above.
+  // Still need to consider the case that doc is nsnull however.
+  rv = CheckInnerWindowCorrectness();
+  NS_ENSURE_SUCCESS(rv, rv);
+  PRInt16 shouldLoad = nsIContentPolicy::ACCEPT;
+  rv = NS_CheckContentLoadPolicy(nsIContentPolicy::TYPE_XMLHTTPREQUEST,
+                                 uri,
+                                 mPrincipal,
+                                 doc,
+                                 EmptyCString(), //mime guess
+                                 nsnull,         //extra
+                                 &shouldLoad,
+                                 nsContentUtils::GetContentPolicy(),
+                                 nsContentUtils::GetSecurityManager());
+  if (NS_FAILED(rv)) return rv;
+  if (NS_CP_REJECTED(shouldLoad)) {
+    // Disallowed by content policy
+    return NS_ERROR_CONTENT_BLOCKED;
+  }
 
   if (!user.IsEmpty()) {
     nsCAutoString userpass;
@@ -970,7 +1957,9 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
   // a progress event handler we must load with nsIRequest::LOAD_NORMAL or
   // necko won't generate any progress notifications
   nsLoadFlags loadFlags;
-  if (nsCOMPtr<nsIDOMEventListener>(mOnProgressListener.Get())) {
+  if (HasListenersFor(NS_LITERAL_STRING(PROGRESS_STR)) ||
+      HasListenersFor(NS_LITERAL_STRING(UPLOADPROGRESS_STR)) ||
+      (mUpload && mUpload->HasListenersFor(NS_LITERAL_STRING(PROGRESS_STR)))) {
     loadFlags = nsIRequest::LOAD_NORMAL;
   } else {
     loadFlags = nsIRequest::LOAD_BACKGROUND;
@@ -979,11 +1968,19 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
                      loadFlags);
   if (NS_FAILED(rv)) return rv;
 
-  //mChannel->SetAuthTriedWithPrehost(authp);
+  // Check if we're doing a cross-origin request.
+  if (IsSystemPrincipal(mPrincipal)) {
+    // Chrome callers are always allowed to read from different origins.
+    mState |= XML_HTTP_REQUEST_XSITEENABLED;
+  }
+
+  mState &= ~(XML_HTTP_REQUEST_USE_XSITE_AC |
+              XML_HTTP_REQUEST_NEED_AC_PREFLIGHT);
 
   nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
   if (httpChannel) {
     rv = httpChannel->SetRequestMethod(method);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
 
   ChangeState(XML_HTTP_REQUEST_OPENED);
@@ -995,14 +1992,14 @@ nsXMLHttpRequest::OpenRequest(const nsACString& method,
 NS_IMETHODIMP
 nsXMLHttpRequest::Open(const nsACString& method, const nsACString& url)
 {
-  nsresult rv;
+  nsresult rv = NS_OK;
   PRBool async = PR_TRUE;
   nsAutoString user, password;
 
-  nsCOMPtr<nsIXPCNativeCallContext> cc;
-  nsCOMPtr<nsIXPConnect> xpc(do_GetService(nsIXPConnect::GetCID(), &rv));
-  if(NS_SUCCEEDED(rv)) {
-    rv = xpc->GetCurrentNativeCallContext(getter_AddRefs(cc));
+  nsAXPCNativeCallContext *cc = nsnull;
+  nsIXPConnect *xpc = nsContentUtils::XPConnect();
+  if (xpc) {
+    rv = xpc->GetCurrentNativeCallContext(&cc);
   }
 
   if (NS_SUCCEEDED(rv) && cc) {
@@ -1018,34 +2015,15 @@ nsXMLHttpRequest::Open(const nsACString& method, const nsACString& url)
     rv = cc->GetJSContext(&cx);
     if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
 
-    nsCOMPtr<nsIURI> targetURI;
-    rv = NS_NewURI(getter_AddRefs(targetURI), url, nsnull, GetBaseURI());
-    if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
-
-    nsCOMPtr<nsIScriptSecurityManager> secMan =
-             do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
-
-    rv = secMan->CheckConnect(cx, targetURI, "XMLHttpRequest","open");
-    if (NS_FAILED(rv))
-    {
-      // Security check failed.
-      return NS_OK;
-    }
-
     // Find out if UniversalBrowserRead privileges are enabled
-    // we will need this in case of a redirect
-    PRBool crossSiteAccessEnabled;
-    rv = secMan->IsCapabilityEnabled("UniversalBrowserRead",
-                                     &crossSiteAccessEnabled);
-    if (NS_FAILED(rv)) return rv;
-    if (crossSiteAccessEnabled) {
+    if (nsContentUtils::IsCallerTrustedForRead()) {
       mState |= XML_HTTP_REQUEST_XSITEENABLED;
     } else {
       mState &= ~XML_HTTP_REQUEST_XSITEENABLED;
     }
 
     if (argc > 2) {
+      JSAutoRequest ar(cx);
       JSBool asyncBool;
       ::JS_ValueToBoolean(cx, argv[2], &asyncBool);
       async = (PRBool)asyncBool;
@@ -1054,8 +2032,8 @@ nsXMLHttpRequest::Open(const nsACString& method, const nsACString& url)
         JSString* userStr = ::JS_ValueToString(cx, argv[3]);
 
         if (userStr) {
-          user.Assign(NS_REINTERPRET_CAST(PRUnichar *,
-                                          ::JS_GetStringChars(userStr)),
+          user.Assign(reinterpret_cast<PRUnichar *>
+                                      (::JS_GetStringChars(userStr)),
                       ::JS_GetStringLength(userStr));
         }
 
@@ -1063,8 +2041,8 @@ nsXMLHttpRequest::Open(const nsACString& method, const nsACString& url)
           JSString* passwdStr = JS_ValueToString(cx, argv[4]);
 
           if (passwdStr) {
-            password.Assign(NS_REINTERPRET_CAST(PRUnichar *,
-                                                ::JS_GetStringChars(passwdStr)),
+            password.Assign(reinterpret_cast<PRUnichar *>
+                                            (::JS_GetStringChars(passwdStr)),
                             ::JS_GetStringLength(passwdStr));
           }
         }
@@ -1074,69 +2052,6 @@ nsXMLHttpRequest::Open(const nsACString& method, const nsACString& url)
 
   return OpenRequest(method, url, async, user, password);
 }
-
-nsresult
-nsXMLHttpRequest::GetStreamForWString(const PRUnichar* aStr,
-                                      PRInt32 aLength,
-                                      nsIInputStream** aStream)
-{
-  nsresult rv;
-  nsCOMPtr<nsIUnicodeEncoder> encoder;
-  char* postData;
-
-  // We want to encode the string as utf-8, so get the right encoder
-  nsCOMPtr<nsICharsetConverterManager> charsetConv =
-           do_GetService(kCharsetConverterManagerCID, &rv);
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
-
-  rv = charsetConv->GetUnicodeEncoderRaw("UTF-8",
-                                         getter_AddRefs(encoder));
-  NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
-
-  // Convert to utf-8
-  PRInt32 charLength;
-  const PRUnichar* unicodeBuf = aStr;
-  PRInt32 unicodeLength = aLength;
-
-  rv = encoder->GetMaxLength(unicodeBuf, unicodeLength, &charLength);
-  if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
-
-
-  // Allocate extra space for the null-terminator
-  postData = (char*)nsMemory::Alloc(charLength + 1);
-  if (!postData) {
-    return NS_ERROR_OUT_OF_MEMORY;
-  }
-  rv = encoder->Convert(unicodeBuf,
-                        &unicodeLength, postData, &charLength);
-  if (NS_FAILED(rv)) {
-    nsMemory::Free(postData);
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
-  if (!httpChannel) {
-    nsMemory::Free(postData);
-    return NS_ERROR_FAILURE;
-  }
-
-  // Null-terminate
-  postData[charLength] = '\0';
-
-  nsCOMPtr<nsIStringInputStream> inputStream(do_CreateInstance("@mozilla.org/io/string-input-stream;1", &rv));
-  if (NS_SUCCEEDED(rv)) {
-    rv = inputStream->AdoptData(postData, charLength);
-    if (NS_SUCCEEDED(rv)) {
-      return CallQueryInterface(inputStream, aStream);
-    }
-  }
-
-  // If we got here then something went wrong before the stream
-  // adopted the buffer.
-  nsMemory::Free(postData);
-  return NS_ERROR_FAILURE;
-}
-
 
 /*
  * "Copy" from a stream.
@@ -1149,7 +2064,7 @@ nsXMLHttpRequest::StreamReaderFunc(nsIInputStream* in,
                                    PRUint32 count,
                                    PRUint32 *writeCount)
 {
-  nsXMLHttpRequest* xmlHttpRequest = NS_STATIC_CAST(nsXMLHttpRequest*, closure);
+  nsXMLHttpRequest* xmlHttpRequest = static_cast<nsXMLHttpRequest*>(closure);
   if (!xmlHttpRequest || !writeCount) {
     NS_WARNING("XMLHttpRequest cannot read from stream: no closure or writeCount");
     return NS_ERROR_FAILURE;
@@ -1169,7 +2084,7 @@ nsXMLHttpRequest::StreamReaderFunc(nsIInputStream* in,
     nsCOMPtr<nsIInputStream> copyStream;
     rv = NS_NewByteInputStream(getter_AddRefs(copyStream), fromRawSegment, count);
 
-    if (NS_SUCCEEDED(rv)) {
+    if (NS_SUCCEEDED(rv) && xmlHttpRequest->mXMLParserStreamListener) {
       NS_ASSERTION(copyStream, "NS_NewByteInputStream lied");
       nsresult parsingResult = xmlHttpRequest->mXMLParserStreamListener
                                   ->OnDataAvailable(xmlHttpRequest->mReadRequest,
@@ -1207,10 +2122,35 @@ nsXMLHttpRequest::OnDataAvailable(nsIRequest *request, nsISupports *ctxt, nsIInp
   return inStr->ReadSegments(nsXMLHttpRequest::StreamReaderFunc, (void*)this, count, &totalRead);
 }
 
+PRBool
+IsSameOrBaseChannel(nsIRequest* aPossibleBase, nsIChannel* aChannel)
+{
+  nsCOMPtr<nsIMultiPartChannel> mpChannel = do_QueryInterface(aPossibleBase);
+  if (mpChannel) {
+    nsCOMPtr<nsIChannel> baseChannel;
+    nsresult rv = mpChannel->GetBaseChannel(getter_AddRefs(baseChannel));
+    NS_ENSURE_SUCCESS(rv, PR_FALSE);
+    
+    return baseChannel == aChannel;
+  }
+
+  return aPossibleBase == aChannel;
+}
+
 /* void onStartRequest (in nsIRequest request, in nsISupports ctxt); */
 NS_IMETHODIMP
 nsXMLHttpRequest::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
 {
+  nsresult rv = NS_OK;
+  if (!mFirstStartRequestSeen && mRequestObserver) {
+    mFirstStartRequestSeen = PR_TRUE;
+    mRequestObserver->OnStartRequest(request, ctxt);
+  }
+
+  if (!IsSameOrBaseChannel(request, mChannel)) {
+    return NS_OK;
+  }
+
   // Don't do anything if we have been aborted
   if (mState & XML_HTTP_REQUEST_UNINITIALIZED)
     return NS_OK;
@@ -1224,53 +2164,49 @@ nsXMLHttpRequest::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
   nsCOMPtr<nsIChannel> channel(do_QueryInterface(request));
   NS_ENSURE_TRUE(channel, NS_ERROR_UNEXPECTED);
 
+  nsCOMPtr<nsIPrincipal> documentPrincipal = mPrincipal;
+  if (IsSystemPrincipal(documentPrincipal)) {
+    // Don't give this document the system principal.  We need to keep track of
+    // mPrincipal being system because we use it for various security checks
+    // that should be passing, but the document data shouldn't get a system
+    // principal.
+    nsresult rv;
+    documentPrincipal = do_CreateInstance("@mozilla.org/nullprincipal;1", &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  channel->SetOwner(documentPrincipal);
+
   mReadRequest = request;
   mContext = ctxt;
   mState |= XML_HTTP_REQUEST_PARSEBODY;
+  mState &= ~XML_HTTP_REQUEST_MPART_HEADERS;
   ChangeState(XML_HTTP_REQUEST_LOADED);
 
-  nsresult rv;
-  // Get and initialize a DOMImplementation
-  nsCOMPtr<nsIDOMDOMImplementation> implementation =
-    do_CreateInstance(kIDOMDOMImplementationCID, &rv);
-  if (NS_FAILED(rv)) return rv;
+  nsresult status;
+  request->GetStatus(&status);
+  mErrorLoad = mErrorLoad || NS_FAILED(status);
 
-  nsCOMPtr<nsIPrivateDOMImplementation> privImpl =
-    do_QueryInterface(implementation);
-  if (privImpl) {
-    privImpl->Init(GetBaseURI());
+  if (mUpload && !mUploadComplete && !mErrorLoad &&
+      (mState & XML_HTTP_REQUEST_ASYNC)) {
+    mUploadComplete = PR_TRUE;
+    DispatchProgressEvent(mUpload, NS_LITERAL_STRING(LOAD_STR),
+                          PR_TRUE, mUploadTotal, mUploadTotal);
   }
-
-  // Create an empty document from it (resets current document as well)
-  const nsAString& emptyStr = EmptyString();
-  rv = implementation->CreateDocument(emptyStr,
-                                      emptyStr,
-                                      nsnull,
-                                      getter_AddRefs(mDocument));
-  if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
 
   // Reset responseBody
   mResponseBody.Truncate();
 
-  // Register as a load listener on the document
-  nsCOMPtr<nsIDOMEventReceiver> target(do_QueryInterface(mDocument));
-  if (target) {
-    nsWeakPtr requestWeak =
-      do_GetWeakReference(NS_STATIC_CAST(nsIXMLHttpRequest*, this));
-    nsCOMPtr<nsIDOMEventListener> proxy = new nsLoadListenerProxy(requestWeak);
-    if (!proxy) return NS_ERROR_OUT_OF_MEMORY;
-
-    // This will addref the proxy
-    rv = target->AddEventListenerByIID(NS_STATIC_CAST(nsIDOMEventListener*,
-                                                      proxy),
-                                       NS_GET_IID(nsIDOMLoadListener));
-    if (NS_FAILED(rv)) return NS_ERROR_FAILURE;
+  // Set up responseXML
+  PRBool parseBody = PR_TRUE;
+  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
+  if (httpChannel) {
+    nsCAutoString method;
+    httpChannel->GetRequestMethod(method);
+    parseBody = !method.EqualsLiteral("HEAD");
   }
 
-  nsresult status;
-  request->GetStatus(&status);
-
-  if (NS_SUCCEEDED(status)) {
+  if (parseBody && NS_SUCCEEDED(status)) {
     if (!mOverrideMimeType.IsEmpty()) {
       channel->SetContentType(mOverrideMimeType);
     }
@@ -1291,21 +2227,71 @@ nsXMLHttpRequest::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
   }
 
   if (mState & XML_HTTP_REQUEST_PARSEBODY) {
+    nsCOMPtr<nsIURI> baseURI, docURI;
+    nsCOMPtr<nsIDocument> doc = GetDocumentFromScriptContext(mScriptContext);
+
+    if (doc) {
+      docURI = doc->GetDocumentURI();
+      baseURI = doc->GetBaseURI();
+    }
+
+    // Create an empty document from it.  Here we have to cheat a little bit...
+    // Setting the base URI to |baseURI| won't work if the document has a null
+    // principal, so use mPrincipal when creating the document, then reset the
+    // principal.
+    const nsAString& emptyStr = EmptyString();
+    nsCOMPtr<nsIScriptGlobalObject> global = do_QueryInterface(mOwner);
+    rv = nsContentUtils::CreateDocument(emptyStr, emptyStr, nsnull, docURI,
+                                        baseURI, mPrincipal, global,
+                                        getter_AddRefs(mResponseXML));
+    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<nsIDocument> responseDoc = do_QueryInterface(mResponseXML);
+    responseDoc->SetPrincipal(documentPrincipal);
+
+    if (mState & XML_HTTP_REQUEST_USE_XSITE_AC) {
+      nsCOMPtr<nsIHTMLDocument> htmlDoc = do_QueryInterface(mResponseXML);
+      if (htmlDoc) {
+        htmlDoc->DisableCookieAccess();
+      }
+    }
+
+    // Register as a load listener on the document
+    nsCOMPtr<nsPIDOMEventTarget> target(do_QueryInterface(mResponseXML));
+    if (target) {
+      nsWeakPtr requestWeak =
+        do_GetWeakReference(static_cast<nsIXMLHttpRequest*>(this));
+      nsCOMPtr<nsIDOMEventListener> proxy = new nsLoadListenerProxy(requestWeak);
+      if (!proxy) return NS_ERROR_OUT_OF_MEMORY;
+
+      // This will addref the proxy
+      rv = target->AddEventListenerByIID(static_cast<nsIDOMEventListener*>
+                                                    (proxy),
+                                         NS_GET_IID(nsIDOMLoadListener));
+      NS_ENSURE_SUCCESS(rv, rv);
+    }
+
+
+
     nsCOMPtr<nsIStreamListener> listener;
     nsCOMPtr<nsILoadGroup> loadGroup;
     channel->GetLoadGroup(getter_AddRefs(loadGroup));
 
-    nsCOMPtr<nsIDocument> document(do_QueryInterface(mDocument));
-    if (!document) {
-      return NS_ERROR_FAILURE;
-    }
-
-    rv = document->StartDocumentLoad(kLoadAsData, channel, loadGroup, nsnull,
-                                     getter_AddRefs(listener), PR_TRUE);
+    rv = responseDoc->StartDocumentLoad(kLoadAsData, channel, loadGroup,
+                                        nsnull, getter_AddRefs(listener),
+                                        !(mState & XML_HTTP_REQUEST_USE_XSITE_AC));
     NS_ENSURE_SUCCESS(rv, rv);
 
     mXMLParserStreamListener = listener;
-    return mXMLParserStreamListener->OnStartRequest(request, ctxt);
+    rv = mXMLParserStreamListener->OnStartRequest(request, ctxt);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  // We won't get any progress events anyway if we didn't have progress
+  // events when starting the request - so maybe no need to start timer here.
+  if (NS_SUCCEEDED(rv) &&
+      (mState & XML_HTTP_REQUEST_ASYNC) &&
+      HasListenersFor(NS_LITERAL_STRING(PROGRESS_STR))) {
+    StartProgressEventTimer();
   }
 
   return NS_OK;
@@ -1315,13 +2301,11 @@ nsXMLHttpRequest::OnStartRequest(nsIRequest *request, nsISupports *ctxt)
 NS_IMETHODIMP
 nsXMLHttpRequest::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult status)
 {
-  // Don't do anything if we have been aborted
-  if (mState & XML_HTTP_REQUEST_UNINITIALIZED)
+  if (!IsSameOrBaseChannel(request, mChannel)) {
     return NS_OK;
+  }
 
   nsresult rv = NS_OK;
-
-  nsCOMPtr<nsIParser> parser;
 
   // If we're loading a multipart stream of XML documents, we'll get
   // an OnStopRequest() for the last part in the stream, and then
@@ -1329,6 +2313,30 @@ nsXMLHttpRequest::OnStopRequest(nsIRequest *request, nsISupports *ctxt, nsresult
   // "multipart/x-mixed-replace" stream too. So we must check that we
   // still have an xml parser stream listener before accessing it
   // here.
+  nsCOMPtr<nsIMultiPartChannel> mpChannel = do_QueryInterface(request);
+  if (mpChannel) {
+    PRBool last;
+    rv = mpChannel->GetIsLastPart(&last);
+    NS_ENSURE_SUCCESS(rv, rv);
+    if (last) {
+      mState |= XML_HTTP_REQUEST_GOT_FINAL_STOP;
+    }
+  }
+  else {
+    mState |= XML_HTTP_REQUEST_GOT_FINAL_STOP;
+  }
+
+  if (mRequestObserver && mState & XML_HTTP_REQUEST_GOT_FINAL_STOP) {
+    NS_ASSERTION(mFirstStartRequestSeen, "Inconsistent state!");
+    mFirstStartRequestSeen = PR_FALSE;
+    mRequestObserver->OnStopRequest(request, ctxt, status);
+  }
+
+  // Don't do anything if we have been aborted
+  if (mState & XML_HTTP_REQUEST_UNINITIALIZED)
+    return NS_OK;
+
+  nsCOMPtr<nsIParser> parser;
 
   // Is this good enough here?
   if (mState & XML_HTTP_REQUEST_PARSEBODY && mXMLParserStreamListener) {
@@ -1402,49 +2410,86 @@ nsXMLHttpRequest::RequestCompleted()
     return NS_OK;
   }
 
-  // We need to create the event before nulling out mDocument
-  nsEvent evt(PR_TRUE, NS_PAGE_LOAD);
-  nsCOMPtr<nsIDOMEvent> domevent;
-  rv = CreateEvent(&evt, getter_AddRefs(domevent));
-
   // We might have been sent non-XML data. If that was the case,
   // we should null out the document member. The idea in this
   // check here is that if there is no document element it is not
   // an XML document. We might need a fancier check...
-  if (mDocument) {
+  if (mResponseXML) {
     nsCOMPtr<nsIDOMElement> root;
-    mDocument->GetDocumentElement(getter_AddRefs(root));
+    mResponseXML->GetDocumentElement(getter_AddRefs(root));
     if (!root) {
-      mDocument = nsnull;
+      mResponseXML = nsnull;
     }
   }
 
-  // Grab hold of the event listener lists we will need
-  nsCOMPtr<nsIDOMEventListener> onLoadListener = mOnLoadListener.Get();
-  PRUint32 count = mLoadEventListeners.Length();
-  nsCOMArray<nsIDOMEventListener> listenersCopy(count);
-  for (PRUint32 i = 0; i < count; ++i)
-    listenersCopy.ReplaceObjectAt(nsCOMPtr<nsIDOMEventListener>(mLoadEventListeners[i]->Get()), i);
+  ChangeState(XML_HTTP_REQUEST_COMPLETED, PR_TRUE);
 
-  // Clear listeners here unless we're multipart
-  ChangeState(XML_HTTP_REQUEST_COMPLETED, PR_TRUE,
-              !(mState & XML_HTTP_REQUEST_MULTIPART));
+  PRUint32 responseLength = mResponseBody.Length();
+  NS_NAMED_LITERAL_STRING(errorStr, ERROR_STR);
+  NS_NAMED_LITERAL_STRING(loadStr, LOAD_STR);
+  DispatchProgressEvent(this,
+                        mErrorLoad ? errorStr : loadStr,
+                        !mErrorLoad,
+                        responseLength,
+                        mErrorLoad ? 0 : responseLength);
+  if (mErrorLoad && mUpload && !mUploadComplete) {
+    DispatchProgressEvent(mUpload, errorStr, PR_TRUE,
+                          mUploadTransferred, mUploadTotal);
+  }
 
-  NotifyEventListeners(onLoadListener, &listenersCopy, domevent);
-
-  if (mState & XML_HTTP_REQUEST_MULTIPART) {
+  if (!(mState & XML_HTTP_REQUEST_GOT_FINAL_STOP)) {
     // We're a multipart request, so we're not done. Reset to opened.
     ChangeState(XML_HTTP_REQUEST_OPENED);
   }
 
+  nsJSContext::MaybeCC(PR_FALSE);
   return rv;
+}
+
+NS_IMETHODIMP
+nsXMLHttpRequest::SendAsBinary(const nsAString &aBody)
+{
+  char *data = static_cast<char*>(NS_Alloc(aBody.Length() + 1));
+  if (!data)
+    return NS_ERROR_OUT_OF_MEMORY;
+
+  nsAString::const_iterator iter, end;
+  aBody.BeginReading(iter);
+  aBody.EndReading(end);
+  char *p = data;
+  while (iter != end) {
+    if (*iter & 0xFF00) {
+      NS_Free(data);
+      return NS_ERROR_DOM_INVALID_CHARACTER_ERR;
+    }
+    *p++ = static_cast<char>(*iter++);
+  }
+  *p = '\0';
+
+  nsCOMPtr<nsIInputStream> stream;
+  nsresult rv = NS_NewByteInputStream(getter_AddRefs(stream), data,
+                                      aBody.Length(), NS_ASSIGNMENT_ADOPT);
+  if (NS_FAILED(rv))
+    NS_Free(data);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIWritableVariant> variant = new nsVariant();
+  if (!variant) return NS_ERROR_OUT_OF_MEMORY;
+
+  rv = variant->SetAsISupports(stream);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return Send(variant);
 }
 
 /* void send (in nsIVariant aBody); */
 NS_IMETHODIMP
 nsXMLHttpRequest::Send(nsIVariant *aBody)
 {
-  nsresult rv;
+  NS_ENSURE_TRUE(mPrincipal, NS_ERROR_NOT_INITIALIZED);
+
+  nsresult rv = CheckInnerWindowCorrectness();
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // Return error if we're already processing a request
   if (XML_HTTP_REQUEST_SENT & mState) {
@@ -1468,24 +2513,28 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
   if (httpChannel) {
     httpChannel->GetRequestMethod(method); // If GET, method name will be uppercase
 
-    nsCOMPtr<nsIDocument> doc =
-      do_QueryInterface(nsContentUtils::GetDocumentFromCaller());
+    if (!IsSystemPrincipal(mPrincipal)) {
+      nsCOMPtr<nsIURI> codebase;
+      mPrincipal->GetURI(getter_AddRefs(codebase));
 
-    if (doc) {
-      nsIPrincipal *principal = doc->GetPrincipal();
-
-      if (principal) {
-        nsCOMPtr<nsIURI> codebase;
-        principal->GetURI(getter_AddRefs(codebase));
-
-        httpChannel->SetReferrer(codebase);
-      }
+      httpChannel->SetReferrer(codebase);
     }
   }
 
+  mUploadTransferred = 0;
+  mUploadTotal = 0;
+  // By default we don't have any upload, so mark upload complete.
+  mUploadComplete = PR_TRUE;
+  mErrorLoad = PR_FALSE;
+  mLoadLengthComputable = PR_FALSE;
+  mLoadTotal = 0;
+  mUploadProgress = 0;
+  mUploadProgressMax = 0;
   if (aBody && httpChannel && !method.EqualsLiteral("GET")) {
     nsXPIDLString serial;
     nsCOMPtr<nsIInputStream> postDataStream;
+    nsCAutoString charset(NS_LITERAL_CSTRING("UTF-8"));
+    nsCAutoString defaultContentType(NS_LITERAL_CSTRING("text/plain"));
 
     PRUint16 dataType;
     rv = aBody->GetDataType(&dataType);
@@ -1507,12 +2556,37 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
         // document?
         nsCOMPtr<nsIDOMDocument> doc(do_QueryInterface(supports));
         if (doc) {
+          defaultContentType.AssignLiteral("application/xml");
+
           nsCOMPtr<nsIDOMSerializer> serializer(do_CreateInstance(NS_XMLSERIALIZER_CONTRACTID, &rv));
           if (NS_FAILED(rv)) return rv;
 
-          rv = serializer->SerializeToString(doc, serial);
-          if (NS_FAILED(rv))
-            return rv;
+          nsCOMPtr<nsIDOM3Document> dom3doc(do_QueryInterface(doc));
+          if (dom3doc) {
+            nsAutoString inputEncoding;
+            dom3doc->GetInputEncoding(inputEncoding);
+            if (!DOMStringIsNull(inputEncoding)) {
+              CopyUTF16toUTF8(inputEncoding, charset);
+            }
+          }
+
+          // Serialize to a stream so that the encoding used will
+          // match the document's.
+          nsCOMPtr<nsIStorageStream> storStream;
+          rv = NS_NewStorageStream(4096, PR_UINT32_MAX, getter_AddRefs(storStream));
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          nsCOMPtr<nsIOutputStream> output;
+          rv = storStream->GetOutputStream(0, getter_AddRefs(output));
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          // Make sure to use the encoding we'll send
+          rv = serializer->SerializeToStream(doc, output, charset);
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          output->Close();
+          rv = storStream->NewInputStream(0, getter_AddRefs(postDataStream));
+          NS_ENSURE_SUCCESS(rv, rv);
         } else {
           // nsISupportsString?
           nsCOMPtr<nsISupportsString> wstr(do_QueryInterface(supports));
@@ -1523,6 +2597,7 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
             nsCOMPtr<nsIInputStream> stream(do_QueryInterface(supports));
             if (stream) {
               postDataStream = stream;
+              charset.Truncate();
             }
           }
         }
@@ -1532,25 +2607,25 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
     case nsIDataType::VTYPE_EMPTY:
       // Makes us act as if !aBody, don't upload anything
       break;
-    case nsIDataType::VTYPE_EMPTY_ARRAY:
-    case nsIDataType::VTYPE_ARRAY:
-      // IE6 throws error here, so we do that as well
-      return NS_ERROR_INVALID_ARG;
     default:
       // try variant string
       rv = aBody->GetAsWString(getter_Copies(serial));
-      if (NS_FAILED(rv))
-        return rv;
+      NS_ENSURE_SUCCESS(rv, rv);
       break;
     }
 
     if (serial) {
       // Convert to a byte stream
-      rv = GetStreamForWString(serial.get(),
-                               nsCRT::strlen(serial.get()),
-                               getter_AddRefs(postDataStream));
-      if (NS_FAILED(rv))
-        return rv;
+      nsCOMPtr<nsIScriptableUnicodeConverter> converter =
+        do_CreateInstance("@mozilla.org/intl/scriptableunicodeconverter", &rv);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = converter->SetCharset("UTF-8");
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = converter->ConvertToInputStream(serial,
+                                           getter_AddRefs(postDataStream));
+      NS_ENSURE_SUCCESS(rv, rv);
     }
 
     if (postDataStream) {
@@ -1564,9 +2639,39 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
                       GetRequestHeader(NS_LITERAL_CSTRING("Content-Type"),
                                        contentType)) ||
           contentType.IsEmpty()) {
-        contentType = NS_LITERAL_CSTRING("application/xml");
+        contentType = defaultContentType;
       }
-      
+
+      // We don't want to set a charset for streams.
+      if (!charset.IsEmpty()) {
+        nsCAutoString specifiedCharset;
+        PRBool haveCharset;
+        PRInt32 charsetStart, charsetEnd;
+        rv = NS_ExtractCharsetFromContentType(contentType, specifiedCharset,
+                                              &haveCharset, &charsetStart,
+                                              &charsetEnd);
+        if (NS_SUCCEEDED(rv)) {
+          // If the content-type the page set already has a charset parameter,
+          // and it's the same charset, up to case, as |charset|, just send the
+          // page-set content-type header.  Apparently at least
+          // google-web-toolkit is broken and relies on the exact case of its
+          // charset parameter, which makes things break if we use |charset|
+          // (which is always a fully resolved charset per our charset alias
+          // table, hence might be differently cased).
+          if (!specifiedCharset.Equals(charset,
+                                       nsCaseInsensitiveCStringComparator())) {
+            nsCAutoString newCharset("; charset=");
+            newCharset.Append(charset);
+            contentType.Replace(charsetStart, charsetEnd - charsetStart,
+                                newCharset);
+          }
+        }
+      }
+
+      mUploadComplete = PR_FALSE;
+      PRUint32 uploadTotal = 0;
+      postDataStream->Available(&uploadTotal);
+      mUploadTotal = uploadTotal;
       rv = uploadChannel->SetUploadStream(postDataStream, contentType, -1);
       // Reset the method to its original value
       if (httpChannel) {
@@ -1579,41 +2684,68 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
   mResponseBody.Truncate();
 
   // Reset responseXML
-  mDocument = nsnull;
+  mResponseXML = nsnull;
 
-  nsCOMPtr<nsIEventQueue> modalEventQueue;
+  rv = CheckChannelForCrossSiteRequest(mChannel);
+  NS_ENSURE_SUCCESS(rv, rv);
 
-  if (!(mState & XML_HTTP_REQUEST_ASYNC)) {
-    if(!mEventQService) {
-      mEventQService = do_GetService(kEventQueueServiceCID, &rv);
-      NS_ENSURE_SUCCESS(rv, NS_ERROR_FAILURE);
+  PRBool withCredentials = !!(mState & XML_HTTP_REQUEST_AC_WITH_CREDENTIALS);
+
+  // If so, set up the preflight
+  if (mState & XML_HTTP_REQUEST_NEED_AC_PREFLIGHT) {
+    // Check to see if this initial OPTIONS request has already been cached
+    // in our special Access Control Cache.
+    nsCOMPtr<nsIURI> uri;
+    rv = mChannel->GetURI(getter_AddRefs(uri));
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsAccessControlLRUCache::CacheEntry* entry =
+      sAccessControlCache ?
+      sAccessControlCache->GetEntry(uri, mPrincipal, withCredentials, PR_FALSE) :
+      nsnull;
+
+    if (!entry || !entry->CheckRequest(method, mACUnsafeHeaders)) {
+      // Either it wasn't cached or the cached result has expired. Build a
+      // channel for the OPTIONS request.
+      nsCOMPtr<nsILoadGroup> loadGroup;
+      GetLoadGroup(getter_AddRefs(loadGroup));
+
+      nsLoadFlags loadFlags;
+      rv = mChannel->GetLoadFlags(&loadFlags);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      rv = NS_NewChannel(getter_AddRefs(mACGetChannel), uri, nsnull,
+                         loadGroup, nsnull, loadFlags);
+      NS_ENSURE_SUCCESS(rv, rv);
+
+      nsCOMPtr<nsIHttpChannel> acHttp = do_QueryInterface(mACGetChannel);
+      NS_ASSERTION(acHttp, "Failed to QI to nsIHttpChannel!");
+
+      rv = acHttp->SetRequestMethod(NS_LITERAL_CSTRING("OPTIONS"));
+      NS_ENSURE_SUCCESS(rv, rv);
     }
-
-    mState |= XML_HTTP_REQUEST_SYNCLOOPING;
-
-    rv = mEventQService->PushThreadEventQueue(getter_AddRefs(modalEventQueue));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-  }
-
-  if (!mScriptContext) {
-    // We need a context to check if redirect (if any) is allowed
-    mScriptContext = GetCurrentContext();
   }
 
   // Hook us up to listen to redirects and the like
   mChannel->GetNotificationCallbacks(getter_AddRefs(mNotificationCallbacks));
   mChannel->SetNotificationCallbacks(this);
 
-  nsCOMPtr<nsIStreamListener> listener;
+  // Create our listener
+  nsCOMPtr<nsIStreamListener> listener = this;
   if (mState & XML_HTTP_REQUEST_MULTIPART) {
-    listener = new nsMultipartProxyListener(this);
+    listener = new nsMultipartProxyListener(listener);
     if (!listener) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
-  } else {
-    listener = this;
+  }
+
+  if (!(mState & XML_HTTP_REQUEST_XSITEENABLED)) {
+    // Always create a nsCrossSiteListenerProxy here even if it's
+    // a same-origin request right now, since it could be redirected.
+    listener = new nsCrossSiteListenerProxy(listener, mPrincipal, mChannel,
+                                            withCredentials, &rv);
+    NS_ENSURE_TRUE(listener, NS_ERROR_OUT_OF_MEMORY);
+    NS_ENSURE_SUCCESS(rv, rv);
   }
 
   // Bypass the network cache in cases where it makes no sense:
@@ -1629,51 +2761,111 @@ nsXMLHttpRequest::Send(nsIVariant *aBody)
   // When we are sync loading, we need to bypass the local cache when it would
   // otherwise block us waiting for exclusive access to the cache.  If we don't
   // do this, then we could dead lock in some cases (see bug 309424).
-  else if (mState & XML_HTTP_REQUEST_SYNCLOOPING) {
+  else if (!(mState & XML_HTTP_REQUEST_ASYNC)) {
     AddLoadFlags(mChannel,
         nsICachingChannel::LOAD_BYPASS_LOCAL_CACHE_IF_BUSY);
+    if (mACGetChannel) {
+      AddLoadFlags(mACGetChannel,
+          nsICachingChannel::LOAD_BYPASS_LOCAL_CACHE_IF_BUSY);
+    }
   }
 
-  // Start reading from the channel
-  ChangeState(XML_HTTP_REQUEST_SENT);
-  rv = mChannel->AsyncOpen(listener, nsnull);
+  // Since we expect XML data, set the type hint accordingly
+  // This means that we always try to parse local files as XML
+  // ignoring return value, as this is not critical
+  mChannel->SetContentType(NS_LITERAL_CSTRING("application/xml"));
+
+  // If we're doing a cross-site non-GET request we need to first do
+  // a GET request to the same URI. Set that up if needed
+  if (mACGetChannel) {
+    nsCOMPtr<nsIStreamListener> acProxyListener =
+      new nsACProxyListener(mChannel, listener, nsnull, mPrincipal, method,
+                            withCredentials);
+    NS_ENSURE_TRUE(acProxyListener, NS_ERROR_OUT_OF_MEMORY);
+
+    acProxyListener =
+      new nsCrossSiteListenerProxy(acProxyListener, mPrincipal, mACGetChannel,
+                                   withCredentials, method, mACUnsafeHeaders,
+                                   &rv);
+    NS_ENSURE_TRUE(acProxyListener, NS_ERROR_OUT_OF_MEMORY);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    rv = mACGetChannel->AsyncOpen(acProxyListener, nsnull);
+  }
+  else {
+    // Start reading from the channel
+    rv = mChannel->AsyncOpen(listener, nsnull);
+  }
 
   if (NS_FAILED(rv)) {
-    if (modalEventQueue) {
-      mEventQService->PopThreadEventQueue(modalEventQueue);
-    }
-
     // Drop our ref to the channel to avoid cycles
     mChannel = nsnull;
+    mACGetChannel = nsnull;
     return rv;
   }
 
+  // Now that we've successfully opened the channel, we can change state.  Note
+  // that this needs to come after the AsyncOpen() and rv check, because this
+  // can run script that would try to restart this request, and that could end
+  // up doing our AsyncOpen on a null channel if the reentered AsyncOpen fails.
+  ChangeState(XML_HTTP_REQUEST_SENT);
+
   // If we're synchronous, spin an event loop here and wait
   if (!(mState & XML_HTTP_REQUEST_ASYNC)) {
-    while (mState & XML_HTTP_REQUEST_SYNCLOOPING) {
-      modalEventQueue->ProcessPendingEvents();
+    mState |= XML_HTTP_REQUEST_SYNCLOOPING;
 
-      // Be sure not to busy wait! (see bug 273578)
-      if (mState & XML_HTTP_REQUEST_SYNCLOOPING)
-        PR_Sleep(PR_MillisecondsToInterval(10));
+    nsCOMPtr<nsIDocument> suspendedDoc;
+    nsCOMPtr<nsIRunnable> resumeTimeoutRunnable;
+    if (mOwner) {
+      nsCOMPtr<nsIDOMWindow> topWindow;
+      if (NS_SUCCEEDED(mOwner->GetTop(getter_AddRefs(topWindow)))) {
+        nsCOMPtr<nsPIDOMWindow> suspendedWindow(do_QueryInterface(topWindow));
+        if (suspendedWindow &&
+            (suspendedWindow = suspendedWindow->GetCurrentInnerWindow())) {
+          suspendedDoc = do_QueryInterface(suspendedWindow->GetExtantDocument());
+          if (suspendedDoc) {
+            suspendedDoc->SuppressEventHandling();
+          }
+          suspendedWindow->SuspendTimeouts(1, PR_FALSE);
+          resumeTimeoutRunnable = new nsResumeTimeoutsEvent(suspendedWindow);
+        }
+      }
     }
 
-    mEventQService->PopThreadEventQueue(modalEventQueue);
+    nsIThread *thread = NS_GetCurrentThread();
+    while (mState & XML_HTTP_REQUEST_SYNCLOOPING) {
+      if (!NS_ProcessNextEvent(thread)) {
+        rv = NS_ERROR_UNEXPECTED;
+        break;
+      }
+    }
+
+    if (suspendedDoc) {
+      suspendedDoc->UnsuppressEventHandlingAndFireEvents(PR_TRUE);
+    }
+
+    if (resumeTimeoutRunnable) {
+      NS_DispatchToCurrentThread(resumeTimeoutRunnable);
+    }
   } else {
-    // If we're asynchronous, we need to prevent our event listeners
-    // from being garbage collected even if this object becomes
-    // unreachable from script, since they can fire as a result of our
-    // reachability from the network stack.
-    rv = nsDOMClassInfo::SetExternallyReferenced(this);
-    if (NS_SUCCEEDED(rv))
-      mState |= XML_HTTP_REQUEST_ROOTED;
+    if (!mUploadComplete &&
+        HasListenersFor(NS_LITERAL_STRING(UPLOADPROGRESS_STR)) ||
+        (mUpload && mUpload->HasListenersFor(NS_LITERAL_STRING(PROGRESS_STR)))) {
+      StartProgressEventTimer();
+    }
+    DispatchProgressEvent(this, NS_LITERAL_STRING(LOADSTART_STR), PR_FALSE,
+                          0, 0);
+    if (mUpload && !mUploadComplete) {
+      DispatchProgressEvent(mUpload, NS_LITERAL_STRING(LOADSTART_STR), PR_TRUE,
+                            0, mUploadTotal);
+    }
   }
 
   if (!mChannel) {
     return NS_ERROR_FAILURE;
   }
 
-  return NS_OK;
+  return rv;
 }
 
 /* void setRequestHeader (in AUTF8String header, in AUTF8String value); */
@@ -1681,43 +2873,85 @@ NS_IMETHODIMP
 nsXMLHttpRequest::SetRequestHeader(const nsACString& header,
                                    const nsACString& value)
 {
+  nsresult rv;
+
+  // Make sure we don't store an invalid header name in mACUnsafeHeaders
+  if (!IsValidHTTPToken(header)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Check that we haven't already opened the channel. We can't rely on
+  // the channel throwing from mChannel->SetRequestHeader since we might
+  // still be waiting for mACGetChannel to actually open mChannel
+  if (mACGetChannel) {
+    PRBool pending;
+    rv = mACGetChannel->IsPending(&pending);
+    NS_ENSURE_SUCCESS(rv, rv);
+    
+    if (pending) {
+      return NS_ERROR_IN_PROGRESS;
+    }
+  }
+
   if (!mChannel)             // open() initializes mChannel, and open()
     return NS_ERROR_FAILURE; // must be called before first setRequestHeader()
+
+  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
+  if (!httpChannel) {
+    return NS_OK;
+  }
 
   // Prevent modification to certain HTTP headers (see bug 302263), unless
   // the executing script has UniversalBrowserWrite permission.
 
-  nsCOMPtr<nsIScriptSecurityManager> secMan = 
-      do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID);
-  if (!secMan)
-    return NS_ERROR_FAILURE;
-
   PRBool privileged;
-  nsresult rv = secMan->IsCapabilityEnabled("UniversalBrowserWrite",
-                                            &privileged);
+  rv = IsCapabilityEnabled("UniversalBrowserWrite", &privileged);
   if (NS_FAILED(rv))
     return NS_ERROR_FAILURE;
 
   if (!privileged) {
+    // Check for dangerous headers
     const char *kInvalidHeaders[] = {
-      "host", "content-length", "transfer-encoding", "via", "upgrade"
+      "accept-charset", "accept-encoding", "connection", "content-length",
+      "content-transfer-encoding", "date", "expect", "host", "keep-alive",
+      "referer", "te", "trailer", "transfer-encoding", "upgrade", "via"
     };
-    for (size_t i = 0; i < NS_ARRAY_LENGTH(kInvalidHeaders); ++i) {
+    PRUint32 i;
+    for (i = 0; i < NS_ARRAY_LENGTH(kInvalidHeaders); ++i) {
       if (header.LowerCaseEqualsASCII(kInvalidHeaders[i])) {
         NS_WARNING("refusing to set request header");
         return NS_OK;
       }
     }
+    if (StringBeginsWith(header, NS_LITERAL_CSTRING("proxy-"),
+                         nsCaseInsensitiveCStringComparator()) ||
+        StringBeginsWith(header, NS_LITERAL_CSTRING("sec-"),
+                         nsCaseInsensitiveCStringComparator())) {
+      NS_WARNING("refusing to set request header");
+      return NS_OK;
+    }
+
+    // Check for dangerous cross-site headers
+    PRBool safeHeader = !!(mState & XML_HTTP_REQUEST_XSITEENABLED);
+    if (!safeHeader) {
+      const char *kCrossOriginSafeHeaders[] = {
+        "accept", "accept-language", "content-type"
+      };
+      for (i = 0; i < NS_ARRAY_LENGTH(kCrossOriginSafeHeaders); ++i) {
+        if (header.LowerCaseEqualsASCII(kCrossOriginSafeHeaders[i])) {
+          safeHeader = PR_TRUE;
+          break;
+        }
+      }
+    }
+
+    if (!safeHeader) {
+      mACUnsafeHeaders.AppendElement(header);
+    }
   }
 
-  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(mChannel));
-
-  if (httpChannel) {
-    // We need to set, not add to, the header.
-    return httpChannel->SetRequestHeader(header, value, PR_FALSE);
-  }
-
-  return NS_OK;
+  // We need to set, not add to, the header.
+  return httpChannel->SetRequestHeader(header, value, PR_FALSE);
 }
 
 /* readonly attribute long readyState; */
@@ -1757,7 +2991,7 @@ nsXMLHttpRequest::OverrideMimeType(const nsACString& aMimeType)
 NS_IMETHODIMP
 nsXMLHttpRequest::GetMultipart(PRBool *_retval)
 {
-  *_retval = mState & XML_HTTP_REQUEST_MULTIPART;
+  *_retval = !!(mState & XML_HTTP_REQUEST_MULTIPART);
 
   return NS_OK;
 }
@@ -1777,6 +3011,68 @@ nsXMLHttpRequest::SetMultipart(PRBool aMultipart)
     mState &= ~XML_HTTP_REQUEST_MULTIPART;
   }
 
+  return NS_OK;
+}
+
+/* attribute boolean mozBackgroundRequest; */
+NS_IMETHODIMP
+nsXMLHttpRequest::GetMozBackgroundRequest(PRBool *_retval)
+{
+  *_retval = !!(mState & XML_HTTP_REQUEST_BACKGROUND);
+
+  return NS_OK;
+}
+
+/* attribute boolean mozBackgroundRequest; */
+NS_IMETHODIMP
+nsXMLHttpRequest::SetMozBackgroundRequest(PRBool aMozBackgroundRequest)
+{
+  PRBool privileged;
+
+  nsresult rv = IsCapabilityEnabled("UniversalXPConnect", &privileged);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (!privileged)
+    return NS_ERROR_DOM_SECURITY_ERR;
+
+  if (!(mState & XML_HTTP_REQUEST_UNINITIALIZED)) {
+    // Can't change this while we're in the middle of something.
+    return NS_ERROR_IN_PROGRESS;
+  }
+
+  if (aMozBackgroundRequest) {
+    mState |= XML_HTTP_REQUEST_BACKGROUND;
+  } else {
+    mState &= ~XML_HTTP_REQUEST_BACKGROUND;
+  }
+
+  return NS_OK;
+}
+
+/* attribute boolean withCredentials; */
+NS_IMETHODIMP
+nsXMLHttpRequest::GetWithCredentials(PRBool *_retval)
+{
+  *_retval = !!(mState & XML_HTTP_REQUEST_AC_WITH_CREDENTIALS);
+
+  return NS_OK;
+}
+
+/* attribute boolean withCredentials; */
+NS_IMETHODIMP
+nsXMLHttpRequest::SetWithCredentials(PRBool aWithCredentials)
+{
+  // Return error if we're already processing a request
+  if (XML_HTTP_REQUEST_SENT & mState) {
+    return NS_ERROR_FAILURE;
+  }
+  
+  if (aWithCredentials) {
+    mState |= XML_HTTP_REQUEST_AC_WITH_CREDENTIALS;
+  }
+  else {
+    mState &= ~XML_HTTP_REQUEST_AC_WITH_CREDENTIALS;
+  }
   return NS_OK;
 }
 
@@ -1829,43 +3125,31 @@ nsXMLHttpRequest::Abort(nsIDOMEvent* aEvent)
 {
   Abort();
 
-  mState &= ~XML_HTTP_REQUEST_SYNCLOOPING;
-
   return NS_OK;
 }
 
 nsresult
 nsXMLHttpRequest::Error(nsIDOMEvent* aEvent)
 {
-  // We need to create the event before nulling out mDocument
-  nsCOMPtr<nsIDOMEvent> event(do_QueryInterface(aEvent));
-  // There is no NS_PAGE_ERROR event but NS_SCRIPT_ERROR should be ok.
-  nsEvent evt(PR_TRUE, NS_SCRIPT_ERROR);
-  if (!event) {
-    CreateEvent(&evt, getter_AddRefs(event));
-  }
-
-  mDocument = nsnull;
+  mResponseXML = nsnull;
   ChangeState(XML_HTTP_REQUEST_COMPLETED);
 
   mState &= ~XML_HTTP_REQUEST_SYNCLOOPING;
 
-  nsCOMPtr<nsIDOMEventListener> onErrorListener = mOnErrorListener.Get();
-  PRUint32 count = mErrorEventListeners.Length();
-  nsCOMArray<nsIDOMEventListener> listenersCopy(count);
-  for (PRUint32 i = 0; i < count; ++i)
-    listenersCopy.ReplaceObjectAt(nsCOMPtr<nsIDOMEventListener>(mErrorEventListeners[i]->Get()), i);
+  DispatchProgressEvent(this, NS_LITERAL_STRING(ERROR_STR), PR_FALSE,
+                        mResponseBody.Length(), 0);
+  if (mUpload && !mUploadComplete) {
+    mUploadComplete = PR_TRUE;
+    DispatchProgressEvent(mUpload, NS_LITERAL_STRING(ERROR_STR), PR_TRUE,
+                          mUploadTransferred, mUploadTotal);
+  }
 
-  ClearEventListeners();
-  
-  NotifyEventListeners(onErrorListener, &listenersCopy, event);
-
+  nsJSContext::MaybeCC(PR_FALSE);
   return NS_OK;
 }
 
 nsresult
-nsXMLHttpRequest::ChangeState(PRUint32 aState, PRBool aBroadcast,
-                              PRBool aClearEventListeners)
+nsXMLHttpRequest::ChangeState(PRUint32 aState, PRBool aBroadcast)
 {
   // If we are setting one of the mutually exclusive states,
   // unset those state bits first.
@@ -1875,38 +3159,20 @@ nsXMLHttpRequest::ChangeState(PRUint32 aState, PRBool aBroadcast,
   mState |= aState;
   nsresult rv = NS_OK;
 
-  // Take ref to the one listener we need
-  nsCOMPtr<nsIOnReadyStateChangeHandler> onReadyStateChangeListener =
-    mOnReadystatechangeListener.Get();
-
-  if (aClearEventListeners) {
-    ClearEventListeners();
+  if (mProgressNotifier &&
+      !(aState & (XML_HTTP_REQUEST_LOADED | XML_HTTP_REQUEST_INTERACTIVE))) {
+    mTimerIsActive = PR_FALSE;
+    mProgressNotifier->Cancel();
   }
 
   if ((mState & XML_HTTP_REQUEST_ASYNC) &&
       (aState & XML_HTTP_REQUEST_LOADSTATES) && // Broadcast load states only
-      aBroadcast &&
-      onReadyStateChangeListener) {
-    nsCOMPtr<nsIJSContextStack> stack;
-    JSContext *cx = nsnull;
+      aBroadcast) {
+    nsCOMPtr<nsIDOMEvent> event;
+    rv = CreateReadystatechangeEvent(getter_AddRefs(event));
+    NS_ENSURE_SUCCESS(rv, rv);
 
-    if (mScriptContext) {
-      stack = do_GetService("@mozilla.org/js/xpc/ContextStack;1");
-
-      if (stack) {
-        cx = (JSContext *)mScriptContext->GetNativeContext();
-
-        if (cx) {
-          stack->Push(cx);
-        }
-      }
-    }
-
-    rv = onReadyStateChangeListener->HandleEvent();
-
-    if (cx) {
-      stack->Pop(&cx);
-    }
+    DispatchDOMEvent(nsnull, event, nsnull, nsnull);
   }
 
   return rv;
@@ -1922,45 +3188,25 @@ nsXMLHttpRequest::OnChannelRedirect(nsIChannel *aOldChannel,
 {
   NS_PRECONDITION(aNewChannel, "Redirect without a channel?");
 
-  if (mScriptContext && !(mState & XML_HTTP_REQUEST_XSITEENABLED)) {
-    nsresult rv = NS_ERROR_FAILURE;
+  nsresult rv;
 
-    nsCOMPtr<nsIJSContextStack> stack(do_GetService("@mozilla.org/js/xpc/ContextStack;1", & rv));
-    if (NS_FAILED(rv))
-      return rv;
+  if (!NS_IsInternalSameURIRedirect(aOldChannel, aNewChannel, aFlags)) {
+    rv = CheckChannelForCrossSiteRequest(aNewChannel);
+    NS_ENSURE_SUCCESS(rv, rv);
 
-    JSContext *cx = (JSContext *)mScriptContext->GetNativeContext();
-    if (!cx)
-      return NS_ERROR_UNEXPECTED;
-
-    nsCOMPtr<nsIScriptSecurityManager> secMan =
-             do_GetService(NS_SCRIPTSECURITYMANAGER_CONTRACTID, &rv);
-    if (NS_FAILED(rv))
-      return rv;
-
-    nsCOMPtr<nsIURI> newURI;
-    rv = aNewChannel->GetURI(getter_AddRefs(newURI)); // The redirected URI
-    if (NS_FAILED(rv))
-      return rv;
-
-    stack->Push(cx);
-
-    rv = secMan->CheckSameOrigin(cx, newURI);
-
-    stack->Pop(&cx);
-
-    if (NS_FAILED(rv)) {
-      // The security manager set a pending exception.  Since we're
-      // running under the event loop, we need to report it.
-      ::JS_ReportPendingException(cx);
-      return rv;
+    // Disable redirects for preflighted cross-site requests entirely for now
+    // Note, do this after the call to CheckChannelForCrossSiteRequest
+    // to make sure that XML_HTTP_REQUEST_USE_XSITE_AC is up-to-date
+    if ((mState & XML_HTTP_REQUEST_NEED_AC_PREFLIGHT)) {
+       return NS_ERROR_DOM_BAD_URI;
     }
   }
 
   if (mChannelEventSink) {
-    nsresult rv =
+    rv =
       mChannelEventSink->OnChannelRedirect(aOldChannel, aNewChannel, aFlags);
     if (NS_FAILED(rv)) {
+      mErrorLoad = PR_TRUE;
       return rv;
     }
   }
@@ -1977,19 +3223,54 @@ nsXMLHttpRequest::OnChannelRedirect(nsIChannel *aOldChannel,
 NS_IMETHODIMP
 nsXMLHttpRequest::OnProgress(nsIRequest *aRequest, nsISupports *aContext, PRUint64 aProgress, PRUint64 aProgressMax)
 {
-  nsCOMPtr<nsIDOMEventListener> listener = mOnProgressListener.Get();
-  if (listener) {
-    nsCOMPtr<nsIDOMEvent> event;
-    nsEvent evt(PR_TRUE, NS_EVENT_NULL); // what name do we make up here? 
-    nsresult rv = CreateEvent(&evt, getter_AddRefs(event));
-    NS_ENSURE_SUCCESS(rv, rv);
-    
-    nsXMLHttpProgressEvent * progressEvent = new nsXMLHttpProgressEvent(event, aProgress, aProgressMax); 
-    if (!progressEvent)
-      return NS_ERROR_OUT_OF_MEMORY;
+  // We're in middle of processing multipart headers and we don't want to report
+  // any progress because upload's 'load' is dispatched when we start to load
+  // the first response.
+  if (XML_HTTP_REQUEST_MPART_HEADERS & mState) {
+    return NS_OK;
+  }
 
-    event = do_QueryInterface(progressEvent); 
-    NotifyEventListeners(listener, nsnull, event);
+  // We're uploading if our state is XML_HTTP_REQUEST_OPENED or
+  // XML_HTTP_REQUEST_SENT
+  PRBool upload = !!((XML_HTTP_REQUEST_OPENED | XML_HTTP_REQUEST_SENT) & mState);
+  PRUint64 loaded = aProgress;
+  PRUint64 total = aProgressMax;
+  // When uploading, OnProgress reports also headers in aProgress and aProgressMax.
+  // So, try to remove the headers, if possible.
+  PRBool lengthComputable = (aProgressMax != LL_MAXUINT);
+  if (upload) {
+   if (lengthComputable) {
+      PRUint64 headerSize = aProgressMax - mUploadTotal;
+      loaded -= headerSize;
+      total -= headerSize;
+    }
+    mUploadTransferred = loaded;
+    mUploadProgress = aProgress;
+    mUploadProgressMax = aProgressMax;
+  } else {
+    mLoadLengthComputable = lengthComputable;
+    mLoadTotal = mLoadLengthComputable ? total : 0;
+  }
+
+  if (mTimerIsActive) {
+    // The progress event will be dispatched when the notifier calls Notify().
+    mProgressEventWasDelayed = PR_TRUE;
+    return NS_OK;
+  }
+
+  if (!mErrorLoad && (mState & XML_HTTP_REQUEST_ASYNC)) {
+    StartProgressEventTimer();
+    NS_NAMED_LITERAL_STRING(progress, PROGRESS_STR);
+    NS_NAMED_LITERAL_STRING(uploadprogress, UPLOADPROGRESS_STR);
+    DispatchProgressEvent(this, upload ? uploadprogress : progress, PR_TRUE,
+                          lengthComputable, loaded, lengthComputable ? total : 0,
+                          aProgress, aProgressMax);
+
+    if (upload && mUpload && !mUploadComplete) {
+      NS_WARN_IF_FALSE(mUploadTotal == total, "Wrong upload total?");
+      DispatchProgressEvent(mUpload, progress,  PR_TRUE, lengthComputable, loaded,
+                            lengthComputable ? total : 0, aProgress, aProgressMax);
+    }
   }
 
   if (mProgressEventSink) {
@@ -2010,95 +3291,173 @@ nsXMLHttpRequest::OnStatus(nsIRequest *aRequest, nsISupports *aContext, nsresult
   return NS_OK;
 }
 
+PRBool
+nsXMLHttpRequest::AllowUploadProgress()
+{
+  return !(mState & XML_HTTP_REQUEST_USE_XSITE_AC) ||
+    (mState & XML_HTTP_REQUEST_NEED_AC_PREFLIGHT);
+}
+
 /////////////////////////////////////////////////////
 // nsIInterfaceRequestor methods:
 //
 NS_IMETHODIMP
 nsXMLHttpRequest::GetInterface(const nsIID & aIID, void **aResult)
 {
+  nsresult rv;
+
   // Make sure to return ourselves for the channel event sink interface and
   // progress event sink interface, no matter what.  We can forward these to
   // mNotificationCallbacks if it wants to get notifications for them.  But we
   // need to see these notifications for proper functioning.
   if (aIID.Equals(NS_GET_IID(nsIChannelEventSink))) {
     mChannelEventSink = do_GetInterface(mNotificationCallbacks);
-    *aResult = NS_STATIC_CAST(nsIChannelEventSink*, this);
+    *aResult = static_cast<nsIChannelEventSink*>(this);
     NS_ADDREF_THIS();
     return NS_OK;
   } else if (aIID.Equals(NS_GET_IID(nsIProgressEventSink))) {
     mProgressEventSink = do_GetInterface(mNotificationCallbacks);
-    *aResult = NS_STATIC_CAST(nsIProgressEventSink*, this);
+    *aResult = static_cast<nsIProgressEventSink*>(this);
     NS_ADDREF_THIS();
     return NS_OK;
   }
 
   // Now give mNotificationCallbacks (if non-null) a chance to return the
-  // desired interface.  Note that this means that it can override our
-  // nsIAuthPrompt impl, but that's fine, if it has a better auth prompt idea.
+  // desired interface.
   if (mNotificationCallbacks) {
-    nsresult rv = mNotificationCallbacks->GetInterface(aIID, aResult);
+    rv = mNotificationCallbacks->GetInterface(aIID, aResult);
     if (NS_SUCCEEDED(rv)) {
       NS_ASSERTION(*aResult, "Lying nsIInterfaceRequestor implementation!");
       return rv;
     }
   }
-  
-  if (aIID.Equals(NS_GET_IID(nsIAuthPrompt))) {    
-    *aResult = nsnull;
 
-    nsresult rv;
-    nsCOMPtr<nsIWindowWatcher> ww(do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv));
-    if (NS_FAILED(rv))
-      return rv;
+  if (mState & XML_HTTP_REQUEST_BACKGROUND) {
+    nsCOMPtr<nsIInterfaceRequestor> badCertHandler(do_CreateInstance(NS_BADCERTHANDLER_CONTRACTID, &rv));
 
-    nsCOMPtr<nsIAuthPrompt> prompt;
-    rv = ww->GetNewAuthPrompter(nsnull, getter_AddRefs(prompt));
-    if (NS_FAILED(rv))
-      return rv;
+    // Ignore failure to get component, we may not have all its dependencies
+    // available
+    if (NS_SUCCEEDED(rv)) {
+      rv = badCertHandler->GetInterface(aIID, aResult);
+      if (NS_SUCCEEDED(rv))
+        return rv;
+    }
+  }
+  else if (aIID.Equals(NS_GET_IID(nsIAuthPrompt)) ||
+           aIID.Equals(NS_GET_IID(nsIAuthPrompt2))) {
+    nsCOMPtr<nsIPromptFactory> wwatch =
+      do_GetService(NS_WINDOWWATCHER_CONTRACTID, &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
 
-    nsIAuthPrompt *p = prompt.get();
-    NS_ADDREF(p);
-    *aResult = p;
-    return NS_OK;
+    // Get the an auth prompter for our window so that the parenting
+    // of the dialogs works as it should when using tabs.
+
+    nsCOMPtr<nsIDOMWindow> window;
+    if (mOwner) {
+      window = mOwner->GetOuterWindow();
+    }
+
+    return wwatch->GetPrompt(window, aIID,
+                             reinterpret_cast<void**>(aResult));
+
   }
 
   return QueryInterface(aIID, aResult);
 }
 
-/////////////////////////////////////////////////////
-// nsIDOMGCParticipant methods:
-//
-/* virtual */ nsIDOMGCParticipant*
-nsXMLHttpRequest::GetSCCIndex()
+NS_IMETHODIMP
+nsXMLHttpRequest::GetUpload(nsIXMLHttpRequestUpload** aUpload)
 {
-  return this;
+  *aUpload = nsnull;
+  nsCOMPtr<nsIScriptContext> scriptContext;
+  nsresult rv = GetContextForEventHandlers(getter_AddRefs(scriptContext));
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (!mUpload) {
+    mUpload = new nsXMLHttpRequestUpload(mOwner, scriptContext);
+    NS_ENSURE_TRUE(mUpload, NS_ERROR_OUT_OF_MEMORY);
+  }
+  NS_ADDREF(*aUpload = mUpload);
+  return NS_OK;
 }
 
-/* virtual */ void
-nsXMLHttpRequest::AppendReachableList(nsCOMArray<nsIDOMGCParticipant>& aArray)
+NS_IMETHODIMP
+nsXMLHttpRequest::Notify(nsITimer* aTimer)
 {
-  nsCOMPtr<nsIDOMGCParticipant> gcp = do_QueryInterface(mDocument);
-  if (gcp)
-    aArray.AppendObject(gcp);
+  mTimerIsActive = PR_FALSE;
+  if (NS_SUCCEEDED(CheckInnerWindowCorrectness()) && !mErrorLoad &&
+      (mState & XML_HTTP_REQUEST_ASYNC)) {
+    if (mProgressEventWasDelayed) {
+      mProgressEventWasDelayed = PR_FALSE;
+      if (!(XML_HTTP_REQUEST_MPART_HEADERS & mState)) {
+        StartProgressEventTimer();
+        // We're uploading if our state is XML_HTTP_REQUEST_OPENED or
+        // XML_HTTP_REQUEST_SENT
+        if ((XML_HTTP_REQUEST_OPENED | XML_HTTP_REQUEST_SENT) & mState) {
+          DispatchProgressEvent(this, NS_LITERAL_STRING(UPLOADPROGRESS_STR),
+                                PR_TRUE, PR_TRUE, mUploadTransferred,
+                                mUploadTotal, mUploadProgress,
+                                mUploadProgressMax);
+          if (mUpload && !mUploadComplete) {
+            DispatchProgressEvent(mUpload, NS_LITERAL_STRING(PROGRESS_STR),
+                                  PR_TRUE, PR_TRUE, mUploadTransferred,
+                                  mUploadTotal, mUploadProgress,
+                                  mUploadProgressMax);
+          }
+        } else {
+          DispatchProgressEvent(this, NS_LITERAL_STRING(PROGRESS_STR),
+                                mLoadLengthComputable, mResponseBody.Length(),
+                                mLoadTotal);
+        }
+      }
+    }
+  } else if (mProgressNotifier) {
+    mProgressNotifier->Cancel();
+  }
+  return NS_OK;
 }
 
+void
+nsXMLHttpRequest::StartProgressEventTimer()
+{
+  if (!mProgressNotifier) {
+    mProgressNotifier = do_CreateInstance(NS_TIMER_CONTRACTID);
+  }
+  if (mProgressNotifier) {
+    mProgressEventWasDelayed = PR_FALSE;
+    mTimerIsActive = PR_TRUE;
+    mProgressNotifier->Cancel();
+    mProgressNotifier->InitWithCallback(this, NS_PROGRESS_EVENT_INTERVAL,
+                                        nsITimer::TYPE_ONE_SHOT);
+  }
+}
 
 NS_IMPL_ISUPPORTS1(nsXMLHttpRequest::nsHeaderVisitor, nsIHttpHeaderVisitor)
 
 NS_IMETHODIMP nsXMLHttpRequest::
 nsHeaderVisitor::VisitHeader(const nsACString &header, const nsACString &value)
 {
-    mHeaders.Append(header);
-    mHeaders.Append(": ");
-    mHeaders.Append(value);
-    mHeaders.Append('\n');
+    // See bug #380418. Hide "Set-Cookie" headers from non-chrome scripts.
+    PRBool chrome = PR_FALSE; // default to false in case IsCapabilityEnabled fails
+    IsCapabilityEnabled("UniversalXPConnect", &chrome);
+    if (!chrome &&
+         (header.LowerCaseEqualsASCII("set-cookie") ||
+          header.LowerCaseEqualsASCII("set-cookie2"))) {
+        NS_WARNING("blocked access to response header");
+    } else {
+        mHeaders.Append(header);
+        mHeaders.Append(": ");
+        mHeaders.Append(value);
+        mHeaders.Append('\n');
+    }
     return NS_OK;
 }
 
 // DOM event class to handle progress notifications
-nsXMLHttpProgressEvent::nsXMLHttpProgressEvent(nsIDOMEvent * aInner, PRUint64 aCurrentProgress, PRUint64 aMaxProgress)
+nsXMLHttpProgressEvent::nsXMLHttpProgressEvent(nsIDOMProgressEvent* aInner,
+                                               PRUint64 aCurrentProgress,
+                                               PRUint64 aMaxProgress)
 {
-  mInner = aInner; 
+  mInner = static_cast<nsDOMProgressEvent*>(aInner);
   mCurProgress = aCurrentProgress;
   mMaxProgress = aMaxProgress;
 }
@@ -2106,16 +3465,30 @@ nsXMLHttpProgressEvent::nsXMLHttpProgressEvent(nsIDOMEvent * aInner, PRUint64 aC
 nsXMLHttpProgressEvent::~nsXMLHttpProgressEvent()
 {}
 
-// QueryInterface implementation for nsXMLHttpRequest
-NS_INTERFACE_MAP_BEGIN(nsXMLHttpProgressEvent)
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMLSProgressEvent)
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsXMLHttpProgressEvent)
+
+// QueryInterface implementation for nsXMLHttpProgressEvent
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsXMLHttpProgressEvent)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMProgressEvent)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsIDOMEvent, nsIDOMProgressEvent)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMNSEvent)
+  NS_INTERFACE_MAP_ENTRY(nsIPrivateDOMEvent)
+  NS_INTERFACE_MAP_ENTRY(nsIDOMProgressEvent)
   NS_INTERFACE_MAP_ENTRY(nsIDOMLSProgressEvent)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMEvent)
   NS_INTERFACE_MAP_ENTRY_CONTENT_CLASSINFO(XMLHttpProgressEvent)
 NS_INTERFACE_MAP_END
 
-NS_IMPL_ADDREF(nsXMLHttpProgressEvent)
-NS_IMPL_RELEASE(nsXMLHttpProgressEvent)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(nsXMLHttpProgressEvent)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(nsXMLHttpProgressEvent)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsXMLHttpProgressEvent)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mInner);
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsXMLHttpProgressEvent)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR_AMBIGUOUS(mInner,
+                                                       nsIDOMProgressEvent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMETHODIMP nsXMLHttpProgressEvent::GetInput(nsIDOMLSInput * *aInput)
 {
@@ -2136,3 +3509,4 @@ NS_IMETHODIMP nsXMLHttpProgressEvent::GetTotalSize(PRUint32 *aTotalSize)
   LL_L2UI(*aTotalSize, mMaxProgress);
   return NS_OK;
 }
+

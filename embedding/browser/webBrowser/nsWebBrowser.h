@@ -51,6 +51,7 @@
 #include "nsIBaseWindow.h"
 #include "nsIDocShell.h"
 #include "nsIDocShellTreeItem.h"
+#include "nsIDocShellTreeNode.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIScrollable.h"
@@ -93,7 +94,7 @@ public:
     PRBool Equals(nsIWeakReference *aListener, const nsIID& aID) {
         if (mWeakPtr.get() == aListener && mID.Equals(aID)) return PR_TRUE;
         return PR_FALSE;
-    };
+    }
 
     nsWeakPtr mWeakPtr;
     nsIID mID;
@@ -126,6 +127,7 @@ public:
 
     NS_DECL_NSIBASEWINDOW
     NS_DECL_NSIDOCSHELLTREEITEM
+    NS_DECL_NSIDOCSHELLTREENODE
     NS_DECL_NSIINTERFACEREQUESTOR
     NS_DECL_NSISCROLLABLE   
     NS_DECL_NSITEXTSCROLL
@@ -142,6 +144,7 @@ protected:
     virtual ~nsWebBrowser();
     NS_IMETHOD InternalDestroy();
 
+    // XXXbz why are these NS_IMETHOD?  They're not interface methods!
     NS_IMETHOD SetDocShell(nsIDocShell* aDocShell);
     NS_IMETHOD EnsureDocShellTreeOwner();
     NS_IMETHOD GetPrimaryContentWindow(nsIDOMWindowInternal **aDomWindow);
@@ -149,7 +152,7 @@ protected:
     NS_IMETHOD UnBindListener(nsISupports *aListener, const nsIID& aIID);
     NS_IMETHOD EnableGlobalHistory(PRBool aEnable);
 
-    static nsEventStatus PR_CALLBACK HandleEvent(nsGUIEvent *aEvent);
+    static nsEventStatus HandleEvent(nsGUIEvent *aEvent);
 
 protected:
    nsDocShellTreeOwner*       mDocShellTreeOwner;
@@ -164,7 +167,8 @@ protected:
    nsCOMPtr<nsIWindowWatcher> mWWatch;
    nsWebBrowserInitInfo*      mInitInfo;
    PRUint32                   mContentType;
-   PRBool                     mActivating;
+   PRPackedBool               mActivating;
+   PRPackedBool               mShouldEnableHistory;
    nativeWindow               mParentNativeWindow;
    nsIWebProgressListener    *mProgressListener;
    nsCOMPtr<nsIWebProgress>      mWebProgress;
@@ -187,13 +191,6 @@ protected:
    //Weak Reference interfaces...
    nsIWidget*                 mParentWidget;
    nsVoidArray *              mListenerArray;
-   
-#if (defined(XP_MAC) || defined(XP_MACOSX)) && !defined(MOZ_WIDGET_COCOA)
-   NS_IMETHOD EnsureTopLevelWidget(nativeWindow aWindow);
-
-   nsIWidget*                 mTopLevelWidget;
-#endif
-
 };
 
 #endif /* nsWebBrowser_h__ */

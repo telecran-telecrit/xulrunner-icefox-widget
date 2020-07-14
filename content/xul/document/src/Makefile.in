@@ -51,6 +51,7 @@ REQUIRES	= xpcom \
 		  exthandler \
 		  mimetype \
 		  gfx \
+		  thebes \
 		  layout \
 		  content \
 		  widget \
@@ -62,21 +63,21 @@ REQUIRES	= xpcom \
 		  locale \
 		  view \
 		  necko \
-		  uriloader \
 		  htmlparser \
-		  lwbrk \
 		  docshell \
 		  pref \
 		  xultmpl \
 		  webshell \
 		  unicharutil \
+		  appshell \
+		  util \
+		  imglib2 \
 		  $(NULL)
 
 CPPSRCS		= nsXULControllers.cpp
 
 ifdef MOZ_XUL
 CPPSRCS		+= \
-		nsElementMap.cpp \
 		nsXULCommandDispatcher.cpp \
 		nsXULContentSink.cpp \
 		nsXULDocument.cpp \

@@ -41,35 +41,11 @@
 #include "prmem.h"
 #include "nsBidi.h"
 #include "nsBidiUtils.h"
-#include "bidicattable.h"
-#include "symmtable.h"
 #include "nsCRT.h"
 
-static nsCharType ebc2ucd[15] = {
-  eCharType_OtherNeutral, /* Placeholder -- there will never be a 0 index value */
-  eCharType_LeftToRight,
-  eCharType_RightToLeft,
-  eCharType_RightToLeftArabic,
-  eCharType_ArabicNumber,
-  eCharType_EuropeanNumber,
-  eCharType_EuropeanNumberSeparator,
-  eCharType_EuropeanNumberTerminator,
-  eCharType_CommonNumberSeparator,
-  eCharType_OtherNeutral,
-  eCharType_DirNonSpacingMark,
-  eCharType_BoundaryNeutral,
-  eCharType_BlockSeparator,
-  eCharType_SegmentSeparator,
-  eCharType_WhiteSpaceNeutral
-};
-
-static nsCharType cc2ucd[5] = {
-  eCharType_LeftToRightEmbedding,
-  eCharType_RightToLeftEmbedding,
-  eCharType_PopDirectionalFormat,
-  eCharType_LeftToRightOverride,
-  eCharType_RightToLeftOverride
-};
+// These are #defined in <sys/regset.h> under Solaris 10 x86
+#undef CS
+#undef ES
 
 /*  Comparing the description of the Bidi algorithm with this implementation
     is easier with the same names for the Bidi types in the code as there.
@@ -132,7 +108,7 @@ static Flags flagO[2]={ DIRPROP_FLAG(LRO), DIRPROP_FLAG(RLO) };
  * that look at immediately surrounding types.
  *
  * As a related topic, this implementation does not remove Boundary Neutral
- * types from the input, but ignores them whereever this is relevant.
+ * types from the input, but ignores them whenever this is relevant.
  * For example, the loop for the resolution of the weak types reads
  * types until it finds a non-BN.
  * Also, explicit embedding codes are neither changed into BN nor removed.
@@ -330,7 +306,7 @@ nsresult nsBidi::SetPara(const PRUnichar *aText, PRInt32 aLength,
 
   /* check the argument values */
   if(aText==NULL ||
-     (NSBIDI_MAX_EXPLICIT_LEVEL<aParaLevel) && !IS_DEFAULT_LEVEL(aParaLevel) ||
+     ((NSBIDI_MAX_EXPLICIT_LEVEL<aParaLevel) && !IS_DEFAULT_LEVEL(aParaLevel)) ||
      aLength<-1
     ) {
     return NS_ERROR_INVALID_ARG;
@@ -812,7 +788,7 @@ nsresult nsBidi::CheckExplicitLevels(nsBidiDirection *aDirection)
 nsBidiDirection nsBidi::DirectionFromFlags(Flags aFlags)
 {
   /* if the text contains AN and neutrals, then some neutrals may become RTL */
-  if(!(aFlags&MASK_RTL || aFlags&DIRPROP_FLAG(AN) && aFlags&MASK_POSSIBLE_N)) {
+  if(!(aFlags&MASK_RTL || (aFlags&DIRPROP_FLAG(AN) && aFlags&MASK_POSSIBLE_N))) {
     return NSBIDI_LTR;
   } else if(!(aFlags&MASK_LTR)) {
     return NSBIDI_RTL;
@@ -959,7 +935,7 @@ void nsBidi::ResolveImplicitLevels(PRInt32 aStart, PRInt32 aLimit,
           historyOfEN|=EN_AFTER_W4;
         } else if(prevDirProp==AN &&                    /* previous was AN */
               (nextDirProp==AN ||                   /* next is AN */
-               nextDirProp==EN && lastStrong==AL)   /* or (W2) will make it one */
+               (nextDirProp==EN && lastStrong==AL))   /* or (W2) will make it one */
              ) {
           /* (W4) */
           dirProp=AN;
@@ -980,7 +956,7 @@ void nsBidi::ResolveImplicitLevels(PRInt32 aStart, PRInt32 aLimit,
         }
 
         if( historyOfEN&PREV_EN_AFTER_W4 ||     /* previous was EN before (W5) */
-            nextDirProp==EN && lastStrong!=AL   /* next is EN and (W2) won't make it AN */
+            (nextDirProp==EN && lastStrong!=AL)   /* next is EN and (W2) won't make it AN */
           ) {
           /* (W5) */
           if(lastStrong!=L) {
@@ -1092,7 +1068,7 @@ void nsBidi::ResolveImplicitLevels(PRInt32 aStart, PRInt32 aLimit,
   }
 
   /* perform (Nn) - here,
-  the character after the the neutrals is aEOR, which is either L or R */
+  the character after the neutrals is aEOR, which is either L or R */
   /* this is one iteration late for the neutrals */
   if(neutralStart>=0) {
     /*
@@ -1501,7 +1477,7 @@ nsresult nsBidi::CountRuns(PRInt32* aRunCount)
 nsresult nsBidi::GetVisualRun(PRInt32 aRunIndex, PRInt32 *aLogicalStart, PRInt32 *aLength, nsBidiDirection *aDirection)
 {
   if( aRunIndex<0 ||
-      mRunCount==-1 && !GetRuns() ||
+      (mRunCount==-1 && !GetRuns()) ||
       aRunIndex>=mRunCount
     ) {
     *aDirection = NSBIDI_LTR;
@@ -2141,7 +2117,6 @@ nsresult nsBidi::InvertMap(const PRInt32 *aSrcMap, PRInt32 *aDestMap, PRInt32 aL
   return NS_OK;
 }
 
-#endif // FULL_BIDI_ENGINE
 PRInt32 nsBidi::doWriteReverse(const PRUnichar *src, PRInt32 srcLength,
                                PRUnichar *dest, PRUint16 options) {
   /*
@@ -2303,52 +2278,5 @@ nsresult nsBidi::WriteReverse(const PRUnichar *aSrc, PRInt32 aSrcLength, PRUnich
   }
   return NS_OK;
 }
-
-eBidiCategory nsBidi::GetBidiCategory(PRUint32 aChar)
-{
-  eBidiCategory oResult = GetBidiCat(aChar);
-  if (eBidiCat_CC == oResult)
-    oResult = (eBidiCategory)(aChar & 0xFF); /* Control codes have special treatment to keep the tables smaller */
-  return oResult;
-}
-
-PRBool nsBidi::IsBidiCategory(PRUint32 aChar, eBidiCategory aBidiCategory)
-{
-  return (GetBidiCategory(aChar) == aBidiCategory);
-}
-
-#define LRM_CHAR 0x200e
-PRBool nsBidi::IsBidiControl(PRUint32 aChar)
-{
-  // This method is used when stripping Bidi control characters for
-  // display, so it will return TRUE for LRM and RLM as
-  // well as the characters with category eBidiCat_CC
-  return (eBidiCat_CC == GetBidiCat(aChar) || ((aChar)&0xfffffe)==LRM_CHAR);
-}
-
-nsCharType nsBidi::GetCharType(PRUint32 aChar)
-{
-  nsCharType oResult;
-  eBidiCategory bCat = GetBidiCat(aChar);
-  if (eBidiCat_CC != bCat) {
-    NS_ASSERTION(bCat < (sizeof(ebc2ucd)/sizeof(nsCharType)), "size mismatch");
-    if(bCat < (sizeof(ebc2ucd)/sizeof(nsCharType)))
-      oResult = ebc2ucd[bCat];
-    else 
-      oResult = ebc2ucd[0]; // something is very wrong, but we need to return a value
-  } else {
-    NS_ASSERTION((aChar-0x202a) < (sizeof(cc2ucd)/sizeof(nsCharType)), "size mismatch");
-    if((aChar-0x202a) < (sizeof(cc2ucd)/sizeof(nsCharType)))
-      oResult = cc2ucd[aChar - 0x202a];
-    else 
-      oResult = ebc2ucd[0]; // something is very wrong, but we need to return a value
-  }
-  return oResult;
-}
-
-PRUint32 nsBidi::SymmSwap(PRUint32 aChar)
-{
-  return Mirrored(aChar);
-}
-
+#endif // FULL_BIDI_ENGINE
 #endif // IBMBIDI

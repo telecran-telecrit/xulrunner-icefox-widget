@@ -49,6 +49,7 @@
 #include "nsICollation.h"
 #include "nsCollationCID.h"
 #include "nsLocaleCID.h"
+#include "nsIGenericFactory.h"
 #include "nsILocaleService.h"
 #include "nsIPrefService.h"
 #include "nsIPrefBranch.h"
@@ -64,17 +65,15 @@
 #include "nsITimelineService.h"
 #include "nsCRT.h"
 #include "prmem.h"
+#include "nsCycleCollectionParticipant.h"
 
 //----------------------------------------------------------------------------
 // Global functions and data [declaration]
 
 static NS_DEFINE_CID(kRDFServiceCID, NS_RDFSERVICE_CID);
-static NS_DEFINE_CID(kCharsetConverterManagerCID, NS_ICHARSETCONVERTERMANAGER_CID);
 static NS_DEFINE_CID(kRDFInMemoryDataSourceCID, NS_RDFINMEMORYDATASOURCE_CID);
 static NS_DEFINE_CID(kRDFContainerUtilsCID, NS_RDFCONTAINERUTILS_CID);
 static NS_DEFINE_CID(kRDFContainerCID, NS_RDFCONTAINER_CID);
-static NS_DEFINE_CID(kCollationFactoryCID, NS_COLLATIONFACTORY_CID);
-static NS_DEFINE_CID(kLocaleServiceCID, NS_LOCALESERVICE_CID); 
 
 static const char kURINC_BrowserAutodetMenuRoot[] = "NC:BrowserAutodetMenuRoot";
 static const char kURINC_BrowserCharsetMenuRoot[] = "NC:BrowserCharsetMenuRoot";
@@ -142,8 +141,6 @@ public:
   nsAutoString      mTitle;
 };
 
-MOZ_DECL_CTOR_COUNTER(nsMenuEntry)
-
 //----------------------------------------------------------------------------
 // Class nsCharsetMenu [declaration]
 
@@ -157,7 +154,8 @@ MOZ_DECL_CTOR_COUNTER(nsMenuEntry)
  */
 class nsCharsetMenu : public nsIRDFDataSource, public nsICurrentCharsetListener
 {
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsCharsetMenu, nsIRDFDataSource)
 
 private:
   static nsIRDFResource * kNC_BrowserAutodetMenuRoot;
@@ -284,7 +282,7 @@ private:
   nsresult RemoveLastMenuItem(nsIRDFContainer * aContainer, 
                               nsVoidArray * aArray);
 
-  nsresult RemoveFlaggedCharsets(nsCStringArray& aList, nsString * aProp);
+  nsresult RemoveFlaggedCharsets(nsCStringArray& aList, const nsString& aProp);
   nsresult NewRDFContainer(nsIRDFDataSource * aDataSource, 
     nsIRDFResource * aResource, nsIRDFContainer ** aResult);
   void FreeMenuItemArray(nsVoidArray * aArray);
@@ -357,7 +355,7 @@ struct charsetMenuSortRecord {
 
 };
 
-static int PR_CALLBACK CompareMenuItems(const void* aArg1, const void* aArg2, void *data)
+static int CompareMenuItems(const void* aArg1, const void* aArg2, void *data)
 {
   PRInt32 res; 
   nsICollation * collation = (nsICollation *) data;
@@ -469,7 +467,19 @@ NS_IMETHODIMP nsCharsetMenuObserver::Observe(nsISupports *aSubject, const char *
 //----------------------------------------------------------------------------
 // Class nsCharsetMenu [implementation]
 
-NS_IMPL_ISUPPORTS2(nsCharsetMenu, nsIRDFDataSource, nsICurrentCharsetListener)
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsCharsetMenu)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_0(nsCharsetMenu)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsCharsetMenu)
+  cb.NoteXPCOMChild(nsCharsetMenu::mInner);
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTING_ADDREF_AMBIGUOUS(nsCharsetMenu, nsIRDFDataSource)
+NS_IMPL_CYCLE_COLLECTING_RELEASE_AMBIGUOUS(nsCharsetMenu, nsIRDFDataSource)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsCharsetMenu)
+  NS_INTERFACE_MAP_ENTRY(nsIRDFDataSource)
+  NS_INTERFACE_MAP_ENTRY(nsICurrentCharsetListener)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIRDFDataSource)
+NS_INTERFACE_MAP_END
 
 nsIRDFDataSource * nsCharsetMenu::mInner = NULL;
 nsIRDFResource * nsCharsetMenu::kNC_BrowserAutodetMenuRoot = NULL;
@@ -506,7 +516,7 @@ nsCharsetMenu::nsCharsetMenu()
   nsresult res = NS_OK;
 
   //get charset manager
-  mCCManager = do_GetService(kCharsetConverterManagerCID, &res);
+  mCCManager = do_GetService(NS_CHARSETCONVERTERMANAGER_CONTRACTID, &res);
 
   //initialize skeleton RDF source
   mRDFService = do_GetService(kRDFServiceCID, &res);
@@ -582,6 +592,10 @@ nsresult nsCharsetMenu::RefreshBrowserMenu()
 
   // mark the end of the static area, the rest is cache
   mBrowserCacheStart = mBrowserMenu.Count();
+
+  // Remove "notForBrowser" entries before populating cache menu
+  res = RemoveFlaggedCharsets(decs, NS_LITERAL_STRING(".notForBrowser"));
+  NS_ASSERTION(NS_SUCCEEDED(res), "error removing flagged charsets");
 
   res = InitCacheMenu(decs, kNC_BrowserCharsetMenuRoot, kBrowserCachePrefKey, 
                       &mBrowserMenu);
@@ -893,6 +907,10 @@ nsresult nsCharsetMenu::InitBrowserMenu()
     // elements are numbered from 1 (why god, WHY?!?!?!)
     mBrowserMenuRDFPosition -= mBrowserCacheStart - 1;
 
+    // Remove "notForBrowser" entries before populating cache menu
+    res = RemoveFlaggedCharsets(browserDecoderList, NS_LITERAL_STRING(".notForBrowser"));
+    NS_ASSERTION(NS_SUCCEEDED(res), "error initializing static charset menu from prefs");
+
     res = InitCacheMenu(browserDecoderList, kNC_BrowserCharsetMenuRoot, kBrowserCachePrefKey, 
       &mBrowserMenu);
     NS_ASSERTION(NS_SUCCEEDED(res), "error initializing browser cache charset menu");
@@ -1200,13 +1218,12 @@ nsresult nsCharsetMenu::InitMoreMenu(nsCStringArray& aDecs,
   nsresult res = NS_OK;
   nsCOMPtr<nsIRDFContainer> container;
   nsVoidArray moreMenu;
-  nsAutoString prop; prop.AssignWithConversion(aFlag);
 
   res = NewRDFContainer(mInner, aResource, getter_AddRefs(container));
   if (NS_FAILED(res)) goto done;
 
   // remove charsets "not for browser"
-  res = RemoveFlaggedCharsets(aDecs, &prop);
+  res = RemoveFlaggedCharsets(aDecs, NS_ConvertASCIItoUTF16(aFlag));
   if (NS_FAILED(res)) goto done;
 
   res = AddCharsetArrayToItemArray(moreMenu, aDecs);
@@ -1469,7 +1486,7 @@ nsresult nsCharsetMenu::AddFromPrefsToMenu(
   if (pls) {
     nsXPIDLString ucsval;
     pls->ToString(getter_Copies(ucsval));
-    NS_ConvertUCS2toUTF8 utf8val(ucsval);
+    NS_ConvertUTF16toUTF8 utf8val(ucsval);
     if (ucsval)
       res = AddFromStringToMenu(utf8val.BeginWriting(), aArray,
                                 aContainer, aDecs, aIDPrefix);
@@ -1688,7 +1705,7 @@ nsresult nsCharsetMenu::RemoveLastMenuItem(nsIRDFContainer * aContainer,
 }
 
 nsresult nsCharsetMenu::RemoveFlaggedCharsets(nsCStringArray& aList, 
-                                              nsString * aProp)
+                                              const nsString& aProp)
 {
   nsresult res = NS_OK;
   PRUint32 count;
@@ -1703,7 +1720,7 @@ nsresult nsCharsetMenu::RemoveFlaggedCharsets(nsCStringArray& aList,
     charset = aList.CStringAt(i);
     if (!charset) continue;
 
-    res = mCCManager->GetCharsetData(charset->get(), aProp->get(), str);
+    res = mCCManager->GetCharsetData(charset->get(), aProp.get(), str);
     if (NS_FAILED(res)) continue;
 
     aList.RemoveCStringAt(i);
@@ -1808,13 +1825,13 @@ nsresult nsCharsetMenu::GetCollation(nsICollation ** aCollation)
   nsICollationFactory * collationFactory = nsnull;
   
   nsCOMPtr<nsILocaleService> localeServ = 
-           do_GetService(kLocaleServiceCID, &res);
+           do_GetService(NS_LOCALESERVICE_CONTRACTID, &res);
   if (NS_FAILED(res)) return res;
 
   res = localeServ->GetApplicationLocale(getter_AddRefs(locale));
   if (NS_FAILED(res)) return res;
 
-  res = CallCreateInstance(kCollationFactoryCID, &collationFactory);
+  res = CallCreateInstance(NS_COLLATIONFACTORY_CONTRACTID, &collationFactory);
   if (NS_FAILED(res)) return res;
 
   res = collationFactory->CreateCollation(locale, aCollation);
@@ -1831,7 +1848,14 @@ NS_IMETHODIMP nsCharsetMenu::SetCurrentCharset(const PRUnichar * aCharset)
   nsresult res = NS_OK;
 
   if (mBrowserMenuInitialized) {
-    res = AddCharsetToCache(NS_LossyConvertUCS2toASCII(aCharset),
+    // Don't add item to the cache if it's marked "notForBrowser"
+    nsAutoString str;
+    res = mCCManager->GetCharsetData(NS_LossyConvertUTF16toASCII(aCharset).get(),
+                                     NS_LITERAL_STRING(".notForBrowser").get(), str);
+    if (NS_SUCCEEDED(res)) // succeeded means attribute exists
+      return res; // don't throw
+
+    res = AddCharsetToCache(NS_LossyConvertUTF16toASCII(aCharset),
                             &mBrowserMenu, kNC_BrowserCharsetMenuRoot, 
                             mBrowserCacheStart, mBrowserCacheSize,
                             mBrowserMenuRDFPosition);
@@ -1857,7 +1881,7 @@ NS_IMETHODIMP nsCharsetMenu::SetCurrentMailCharset(const PRUnichar * aCharset)
   nsresult res = NS_OK;
 
   if (mMailviewMenuInitialized) {
-    res = AddCharsetToCache(NS_LossyConvertUCS2toASCII(aCharset),
+    res = AddCharsetToCache(NS_LossyConvertUTF16toASCII(aCharset),
                             &mMailviewMenu, kNC_MailviewCharsetMenuRoot, 
                             mMailviewCacheStart, mMailviewCacheSize,
                             mMailviewMenuRDFPosition);
@@ -1881,7 +1905,7 @@ NS_IMETHODIMP nsCharsetMenu::SetCurrentComposerCharset(const PRUnichar * aCharse
 
   if (mComposerMenuInitialized) {
 
-    res = AddCharsetToCache(NS_LossyConvertUCS2toASCII(aCharset),
+    res = AddCharsetToCache(NS_LossyConvertUTF16toASCII(aCharset),
                             &mComposerMenu, kNC_ComposerCharsetMenuRoot, 
                             mComposerCacheStart, mComposerCacheSize,
                             mComposerMenuRDFPosition);
@@ -2062,3 +2086,13 @@ NS_IMETHODIMP nsCharsetMenu::EndUpdateBatch()
 {
   return mInner->EndUpdateBatch();
 }
+
+// Module definitions
+
+static const nsModuleComponentInfo components[] = {
+    { "nsCharsetMenu", NS_CHARSETMENU_CID,
+      NS_RDF_DATASOURCE_CONTRACTID_PREFIX NS_CHARSETMENU_PID,
+      NS_NewCharsetMenu },
+};
+
+NS_IMPL_NSGETMODULE(nsXPIntlModule, components)

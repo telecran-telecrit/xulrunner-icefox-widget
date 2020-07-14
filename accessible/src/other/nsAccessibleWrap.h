@@ -51,14 +51,11 @@ class nsAccessibleWrap : public nsAccessible
   public: // construction, destruction
     nsAccessibleWrap(nsIDOMNode*, nsIWeakReference *aShell);
     virtual ~nsAccessibleWrap();
-};
 
-// Define unsupported wrap classes here
-typedef class nsHTMLTextFieldAccessible    nsHTMLTextFieldAccessibleWrap;
-typedef class nsHTMLLinkAccessible         nsHTMLLinkAccessibleWrap;
-typedef class nsHTMLTableCellAccessible    nsHTMLTableCellAccessibleWrap;
-typedef class nsHTMLTableAccessible        nsHTMLTableAccessibleWrap;
-typedef class nsXULProgressMeterAccessible nsXULProgressMeterAccessibleWrap;
-typedef class nsXULTextFieldAccessible     nsXULTextFieldAccessibleWrap;
+  protected:
+    virtual nsresult FirePlatformEvent(nsIAccessibleEvent *aEvent) {
+      return NS_OK;
+    }
+};
 
 #endif

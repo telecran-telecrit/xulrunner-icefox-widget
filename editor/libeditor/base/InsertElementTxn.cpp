@@ -51,6 +51,21 @@ InsertElementTxn::InsertElementTxn()
 {
 }
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(InsertElementTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(InsertElementTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mNode)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(InsertElementTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mNode)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(InsertElementTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
+
 NS_IMETHODIMP InsertElementTxn::Init(nsIDOMNode *aNode,
                                      nsIDOMNode *aParent,
                                      PRInt32     aOffset,
@@ -69,10 +84,6 @@ NS_IMETHODIMP InsertElementTxn::Init(nsIDOMNode *aNode,
   return NS_OK;
 }
 
-
-InsertElementTxn::~InsertElementTxn()
-{
-}
 
 NS_IMETHODIMP InsertElementTxn::DoTransaction(void)
 {
@@ -146,13 +157,6 @@ NS_IMETHODIMP InsertElementTxn::UndoTransaction(void)
 
   nsCOMPtr<nsIDOMNode> resultNode;
   return mParent->RemoveChild(mNode, getter_AddRefs(resultNode));
-}
-
-NS_IMETHODIMP InsertElementTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge = PR_FALSE;
-  return NS_OK;
 }
 
 NS_IMETHODIMP InsertElementTxn::GetTxnDescription(nsAString& aString)

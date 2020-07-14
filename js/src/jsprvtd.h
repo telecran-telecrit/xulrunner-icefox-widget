@@ -55,32 +55,33 @@
  */
 
 #include "jspubtd.h"
+#include "jsutil.h"
 
 /* Internal identifier (jsid) macros. */
-#define JSID_ATOM                   0x0
-#define JSID_INT                    0x1
-#define JSID_OBJECT                 0x2
-#define JSID_TAGMASK                0x3
-#define JSID_TAG(id)                ((id) & JSID_TAGMASK)
-#define JSID_SETTAG(id,t)           ((id) | (t))
-#define JSID_CLRTAG(id)             ((id) & ~(jsid)JSID_TAGMASK)
 
-#define JSID_IS_ATOM(id)            (JSID_TAG(id) == JSID_ATOM)
+#define JSID_IS_ATOM(id)            JSVAL_IS_STRING((jsval)(id))
 #define JSID_TO_ATOM(id)            ((JSAtom *)(id))
-#define ATOM_TO_JSID(atom)          ((jsid)(atom))
-#define ATOM_JSID_TO_JSVAL(id)      ATOM_KEY(JSID_TO_ATOM(id))
+#define ATOM_TO_JSID(atom)          (JS_ASSERT(ATOM_IS_STRING(atom)),         \
+                                     (jsid)(atom))
 
-#define JSID_IS_INT(id)             ((id) & JSID_INT)
-#define JSID_TO_INT(id)             ((jsint)(id) >> 1)
-#define INT_TO_JSID(i)              (((jsint)(i) << 1) | JSID_INT)
-#define INT_JSID_TO_JSVAL(id)       (id)
-#define INT_JSVAL_TO_JSID(v)        (v)
+#define JSID_IS_INT(id)             JSVAL_IS_INT((jsval)(id))
+#define JSID_TO_INT(id)             JSVAL_TO_INT((jsval)(id))
+#define INT_TO_JSID(i)              ((jsid)INT_TO_JSVAL(i))
+#define INT_JSVAL_TO_JSID(v)        ((jsid)(v))
+#define INT_JSID_TO_JSVAL(id)       ((jsval)(id))
 
-#define JSID_IS_OBJECT(id)          (JSID_TAG(id) == JSID_OBJECT)
-#define JSID_TO_OBJECT(id)          ((JSObject *) JSID_CLRTAG(id))
-#define OBJECT_TO_JSID(obj)         ((jsid)(obj) | JSID_OBJECT)
-#define OBJECT_JSID_TO_JSVAL(id)    OBJECT_TO_JSVAL(JSID_CLRTAG(id))
-#define OBJECT_JSVAL_TO_JSID(v)     OBJECT_TO_JSID(JSVAL_TO_OBJECT(v))
+#define JSID_IS_OBJECT(id)          JSVAL_IS_OBJECT((jsval)(id))
+#define JSID_TO_OBJECT(id)          JSVAL_TO_OBJECT((jsval)(id))
+#define OBJECT_TO_JSID(obj)         ((jsid)OBJECT_TO_JSVAL(obj))
+#define OBJECT_JSVAL_TO_JSID(v)     ((jsid)v)
+
+#define ID_TO_VALUE(id)             ((jsval)(id))
+
+/*
+ * Convenience constants.
+ */
+#define JS_BITS_PER_UINT32_LOG2 5
+#define JS_BITS_PER_UINT32      32
 
 /* Scalar typedefs. */
 typedef uint8  jsbytecode;
@@ -90,18 +91,27 @@ typedef uint32 jsatomid;
 /* Struct typedefs. */
 typedef struct JSArgumentFormatMap  JSArgumentFormatMap;
 typedef struct JSCodeGenerator      JSCodeGenerator;
-typedef struct JSDependentString    JSDependentString;
 typedef struct JSGCThing            JSGCThing;
 typedef struct JSGenerator          JSGenerator;
+typedef struct JSNativeEnumerator   JSNativeEnumerator;
+typedef struct JSCompiler           JSCompiler;
+typedef struct JSFunctionBox        JSFunctionBox;
+typedef struct JSObjectBox          JSObjectBox;
 typedef struct JSParseNode          JSParseNode;
+typedef struct JSPropCacheEntry     JSPropCacheEntry;
+typedef struct JSProperty           JSProperty;
 typedef struct JSSharpObjectMap     JSSharpObjectMap;
+typedef struct JSTempValueRooter    JSTempValueRooter;
 typedef struct JSThread             JSThread;
+typedef struct JSThreadData         JSThreadData;
 typedef struct JSToken              JSToken;
 typedef struct JSTokenPos           JSTokenPos;
 typedef struct JSTokenPtr           JSTokenPtr;
 typedef struct JSTokenStream        JSTokenStream;
+typedef struct JSTraceMonitor       JSTraceMonitor;
 typedef struct JSTreeContext        JSTreeContext;
 typedef struct JSTryNote            JSTryNote;
+typedef struct JSWeakRoots          JSWeakRoots;
 
 /* Friend "Advanced API" typedefs. */
 typedef struct JSAtom               JSAtom;
@@ -116,13 +126,11 @@ typedef struct JSRegExpStatics      JSRegExpStatics;
 typedef struct JSScope              JSScope;
 typedef struct JSScopeOps           JSScopeOps;
 typedef struct JSScopeProperty      JSScopeProperty;
-typedef struct JSStackFrame         JSStackFrame;
 typedef struct JSStackHeader        JSStackHeader;
 typedef struct JSStringBuffer       JSStringBuffer;
 typedef struct JSSubString          JSSubString;
+typedef struct JSTraceableNative    JSTraceableNative;
 typedef struct JSXML                JSXML;
-typedef struct JSXMLNamespace       JSXMLNamespace;
-typedef struct JSXMLQName           JSXMLQName;
 typedef struct JSXMLArray           JSXMLArray;
 typedef struct JSXMLArrayCursor     JSXMLArrayCursor;
 
@@ -136,32 +144,31 @@ typedef enum JSTrapStatus {
 } JSTrapStatus;
 
 typedef JSTrapStatus
-(* JS_DLL_CALLBACK JSTrapHandler)(JSContext *cx, JSScript *script,
-                                  jsbytecode *pc, jsval *rval, void *closure);
+(* JSTrapHandler)(JSContext *cx, JSScript *script, jsbytecode *pc, jsval *rval,
+                  void *closure);
 
 typedef JSBool
-(* JS_DLL_CALLBACK JSWatchPointHandler)(JSContext *cx, JSObject *obj, jsval id,
-                                        jsval old, jsval *newp, void *closure);
+(* JSWatchPointHandler)(JSContext *cx, JSObject *obj, jsval id, jsval old,
+                        jsval *newp, void *closure);
 
 /* called just after script creation */
 typedef void
-(* JS_DLL_CALLBACK JSNewScriptHook)(JSContext  *cx,
-                                    const char *filename,  /* URL of script */
-                                    uintN      lineno,     /* first line */
-                                    JSScript   *script,
-                                    JSFunction *fun,
-                                    void       *callerdata);
+(* JSNewScriptHook)(JSContext  *cx,
+                    const char *filename,  /* URL of script */
+                    uintN      lineno,     /* first line */
+                    JSScript   *script,
+                    JSFunction *fun,
+                    void       *callerdata);
 
 /* called just before script destruction */
 typedef void
-(* JS_DLL_CALLBACK JSDestroyScriptHook)(JSContext *cx,
-                                        JSScript  *script,
-                                        void      *callerdata);
+(* JSDestroyScriptHook)(JSContext *cx,
+                        JSScript  *script,
+                        void      *callerdata);
 
 typedef void
-(* JS_DLL_CALLBACK JSSourceHandler)(const char *filename, uintN lineno,
-                                    jschar *str, size_t length,
-                                    void **listenerTSData, void *closure);
+(* JSSourceHandler)(const char *filename, uintN lineno, jschar *str,
+                    size_t length, void **listenerTSData, void *closure);
 
 /*
  * This hook captures high level script execution and function calls (JS or
@@ -189,15 +196,171 @@ typedef void
  * be called.
  */
 typedef void *
-(* JS_DLL_CALLBACK JSInterpreterHook)(JSContext *cx, JSStackFrame *fp, JSBool before,
-                                      JSBool *ok, void *closure);
+(* JSInterpreterHook)(JSContext *cx, JSStackFrame *fp, JSBool before,
+                      JSBool *ok, void *closure);
 
 typedef void
-(* JS_DLL_CALLBACK JSObjectHook)(JSContext *cx, JSObject *obj, JSBool isNew,
-                                 void *closure);
+(* JSObjectHook)(JSContext *cx, JSObject *obj, JSBool isNew, void *closure);
 
 typedef JSBool
-(* JS_DLL_CALLBACK JSDebugErrorHook)(JSContext *cx, const char *message,
-                                     JSErrorReport *report, void *closure);
+(* JSDebugErrorHook)(JSContext *cx, const char *message, JSErrorReport *report,
+                     void *closure);
+
+typedef struct JSDebugHooks {
+    JSTrapHandler       interruptHandler;
+    void                *interruptHandlerData;
+    JSNewScriptHook     newScriptHook;
+    void                *newScriptHookData;
+    JSDestroyScriptHook destroyScriptHook;
+    void                *destroyScriptHookData;
+    JSTrapHandler       debuggerHandler;
+    void                *debuggerHandlerData;
+    JSSourceHandler     sourceHandler;
+    void                *sourceHandlerData;
+    JSInterpreterHook   executeHook;
+    void                *executeHookData;
+    JSInterpreterHook   callHook;
+    void                *callHookData;
+    JSObjectHook        objectHook;
+    void                *objectHookData;
+    JSTrapHandler       throwHook;
+    void                *throwHookData;
+    JSDebugErrorHook    debugErrorHook;
+    void                *debugErrorHookData;
+} JSDebugHooks;
+
+/*
+ * Type definitions for temporary GC roots that register with GC local C
+ * variables. See jscntxt.h for details.
+ */
+typedef void
+(* JSTempValueTrace)(JSTracer *trc, JSTempValueRooter *tvr);
+
+typedef union JSTempValueUnion {
+    jsval               value;
+    JSObject            *object;
+    JSString            *string;
+    JSXML               *xml;
+    JSTempValueTrace    trace;
+    JSScopeProperty     *sprop;
+    JSWeakRoots         *weakRoots;
+    JSCompiler          *compiler;
+    JSScript            *script;
+    jsval               *array;
+} JSTempValueUnion;
+
+struct JSTempValueRooter {
+    JSTempValueRooter   *down;
+    ptrdiff_t           count;
+    JSTempValueUnion    u;
+};
+
+/* JSObjectOps function pointer typedefs. */
+
+/*
+ * Look for id in obj and its prototype chain, returning false on error or
+ * exception, true on success.  On success, return null in *propp if id was
+ * not found.  If id was found, return the first object searching from obj
+ * along its prototype chain in which id names a direct property in *objp, and
+ * return a non-null, opaque property pointer in *propp.
+ *
+ * If JSLookupPropOp succeeds and returns with *propp non-null, that pointer
+ * may be passed as the prop parameter to a JSAttributesOp, as a short-cut
+ * that bypasses id re-lookup.  In any case, a non-null *propp result after a
+ * successful lookup must be dropped via JSObjectOps.dropProperty.
+ *
+ * NB: successful return with non-null *propp means the implementation may
+ * have locked *objp and added a reference count associated with *propp, so
+ * callers should not risk deadlock by nesting or interleaving other lookups
+ * or any obj-bearing ops before dropping *propp.
+ */
+typedef JSBool
+(* JSLookupPropOp)(JSContext *cx, JSObject *obj, jsid id, JSObject **objp,
+                   JSProperty **propp);
+
+/*
+ * Define obj[id], a direct property of obj named id, having the given initial
+ * value, with the specified getter, setter, and attributes.  If the propp out
+ * param is non-null, *propp on successful return contains an opaque property
+ * pointer usable as a speedup hint with JSAttributesOp.  But note that propp
+ * may be null, indicating that the caller is not interested in recovering an
+ * opaque pointer to the newly-defined property.
+ *
+ * If propp is non-null and JSDefinePropOp succeeds, its caller must be sure
+ * to drop *propp using JSObjectOps.dropProperty in short order, just as with
+ * JSLookupPropOp.
+ */
+typedef JSBool
+(* JSDefinePropOp)(JSContext *cx, JSObject *obj, jsid id, jsval value,
+                   JSPropertyOp getter, JSPropertyOp setter, uintN attrs,
+                   JSProperty **propp);
+
+/*
+ * Get, set, or delete obj[id], returning false on error or exception, true
+ * on success.  If getting or setting, the new value is returned in *vp on
+ * success.  If deleting without error, *vp will be JSVAL_FALSE if obj[id] is
+ * permanent, and JSVAL_TRUE if id named a direct property of obj that was in
+ * fact deleted, or if id names no direct property of obj (id could name a
+ * prototype property, or no property in obj or its prototype chain).
+ */
+typedef JSBool
+(* JSPropertyIdOp)(JSContext *cx, JSObject *obj, jsid id, jsval *vp);
+
+/*
+ * Get or set attributes of the property obj[id].  Return false on error or
+ * exception, true with current attributes in *attrsp.  If prop is non-null,
+ * it must come from the *propp out parameter of a prior JSDefinePropOp or
+ * JSLookupPropOp call.
+ */
+typedef JSBool
+(* JSAttributesOp)(JSContext *cx, JSObject *obj, jsid id, JSProperty *prop,
+                   uintN *attrsp);
+
+/*
+ * JSObjectOps.checkAccess type: check whether obj[id] may be accessed per
+ * mode, returning false on error/exception, true on success with obj[id]'s
+ * last-got value in *vp, and its attributes in *attrsp.
+ */
+typedef JSBool
+(* JSCheckAccessIdOp)(JSContext *cx, JSObject *obj, jsid id, JSAccessMode mode,
+                      jsval *vp, uintN *attrsp);
+
+/*
+ * A generic type for functions taking a context, object, and property, with
+ * no return value.  Used by JSObjectOps.dropProperty currently (see above,
+ * JSDefinePropOp and JSLookupPropOp, for the object-locking protocol in which
+ * dropProperty participates).
+ */
+typedef void
+(* JSPropertyRefOp)(JSContext *cx, JSObject *obj, JSProperty *prop);
+
+/*
+ * Get and set a required slot, one that should already have been allocated.
+ * These operations are infallible, so required slots must be pre-allocated,
+ * or implementations must suppress out-of-memory errors.  The native ops
+ * (js_ObjectOps, see jsobj.c) access slots reserved by including a call to
+ * the JSCLASS_HAS_RESERVED_SLOTS(n) macro in the JSClass.flags initializer.
+ *
+ * NB: the slot parameter is a zero-based index into obj slots, unlike the
+ * index parameter to the JS_GetReservedSlot and JS_SetReservedSlot API entry
+ * points, which is a zero-based index into the JSCLASS_RESERVED_SLOTS(clasp)
+ * reserved slots that come after the initial well-known slots: proto, parent,
+ * class, and optionally, the private data slot.
+ */
+typedef jsval
+(* JSGetRequiredSlotOp)(JSContext *cx, JSObject *obj, uint32 slot);
+
+typedef JSBool
+(* JSSetRequiredSlotOp)(JSContext *cx, JSObject *obj, uint32 slot, jsval v);
+
+/*
+ * The following determines whether JS_EncodeCharacters and JS_DecodeBytes
+ * treat char[] as utf-8 or simply as bytes that need to be inflated/deflated.
+ */
+#ifdef JS_C_STRINGS_ARE_UTF8
+# define js_CStringsAreUTF8 JS_TRUE
+#else
+extern JSBool js_CStringsAreUTF8;
+#endif
 
 #endif /* jsprvtd_h___ */

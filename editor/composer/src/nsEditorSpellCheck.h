@@ -45,6 +45,7 @@
 #include "nsISpellChecker.h"
 #include "nsVoidArray.h"
 #include "nsCOMPtr.h"
+#include "nsCycleCollectionParticipant.h"
 
 #define NS_EDITORSPELLCHECK_CID                     \
 { /* {75656ad9-bd13-4c5d-939a-ec6351eea0cc} */        \
@@ -52,17 +53,17 @@
     { 0x93, 0x9a, 0xec, 0x63, 0x51, 0xee, 0xa0, 0xcc }\
 }
 
-class nsEditorSpellCheck : public nsIEditorSpellCheck_MOZILLA_1_8_BRANCH
+class nsEditorSpellCheck : public nsIEditorSpellCheck
 {
 public:
   nsEditorSpellCheck();
   virtual ~nsEditorSpellCheck();
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS(nsEditorSpellCheck)
 
   /* Declare all methods in the nsIEditorSpellCheck interface */
   NS_DECL_NSIEDITORSPELLCHECK
-  NS_DECL_NSIEDITORSPELLCHECK_MOZILLA_1_8_BRANCH
 
 protected:
   nsCOMPtr<nsISpellChecker> mSpellChecker;

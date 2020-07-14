@@ -96,7 +96,7 @@ HRESULT Error(HRESULT hResult, const char * message)
 static void BuildMessage(nsIException * exception, nsCString & result)
 {
     nsXPIDLCString msg;
-    exception->GetMessage(getter_Copies(msg));
+    exception->GetMessageMoz(getter_Copies(msg));
     nsXPIDLCString filename;
     exception->GetFilename(getter_Copies(filename));
 
@@ -172,14 +172,14 @@ STDMETHODIMP XPCDispatchTearOff::QueryInterface(const struct _GUID & guid,
 {
     if(IsEqualIID(guid, IID_IDispatch))
     {
-        *pPtr = NS_STATIC_CAST(IDispatch*,this);
+        *pPtr = static_cast<IDispatch*>(this);
         NS_ADDREF_THIS();
         return NS_OK;
     }
 
     if(IsEqualIID(guid, IID_ISupportErrorInfo))
     {
-        *pPtr = NS_STATIC_CAST(IDispatch*,this);
+        *pPtr = static_cast<IDispatch*>(this);
         NS_ADDREF_THIS();
         return NS_OK;
     }
@@ -231,7 +231,7 @@ STDMETHODIMP XPCDispatchTearOff::GetIDsOfNames(REFIID riid,
     return S_OK;
 }
 
-void JS_DLL_CALLBACK
+void
 xpcWrappedJSErrorReporter(JSContext *cx, const char *message,
                           JSErrorReport *report);
 
@@ -262,7 +262,7 @@ STDMETHODIMP XPCDispatchTearOff::Invoke(DISPID dispIdMember, REFIID riid,
     }
     // Get the name as a flat string
     // This isn't that efficient, but we have to make the conversion somewhere
-    NS_LossyConvertUCS2toASCII name(pTypeInfo->GetNameForDispID(dispIdMember));
+    NS_LossyConvertUTF16toASCII name(pTypeInfo->GetNameForDispID(dispIdMember));
     if(name.IsEmpty())
         return E_FAIL;
     // Decide if this is a getter or setter
@@ -316,7 +316,7 @@ STDMETHODIMP XPCDispatchTearOff::Invoke(DISPID dispIdMember, REFIID riid,
     }
     else // We're invoking a function
     {
-        jsval* stackbase;
+        jsval* stackbase = nsnull;
         jsval* sp = nsnull;
         uint8 i;
         uint8 argc = pDispParams->cArgs;
@@ -336,6 +336,7 @@ STDMETHODIMP XPCDispatchTearOff::Invoke(DISPID dispIdMember, REFIID riid,
         JSObject* thisObj;
         AutoScriptEvaluate scriptEval(ccx);
         XPCJSRuntime* rt = ccx.GetRuntime();
+        int j;
 
         thisObj = obj = GetJSObject();;
 
@@ -403,12 +404,13 @@ STDMETHODIMP XPCDispatchTearOff::Invoke(DISPID dispIdMember, REFIID riid,
 
         uintN err;
         // build the args
-        for(i = 0; i < argc; i++)
+        // NOTE: COM expects args in DISPPARAMS to be in reverse order
+        for (j = argc - 1; j >= 0; --j )
         {
             jsval val;
-            if((pDispParams->rgvarg[i].vt & VT_BYREF) == 0)
+            if((pDispParams->rgvarg[j].vt & VT_BYREF) == 0)
             {
-                if(!XPCDispConvert::COMToJS(ccx, pDispParams->rgvarg[i], val, err))
+                if(!XPCDispConvert::COMToJS(ccx, pDispParams->rgvarg[j], val, err))
                     goto pre_call_clean_up;
                 *sp++ = val;
             }
@@ -423,7 +425,7 @@ STDMETHODIMP XPCDispatchTearOff::Invoke(DISPID dispIdMember, REFIID riid,
                 }
                 // We'll assume in/out
                 // TODO: I'm not sure we tell out vs in/out
-                OBJ_SET_PROPERTY(cx, out_obj,
+                JS_SetPropertyById(cx, out_obj,
                         rt->GetStringID(XPCJSRuntime::IDX_VALUE),
                         &val);
                 *sp++ = OBJECT_TO_JSVAL(out_obj);
@@ -443,26 +445,8 @@ pre_call_clean_up:
 
         if(!JSVAL_IS_PRIMITIVE(fval))
         {
-            // Lift current frame (or make new one) to include the args
-            // and do the call.
-            JSStackFrame *fp, *oldfp, frame;
-            jsval *oldsp;
-
-            fp = oldfp = cx->fp;
-            if(!fp)
-            {
-                memset(&frame, 0, sizeof(frame));
-                cx->fp = fp = &frame;
-            }
-            oldsp = fp->sp;
-            fp->sp = sp;
-
-            success = js_Invoke(cx, argc, JSINVOKE_INTERNAL);
-
-            result = fp->sp[-1];
-            fp->sp = oldsp;
-            if(oldfp != fp)
-                cx->fp = oldfp;
+            success = js_Invoke(cx, argc, stackbase, 0);
+            result = stackbase[0];
         }
         else
         {
@@ -481,15 +465,17 @@ pre_call_clean_up:
             nsCOMPtr<nsIException> e;
 
             XPCConvert::ConstructException(code, sz, "IDispatch", name.get(),
-                                           nsnull, getter_AddRefs(e));
+                                           nsnull, getter_AddRefs(e), nsnull, nsnull);
             xpcc->SetException(e);
             if(sz)
                 JS_smprintf_free(sz);
         }
 
-        if (!success)
+        if(!success)
         {
-            retval = nsXPCWrappedJSClass::CheckForException(ccx, name.get(), "IDispatch");
+            retval = nsXPCWrappedJSClass::CheckForException(ccx, name.get(),
+                                                            "IDispatch",
+                                                            PR_FALSE);
             goto done;
         }
 
@@ -510,7 +496,7 @@ pre_call_clean_up:
             {
                 jsval val;
                 if(JSVAL_IS_PRIMITIVE(stackbase[i+2]) ||
-                        !OBJ_GET_PROPERTY(cx, JSVAL_TO_OBJECT(stackbase[i+2]),
+                        !JS_GetPropertyById(cx, JSVAL_TO_OBJECT(stackbase[i+2]),
                             rt->GetStringID(XPCJSRuntime::IDX_VALUE),
                             &val))
                 {

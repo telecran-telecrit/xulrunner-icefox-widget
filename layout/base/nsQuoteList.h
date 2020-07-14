@@ -34,6 +34,9 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/* implementation of quotes for the CSS 'content' property */
+
 #ifndef nsQuoteList_h___
 #define nsQuoteList_h___
 
@@ -46,10 +49,8 @@ struct nsQuoteNode : public nsGenConNode {
   // Quote depth before this quote, which is always non-negative.
   PRInt32 mDepthBefore;
 
-
-  nsQuoteNode(nsStyleContentType& aType, nsIFrame* aPseudoFrame,
-              PRUint32 aContentIndex)
-    : nsGenConNode(aPseudoFrame, aContentIndex)
+  nsQuoteNode(nsStyleContentType& aType, PRUint32 aContentIndex)
+    : nsGenConNode(aContentIndex)
     , mType(aType)
     , mDepthBefore(0)
   {
@@ -60,6 +61,9 @@ struct nsQuoteNode : public nsGenConNode {
                  "incorrect type");
     NS_ASSERTION(aContentIndex >= 0, "out of range");
   }
+
+  virtual PRBool InitTextFrame(nsGenConList* aList, 
+          nsIFrame* aPseudoFrame, nsIFrame* aTextFrame);
 
   // is this 'open-quote' or 'no-open-quote'?
   PRBool IsOpenQuote() {
@@ -76,11 +80,6 @@ struct nsQuoteNode : public nsGenConNode {
   PRBool IsRealQuote() {
     return mType == eStyleContentType_OpenQuote ||
            mType == eStyleContentType_CloseQuote;
-  }
-
-  // is this 'no-open-quote' or 'no-close-quote'?
-  PRBool IsHiddenQuote() {
-    return !IsRealQuote();
   }
 
   // Depth of the quote for *this* node.  Either non-negative or -1.
@@ -102,17 +101,17 @@ struct nsQuoteNode : public nsGenConNode {
 
 class nsQuoteList : public nsGenConList {
 private:
-  nsQuoteNode* FirstNode() { return NS_STATIC_CAST(nsQuoteNode*, mFirstNode); }
+  nsQuoteNode* FirstNode() { return static_cast<nsQuoteNode*>(mFirstNode); }
 public:
   // assign the correct |mDepthBefore| value to a node that has been inserted
   // Should be called immediately after calling |Insert|.
   void Calc(nsQuoteNode* aNode);
 
   nsQuoteNode* Next(nsQuoteNode* aNode) {
-    return NS_STATIC_CAST(nsQuoteNode*, nsGenConList::Next(aNode));
+    return static_cast<nsQuoteNode*>(nsGenConList::Next(aNode));
   }
   nsQuoteNode* Prev(nsQuoteNode* aNode) {
-    return NS_STATIC_CAST(nsQuoteNode*, nsGenConList::Prev(aNode));
+    return static_cast<nsQuoteNode*>(nsGenConList::Prev(aNode));
   }
   
   void RecalcAll();

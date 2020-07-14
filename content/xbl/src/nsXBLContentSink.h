@@ -92,6 +92,8 @@ public:
   nsXBLContentSink();
   ~nsXBLContentSink();
 
+  NS_DECL_AND_IMPL_ZEROING_OPERATOR_NEW
+
   nsresult Init(nsIDocument* aDoc,
                 nsIURI* aURL,
                 nsISupports* aContainer);
@@ -110,6 +112,8 @@ public:
 
 protected:
     // nsXMLContentSink overrides
+    virtual void MaybeStartLayout(PRBool aIgnorePendingSheets);
+
     PRBool OnOpenContainer(const PRUnichar **aAtts, 
                            PRUint32 aAttsCount, 
                            PRInt32 aNameSpaceID, 
@@ -118,7 +122,8 @@ protected:
     
     nsresult CreateElement(const PRUnichar** aAtts, PRUint32 aAttsCount,
                            nsINodeInfo* aNodeInfo, PRUint32 aLineNumber,
-                           nsIContent** aResult, PRBool* aAppendContent);
+                           nsIContent** aResult, PRBool* aAppendContent,
+                           PRBool aFromParser);
     
     nsresult AddAttributes(const PRUnichar** aAtts, 
                            nsIContent* aContent);
@@ -141,33 +146,36 @@ protected:
   
 
   // nsXMLContentSink overrides
-  nsresult FlushText(PRBool aCreateTextNode=PR_TRUE,
-                     PRBool* aDidFlush=nsnull);
+  nsresult FlushText(PRBool aReleaseTextNode = PR_TRUE);
 
   // nsIExpatSink overrides
   NS_IMETHOD ReportError(const PRUnichar* aErrorText,
-                         const PRUnichar* aSourceText);
+                         const PRUnichar* aSourceText,
+                         nsIScriptError *aError,
+                         PRBool *_retval);
 
 protected:
   nsresult ReportUnexpectedElement(nsIAtom* aElementName, PRUint32 aLineNumber);
 
   void AddMember(nsXBLProtoImplMember* aMember);
+  void AddField(nsXBLProtoImplField* aField);
   
   XBLPrimaryState mState;
   XBLSecondaryState mSecondaryState;
   nsIXBLDocumentInfo* mDocInfo;
-  PRBool mIsChromeOrResource; // For bug #45989
+  PRPackedBool mIsChromeOrResource; // For bug #45989
+  PRPackedBool mFoundFirstBinding;
 
   nsXBLPrototypeBinding* mBinding;
   nsXBLPrototypeHandler* mHandler; // current handler, owned by its PrototypeBinding
   nsXBLProtoImpl* mImplementation;
   nsXBLProtoImplMember* mImplMember;
+  nsXBLProtoImplField* mImplField;
   nsXBLProtoImplProperty* mProperty;
   nsXBLProtoImplMethod* mMethod;
   nsXBLProtoImplField* mField;
 };
 
-// This is also declared in nsSyncLoadService.cpp
 nsresult
 NS_NewXBLContentSink(nsIXMLContentSink** aResult,
                      nsIDocument* aDoc,

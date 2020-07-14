@@ -15,22 +15,24 @@
       <xul:spacer class="progress-remainder" xbl:inherits="mode"/>
     </content>
     
-    <implementation implements="nsIAccessibleProvider">     
-      <property name="label" onset="if (this.label != val) this.setAttribute('label',val); return val;"
-                                      onget="return this.getAttribute('label');"/>
-
+    <implementation implements="nsIAccessibleProvider">
       <property name="mode" onset="if (this.mode != val) this.setAttribute('mode', val); return val;"
                             onget="return this.getAttribute('mode');"/>
 
-      <property name="value" onget="return this.getAttribute('value');">
+      <property name="value" onget="return this.getAttribute('value') || '0';">
         <setter><![CDATA[
           var p = Math.round(val);
+          var max = Math.round(this.max);
+          if (p < 0)
+            p = 0;
+          else if (p > max)
+            p = max;
           var c = this.value; 
           if (p != c) {
             var delta = p - c;
             if (delta < 0)
               delta = -delta;
-            if (delta > 3 || p == 0 || p == 100) {
+            if (delta > 3 || p == 0 || p == max) {
               this.setAttribute("value", p);
               // Fire DOM event so that accessible value change events occur
               var event = document.createEvent('Events');
@@ -39,15 +41,19 @@
             }
           }
           
-          return p;
+          return val;
         ]]></setter>
       </property>
+      <property name="max"
+                onget="return this.getAttribute('max') || '100';"
+                onset="this.setAttribute('max', isNaN(val) ? 100 : Math.max(val, 1));
+                       this.value = this.value;
+                       return val;" />
 
-      <property name="accessible">
+      <property name="accessibleType" readonly="true">
         <getter>
           <![CDATA[
-            var accService = Components.classes["@mozilla.org/accessibilityService;1"].getService(Components.interfaces.nsIAccessibilityService);
-            return accService.createXULProgressMeterAccessible(this);
+            return Components.interfaces.nsIAccessibleProvider.XULProgressMeter;
           ]]>
         </getter>
       </property>
@@ -63,28 +69,83 @@
     </content>
 
     <implementation>
-      <method name="init">
+      <field name="_alive">true</field>
+      <method name="_init">
         <body><![CDATA[
           var stack = document.getAnonymousElementByAttribute(this, "anonid", "stack");
           var spacer = document.getAnonymousElementByAttribute(this, "anonid", "spacer");
-          var position = -1;
+          var self = this;
+
+          var isLTR = 
+           document.defaultView.getComputedStyle(this, null).direction == "ltr";
+
+          var position = isLTR ? 4 : -1;
           var interval = setInterval(function nextStep() {
-            if (stack.parentNode) {
-              var width = stack.boxObject.width >> 2;
+            try {
+              var width = stack.boxObject.width;
+              if (!width) {
+                // Maybe we've been removed from the document.
+                if (!self._alive)
+                  clearInterval(interval);
+                return;
+              }
+              width = width >> 2;
               spacer.height = stack.boxObject.height;
               spacer.width = width;
               spacer.left = width * position;
-              position += 15 / (width + 150);
-              if (position >= 4)
-                position = -1;
-            } else {
+              if (isLTR) {
+                position += 15 / (width + 150);
+                if (position >= 4)
+                  position = -1;
+              }
+              else {
+                position -= 15 / (width + 150);
+                if (position < 0)
+                  position = 4;
+              }
+            } catch (e) {
               clearInterval(interval);
             }
           }, 20);
         ]]></body>
       </method>
 
-      <constructor>this.init();</constructor>
+      <constructor>this._init();</constructor>
+    </implementation>
+  </binding>
+
+  <binding id="progressmeter-periodic-redraw"
+           extends="chrome://global/content/bindings/progressmeter.xml#progressmeter">
+    <content>
+      <xul:spacer anonid="visibility-detector" flex="1"/>
+    </content>
+    <implementation>
+      <field name="_alive">true</field>
+      <method name="_init">
+        <body><![CDATA[
+          var step = 0;
+          var self = this;
+          var spacer = document.getAnonymousElementByAttribute(this, "anonid", "visibility-detector");
+          var interval = setInterval(function nextStep() {
+            try {
+              // Only bother redrawing when we're visible
+              var width = spacer.boxObject.width;
+              if (!width) {
+                // Maybe we've been removed from the document.
+                if (!self._alive)
+                  clearInterval(interval);
+                return;
+              }
+              // Trigger redraw by changing the step attribute
+              step = 1 - step;
+              self.setAttribute('step', step);
+            } catch (e) {
+              clearInterval(interval);
+            }
+          }, 1000/30);
+        ]]></body>
+      </method>
+      <constructor>this._init();</constructor>
     </implementation>
   </binding>
 

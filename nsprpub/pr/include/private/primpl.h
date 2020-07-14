@@ -54,30 +54,27 @@
 #include <kernel/OS.h>
 #endif
 
-#ifdef WINNT
-/* Need to force service-pack 3 extensions to be defined by
-** setting _WIN32_WINNT to NT 4.0 for winsock.h, winbase.h, winnt.h.
-*/
-#ifndef  _WIN32_WINNT
-    #define _WIN32_WINNT 0x0400
-#elif   (_WIN32_WINNT < 0x0400)
-    #undef  _WIN32_WINNT
-    #define _WIN32_WINNT 0x0400
-#endif /* _WIN32_WINNT */
-#endif /* WINNT */
+#ifdef WIN32
+/*
+ * Allow use of functions and symbols first defined in Win2k.
+ */
+#if !defined(WINVER) || (WINVER < 0x0500)
+#undef WINVER
+#define WINVER 0x0500
+#endif
+#if !defined(_WIN32_WINNT) || (_WIN32_WINNT < 0x0500)
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0500
+#endif
+#endif /* WIN32 */
 
 #include "nspr.h"
 #include "prpriv.h"
 
 typedef struct PRSegment PRSegment;
 
-#ifdef XP_MAC
-#include "prosdep.h"
-#include "probslet.h"
-#else
 #include "md/prosdep.h"
 #include "obsolete/probslet.h"
-#endif  /* XP_MAC */
 
 #ifdef _PR_HAVE_POSIX_SEMAPHORES
 #include <semaphore.h>
@@ -326,10 +323,8 @@ NSPR_API(PRInt32)                      _pr_intsOff;
 #define _MD_LAST_THREAD()               (_pr_lastThread)
 #define _MD_SET_LAST_THREAD(t)          (_pr_lastThread = t)
 
-#ifndef XP_MAC
 #define _MD_GET_INTSOFF()               (_pr_intsOff)
 #define _MD_SET_INTSOFF(_val)           (_pr_intsOff = _val)
-#endif
 
 
 /* The unbalanced curly braces in these two macros are intentional */
@@ -374,19 +369,11 @@ extern PRInt32                  _native_threads_only;
 
 #else
 
-#ifdef XP_MAC
-
-#define _PR_INTSOFF(_is)        _MD_INTSOFF(_is)
-
-#else /* XP_MAC */
-
 #define _PR_INTSOFF(_is) \
     PR_BEGIN_MACRO \
         (_is) = _PR_MD_GET_INTSOFF(); \
         _PR_MD_SET_INTSOFF(1); \
     PR_END_MACRO
-
-#endif /* XP_MAC */
 
 #define _PR_FAST_INTSON(_is) \
     PR_BEGIN_MACRO \
@@ -1089,22 +1076,17 @@ extern PRStatus _PR_MD_DELETE_SEMAPHORE(const char *osname);
 extern void _PR_MD_INIT_FILEDESC(PRFileDesc *fd);
 #define    _PR_MD_INIT_FILEDESC _MD_INIT_FILEDESC
 
-#ifdef XP_MAC
-extern void _PR_MD_FREE_FILEDESC(PRFileDesc *fd);
-#define    _PR_MD_FREE_FILEDESC _MD_FREE_FILEDESC
-#endif
-
 extern void _PR_MD_MAKE_NONBLOCK(PRFileDesc *fd);
 #define    _PR_MD_MAKE_NONBLOCK _MD_MAKE_NONBLOCK
 
 /* File I/O related */
-extern PRInt32 _PR_MD_OPEN(const char *name, PRIntn osflags, PRIntn mode);
+extern PROsfd _PR_MD_OPEN(const char *name, PRIntn osflags, PRIntn mode);
 #define    _PR_MD_OPEN _MD_OPEN
 
-extern PRInt32 _PR_MD_OPEN_FILE(const char *name, PRIntn osflags, PRIntn mode);
+extern PROsfd _PR_MD_OPEN_FILE(const char *name, PRIntn osflags, PRIntn mode);
 #define    _PR_MD_OPEN_FILE _MD_OPEN_FILE
 
-extern PRInt32 _PR_MD_CLOSE_FILE(PRInt32 osfd);
+extern PRInt32 _PR_MD_CLOSE_FILE(PROsfd osfd);
 #define    _PR_MD_CLOSE_FILE _MD_CLOSE_FILE
 
 extern PRInt32 _PR_MD_READ(PRFileDesc *fd, void *buf, PRInt32 amount);
@@ -1147,7 +1129,7 @@ extern PRInt32 _PR_MD_RMDIR(const char *name);
 extern PRStatus _PR_MD_OPEN_DIR_UTF16(_MDDirUTF16 *md, const PRUnichar *name);
 #define    _PR_MD_OPEN_DIR_UTF16 _MD_OPEN_DIR_UTF16
 
-extern PRInt32 _PR_MD_OPEN_FILE_UTF16(const PRUnichar *name, PRIntn osflags, PRIntn mode);
+extern PROsfd _PR_MD_OPEN_FILE_UTF16(const PRUnichar *name, PRIntn osflags, PRIntn mode);
 #define    _PR_MD_OPEN_FILE_UTF16 _MD_OPEN_FILE_UTF16
 
 extern PRUnichar * _PR_MD_READ_DIR_UTF16(_MDDirUTF16 *md, PRIntn flags);
@@ -1164,7 +1146,7 @@ extern PRInt32 _PR_MD_GETFILEINFO64_UTF16(const PRUnichar *fn, PRFileInfo64 *inf
 extern void _PR_MD_INIT_IO(void);
 #define    _PR_MD_INIT_IO _MD_INIT_IO
 
-extern PRInt32 _PR_MD_CLOSE_SOCKET(PRInt32 osfd);
+extern PRInt32 _PR_MD_CLOSE_SOCKET(PROsfd osfd);
 #define    _PR_MD_CLOSE_SOCKET _MD_CLOSE_SOCKET
 
 extern PRInt32 _PR_MD_CONNECT(
@@ -1172,7 +1154,7 @@ extern PRInt32 _PR_MD_CONNECT(
     PRUint32 addrlen, PRIntervalTime timeout);
 #define    _PR_MD_CONNECT _MD_CONNECT
 
-extern PRInt32 _PR_MD_ACCEPT(
+extern PROsfd _PR_MD_ACCEPT(
     PRFileDesc *fd, PRNetAddr *addr,
     PRUint32 *addrlen, PRIntervalTime timeout);
 #define    _PR_MD_ACCEPT _MD_ACCEPT
@@ -1195,26 +1177,33 @@ extern PRInt32 _PR_MD_SEND(
     PRIntervalTime timeout);
 #define    _PR_MD_SEND _MD_SEND
 
-extern PRInt32 _PR_MD_ACCEPT_READ(PRFileDesc *sd, PRInt32 *newSock, 
+extern PRInt32 _PR_MD_ACCEPT_READ(PRFileDesc *sd, PROsfd *newSock, 
                                 PRNetAddr **raddr, void *buf, PRInt32 amount,
                                 PRIntervalTime timeout);
 #define _PR_MD_ACCEPT_READ _MD_ACCEPT_READ
 
 #ifdef WIN32
-extern PRInt32 _PR_MD_FAST_ACCEPT(PRFileDesc *fd, PRNetAddr *addr, 
+extern PROsfd _PR_MD_FAST_ACCEPT(PRFileDesc *fd, PRNetAddr *addr, 
                                 PRUint32 *addrlen, PRIntervalTime timeout,
                                 PRBool fast,
                                 _PR_AcceptTimeoutCallback callback,
                                 void *callbackArg);
 
-extern PRInt32 _PR_MD_FAST_ACCEPT_READ(PRFileDesc *sd, PRInt32 *newSock, 
+extern PRInt32 _PR_MD_FAST_ACCEPT_READ(PRFileDesc *sd, PROsfd *newSock, 
                                 PRNetAddr **raddr, void *buf, PRInt32 amount,
                                 PRIntervalTime timeout, PRBool fast,
                                 _PR_AcceptTimeoutCallback callback,
                                 void *callbackArg);
 
-extern void _PR_MD_UPDATE_ACCEPT_CONTEXT(PRInt32 s, PRInt32 ls);
+extern void _PR_MD_UPDATE_ACCEPT_CONTEXT(PROsfd s, PROsfd ls);
 #define _PR_MD_UPDATE_ACCEPT_CONTEXT _MD_UPDATE_ACCEPT_CONTEXT
+/*
+ * The NSPR epoch (00:00:00 1 Jan 1970 UTC) in FILETIME.
+ * We store the value in a PRTime variable for convenience.
+ * This constant is used by _PR_FileTimeToPRTime().
+ * This is defined in ntmisc.c
+ */
+extern const PRTime _pr_filetime_offset;
 #endif /* WIN32 */
 
 extern PRInt32 _PR_MD_SENDFILE(
@@ -1255,10 +1244,10 @@ extern PRInt32 _PR_MD_SENDTO(
     const PRNetAddr *addr, PRUint32 addrlen, PRIntervalTime timeout);
 #define    _PR_MD_SENDTO _MD_SENDTO
 
-extern PRInt32 _PR_MD_SOCKETPAIR(int af, int type, int flags, PRInt32 *osfd);
+extern PRInt32 _PR_MD_SOCKETPAIR(int af, int type, int flags, PROsfd *osfd);
 #define    _PR_MD_SOCKETPAIR _MD_SOCKETPAIR
 
-extern PRInt32 _PR_MD_SOCKET(int af, int type, int flags);
+extern PROsfd _PR_MD_SOCKET(int af, int type, int flags);
 #define    _PR_MD_SOCKET _MD_SOCKET
 
 extern PRInt32 _PR_MD_SOCKETAVAILABLE(PRFileDesc *fd);
@@ -1398,7 +1387,7 @@ extern PRUintn _PR_NetAddrSize(const PRNetAddr* addr);
 ** struct sockaddr_in6.
 */
 
-#if defined(XP_UNIX) || defined(XP_OS2_EMX)
+#if defined(XP_UNIX) || defined(XP_OS2)
 #define PR_NETADDR_SIZE(_addr) 					\
         ((_addr)->raw.family == PR_AF_INET		\
         ? sizeof((_addr)->inet)					\
@@ -1414,7 +1403,7 @@ extern PRUintn _PR_NetAddrSize(const PRNetAddr* addr);
 
 #else
 
-#if defined(XP_UNIX) || defined(XP_OS2_EMX)
+#if defined(XP_UNIX) || defined(XP_OS2)
 #define PR_NETADDR_SIZE(_addr) 					\
         ((_addr)->raw.family == PR_AF_INET		\
         ? sizeof((_addr)->inet)					\
@@ -1745,14 +1734,24 @@ struct PRFilePrivate {
                          * append mode.  See Bugzilla 4090, 276330. */
 #endif
     _MDFileDesc md;
-#ifdef _PR_STRICT_ADDR_LEN
-    PRUint16 af;        /* If the platform requires passing the exact
-                         * length of the sockaddr structure for the
-                         * address family of the socket to socket
-                         * functions like accept(), we need to save
-                         * the address family of the socket. */
+#ifdef _PR_NEED_SECRET_AF
+    PRUint16 af;        /* If the platform's implementation of accept()
+                         * requires knowing the address family of the 
+			 * socket, we save the address family here. */
 #endif
 };
+
+#ifdef _WIN64
+#define PR_PRIdOSFD "lld"       /* for printing PROsfd */
+#define PR_PRIxOSFD "llx"
+#define PR_SCNdOSFD "lld"       /* for scanning PROsfd */
+#define PR_SCNxOSFD "llx"
+#else
+#define PR_PRIdOSFD "ld"        /* for printing PROsfd */
+#define PR_PRIxOSFD "lx"
+#define PR_SCNdOSFD "ld"        /* for scanning PROsfd */
+#define PR_SCNxOSFD "lx"
+#endif
 
 struct PRDir {
     PRDirEntry d;
@@ -1792,6 +1791,7 @@ extern void _PR_CleanupDtoa(void);
 extern void _PR_ShutdownLinker(void);
 extern void _PR_CleanupEnv(void);
 extern void _PR_CleanupIO(void);
+extern void _PR_CleanupCMon(void);
 extern void _PR_CleanupNet(void);
 extern void _PR_CleanupLayerCache(void);
 extern void _PR_CleanupStacks(void);
@@ -1887,6 +1887,9 @@ extern void _PR_MD_INTERVAL_INIT(void);
 NSPR_API(void) _PR_MD_FINAL_INIT(void);
 #define    _PR_MD_FINAL_INIT _MD_FINAL_INIT
 
+extern void _PR_MD_EARLY_CLEANUP(void);
+#define    _PR_MD_EARLY_CLEANUP _MD_EARLY_CLEANUP
+
 /* Process control */
 
 extern PRProcess * _PR_MD_CREATE_PROCESS(
@@ -1966,13 +1969,13 @@ extern PRInt32 _PR_MD_GETTHREADAFFINITYMASK(PRThread *thread, PRUint32 *mask);
 
 /* File locking */
 
-extern PRStatus _PR_MD_LOCKFILE(PRInt32 osfd);
+extern PRStatus _PR_MD_LOCKFILE(PROsfd osfd);
 #define    _PR_MD_LOCKFILE _MD_LOCKFILE
 
-extern PRStatus _PR_MD_TLOCKFILE(PRInt32 osfd);
+extern PRStatus _PR_MD_TLOCKFILE(PROsfd osfd);
 #define    _PR_MD_TLOCKFILE _MD_TLOCKFILE
 
-extern PRStatus _PR_MD_UNLOCKFILE(PRInt32 osfd);
+extern PRStatus _PR_MD_UNLOCKFILE(PROsfd osfd);
 #define    _PR_MD_UNLOCKFILE _MD_UNLOCKFILE
 
 /* Memory-mapped files */

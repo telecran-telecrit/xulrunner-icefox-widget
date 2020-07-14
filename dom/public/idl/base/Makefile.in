@@ -57,7 +57,7 @@ SDK_XPIDLSRCS =                                 \
 
 XPIDLSRCS =					\
 	nsIBrowserDOMWindow.idl			\
-	nsIDOMClientInformation.idl			\
+	nsIDOMClientInformation.idl		\
 	nsIDOMConstructor.idl			\
 	nsIDOMCRMFObject.idl			\
 	nsIDOMCrypto.idl			\
@@ -65,8 +65,6 @@ XPIDLSRCS =					\
 	nsIDOMLocation.idl			\
 	nsIDOMMimeType.idl			\
 	nsIDOMMimeTypeArray.idl			\
-	nsIDOMNSHistory.idl			\
-	nsIDOMNSLocation.idl			\
 	nsIDOMNavigator.idl			\
 	nsIDOMPkcs11.idl			\
 	nsIDOMPlugin.idl			\
@@ -74,8 +72,11 @@ XPIDLSRCS =					\
 	nsIDOMScreen.idl			\
 	nsIDOMWindowInternal.idl		\
 	nsIDOMJSWindow.idl			\
+	nsIDOMModalContentWindow.idl		\
 	nsIDOMChromeWindow.idl			\
 	nsIDOMNSFeatureFactory.idl		\
+        nsIDOMClientRect.idl			\
+        nsIDOMClientRectList.idl		\
 	$(NULL)
 
 include $(topsrcdir)/config/rules.mk

@@ -43,6 +43,9 @@ VPATH   = @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
+# FIXME: bug 419893
+NO_PROFILE_GUIDED_OPTIMIZE = 1
+
 MODULE           = storage
 LIBRARY_NAME     = storage_s
 MODULE_NAME      = mozStorageModule
@@ -51,21 +54,34 @@ GRE_MODULE       = 1
 LIBXUL_LIBRARY = 1
 
 REQUIRES = xpcom \
-           intl \
-           necko \
            string \
            sqlite3 \
            js \
            xpconnect \
+           necko \
            $(NULL)
 
 CPPSRCS = \
-	mozStorageAsyncIO.cpp \
-	mozStorageService.cpp \
-	mozStorageConnection.cpp \
-	mozStorageStatement.cpp \
-	mozStorageStatementWrapper.cpp \
-	mozStorageValueArray.cpp \
-	$(NULL)
+  mozStorageService.cpp \
+  mozStorageConnection.cpp \
+  mozStorageStatement.cpp \
+  mozStorageStatementWrapper.cpp \
+  mozStorageStatementParams.cpp \
+  mozStorageStatementRow.cpp \
+  mozStorageValueArray.cpp \
+  mozStorageUnicodeFunctions.cpp \
+  mozStorageRow.cpp \
+  mozStorageResultSet.cpp \
+  mozStorageError.cpp \
+  mozStorageEvents.cpp \
+  mozStorageStatementJSHelper.cpp \
+  $(NULL)
+
+LOCAL_INCLUDES = \
+	$(SQLITE_CFLAGS)
+
+# This is the default value.  If we ever change it when compiling sqlite, we
+# will need to change it here as well.
+DEFINES += -DSQLITE_MAX_LIKE_PATTERN_LENGTH=50000
 
 include $(topsrcdir)/config/rules.mk

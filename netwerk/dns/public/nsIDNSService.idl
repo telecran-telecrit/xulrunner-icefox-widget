@@ -46,7 +46,7 @@ interface nsIDNSListener;
 /**
  * nsIDNSService
  */
-[scriptable, uuid(5c8ec09d-bfbf-4eaf-8a36-0d84b5c8f35b)]
+[scriptable, uuid(c1a56a45-8fa3-44e6-9f01-38c91c858cf9)]
 interface nsIDNSService : nsISupports
 {
     /**
@@ -58,19 +58,19 @@ interface nsIDNSService : nsISupports
      *        a bitwise OR of the RESOLVE_ prefixed constants defined below.
      * @param aListener
      *        the listener to be notified when the result is available.
-     * @param aListenerEventTarget
+     * @param aListenerTarget
      *        optional parameter (may be null).  if non-null, this parameter
-     *        specifies the nsIEventTarget of the thread on which the listener's
-     *        onLookupComplete should be called.  however, if this parameter is
-     *        null, then onLookupComplete will be called on an unspecified
-     *        thread (possibly recursively).
+     *        specifies the nsIEventTarget of the thread on which the
+     *        listener's onLookupComplete should be called.  however, if this
+     *        parameter is null, then onLookupComplete will be called on an
+     *        unspecified thread (possibly recursively).
      *
      * @return An object that can be used to cancel the host lookup.
      */
-    nsICancelable asyncResolve(in AUTF8String    aHostName,
-                               in unsigned long  aFlags,
-                               in nsIDNSListener aListener,
-                               in nsIEventTarget aListenerEventTarget);
+    nsICancelable asyncResolve(in AUTF8String       aHostName,
+                               in unsigned long     aFlags,
+                               in nsIDNSListener    aListener,
+                               in nsIEventTarget    aListenerTarget);
 
     /**
      * called to synchronously resolve a hostname.  warning this method may
@@ -107,4 +107,17 @@ interface nsIDNSService : nsISupports
      * if set, the canonical name of the specified host will be queried.
      */
     const unsigned long RESOLVE_CANONICAL_NAME = (1 << 1);
+
+    /**
+     * if set, the query is given lower priority. Medium takes precedence
+     * if both are used.
+     */
+    const unsigned long RESOLVE_PRIORITY_MEDIUM = (1 << 2);
+    const unsigned long RESOLVE_PRIORITY_LOW    = (1 << 3);
+
+    /**
+     * if set, indicates request is speculative. Speculative requests 
+     * return errors if prefetching is disabled by configuration.
+     */
+    const unsigned long RESOLVE_SPECULATE = (1 << 4);
 };

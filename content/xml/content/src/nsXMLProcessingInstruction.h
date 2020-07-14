@@ -49,7 +49,7 @@ class nsXMLProcessingInstruction : public nsGenericDOMDataNode,
                                    public nsIDOMProcessingInstruction
 {
 public:
-  nsXMLProcessingInstruction(nsNodeInfoManager *aNodeInfoManager,
+  nsXMLProcessingInstruction(nsINodeInfo *aNodeInfo,
                              const nsAString& aTarget,
                              const nsAString& aData);
   virtual ~nsXMLProcessingInstruction();
@@ -64,8 +64,7 @@ public:
   NS_DECL_NSIDOMPROCESSINGINSTRUCTION
 
   // nsIContent
-  virtual nsIAtom *Tag() const;
-  virtual PRBool IsContentOfType(PRUint32 aFlags) const;
+  virtual PRBool IsNodeOfType(PRUint32 aFlags) const;
   virtual PRBool MayHaveFrame() const;
 
 #ifdef DEBUG
@@ -86,7 +85,7 @@ protected:
    */
   PRBool GetAttrValue(nsIAtom *aName, nsAString& aValue);
 
-  nsAutoString mTarget;
+  nsString mTarget;
 };
 
 #endif //nsIXMLProcessingInstruction_h___

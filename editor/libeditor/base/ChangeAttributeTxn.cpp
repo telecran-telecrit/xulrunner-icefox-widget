@@ -43,9 +43,18 @@ ChangeAttributeTxn::ChangeAttributeTxn()
 {
 }
 
-ChangeAttributeTxn::~ChangeAttributeTxn()
-{
-}
+NS_IMPL_CYCLE_COLLECTION_CLASS(ChangeAttributeTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ChangeAttributeTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ChangeAttributeTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ChangeAttributeTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
 
 NS_IMETHODIMP ChangeAttributeTxn::Init(nsIEditor      *aEditor,
                                        nsIDOMElement  *aElement,
@@ -113,13 +122,6 @@ NS_IMETHODIMP ChangeAttributeTxn::RedoTransaction(void)
     result = mElement->RemoveAttribute(mAttribute);
 
   return result;
-}
-
-NS_IMETHODIMP ChangeAttributeTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge=PR_FALSE;
-  return NS_OK;
 }
 
 NS_IMETHODIMP ChangeAttributeTxn::GetTxnDescription(nsAString& aString)

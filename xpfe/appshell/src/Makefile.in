@@ -51,14 +51,13 @@ SHORT_LIBNAME	= appshell
 GRE_MODULE	= 1
 LIBXUL_LIBRARY	= 1
 
-PACKAGE_FILE = appshell.pkg
-
 REQUIRES	= xpcom \
 		  string \
 		  widget \
 		  docshell \
 		  webshell \
 		  gfx \
+		  thebes \
 		  layout \
 		  content \
 		  dom \

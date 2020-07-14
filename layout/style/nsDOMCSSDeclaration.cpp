@@ -36,6 +36,8 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/* base class for DOM objects for element.style and cssStyleRule.style */
+
 #include "nsDOMCSSDeclaration.h"
 #include "nsIDOMCSSRule.h"
 #include "nsICSSParser.h"
@@ -46,6 +48,7 @@
 #include "nsCOMPtr.h"
 #include "nsIURL.h"
 #include "nsReadableUtils.h"
+#include "nsIPrincipal.h"
 
 #include "nsContentUtils.h"
 
@@ -251,9 +254,11 @@ nsDOMCSSDeclaration::ParsePropertyValue(const nsCSSProperty aPropID,
   nsCOMPtr<nsICSSLoader> cssLoader;
   nsCOMPtr<nsICSSParser> cssParser;
   nsCOMPtr<nsIURI> baseURI, sheetURI;
+  nsCOMPtr<nsIPrincipal> sheetPrincipal;
   
   result = GetCSSParsingEnvironment(getter_AddRefs(sheetURI),
                                     getter_AddRefs(baseURI),
+                                    getter_AddRefs(sheetPrincipal),
                                     getter_AddRefs(cssLoader),
                                     getter_AddRefs(cssParser));
   if (NS_FAILED(result)) {
@@ -262,7 +267,7 @@ nsDOMCSSDeclaration::ParsePropertyValue(const nsCSSProperty aPropID,
 
   PRBool changed;
   result = cssParser->ParseProperty(aPropID, aPropValue, sheetURI, baseURI,
-                                    decl, &changed);
+                                    sheetPrincipal, decl, &changed);
   if (NS_SUCCEEDED(result) && changed) {
     result = DeclarationChanged();
   }
@@ -288,9 +293,11 @@ nsDOMCSSDeclaration::ParseDeclaration(const nsAString& aDecl,
   nsCOMPtr<nsICSSLoader> cssLoader;
   nsCOMPtr<nsICSSParser> cssParser;
   nsCOMPtr<nsIURI> baseURI, sheetURI;
+  nsCOMPtr<nsIPrincipal> sheetPrincipal;
 
   result = GetCSSParsingEnvironment(getter_AddRefs(sheetURI),
                                     getter_AddRefs(baseURI),
+                                    getter_AddRefs(sheetPrincipal),
                                     getter_AddRefs(cssLoader),
                                     getter_AddRefs(cssParser));
 
@@ -299,7 +306,8 @@ nsDOMCSSDeclaration::ParseDeclaration(const nsAString& aDecl,
   }
 
   PRBool changed;
-  result = cssParser->ParseAndAppendDeclaration(aDecl, sheetURI, baseURI, decl,
+  result = cssParser->ParseAndAppendDeclaration(aDecl, sheetURI, baseURI,
+                                                sheetPrincipal, decl,
                                                 aParseOnlyOneDecl,
                                                 &changed,
                                                 aClearOldDecl);
@@ -371,7 +379,7 @@ CSS2PropertiesTearoff::QueryInterface(REFNSIID aIID, void** aInstancePtr)
 // nsIDOMCSS2Properties
 // nsIDOMNSCSS2Properties
 
-#define CSS_PROP(name_, id_, method_, datastruct_, member_, type_, kwtable_) \
+#define CSS_PROP(name_, id_, method_, flags_, datastruct_, member_, type_, kwtable_) \
   NS_IMETHODIMP                                                              \
   CSS2PropertiesTearoff::Get##method_(nsAString& aValue)                     \
   {                                                                          \
@@ -384,7 +392,7 @@ CSS2PropertiesTearoff::QueryInterface(REFNSIID aIID, void** aInstancePtr)
     return mOuter->SetPropertyValue(eCSSProperty_##id_, aValue);             \
   }
 
-#define CSS_PROP_NOTIMPLEMENTED(name_, id_, method_)                         \
+#define CSS_PROP_NOTIMPLEMENTED(name_, id_, method_, flags_)                         \
   NS_IMETHODIMP                                                              \
   CSS2PropertiesTearoff::Get##method_(nsAString& aValue)                     \
   {                                                                          \
@@ -399,17 +407,17 @@ CSS2PropertiesTearoff::QueryInterface(REFNSIID aIID, void** aInstancePtr)
   }
 
 #define CSS_PROP_LIST_EXCLUDE_INTERNAL
-#define CSS_PROP_SHORTHAND(name_, id_, method_) \
-  CSS_PROP(name_, id_, method_, X, X, X, X)
+#define CSS_PROP_SHORTHAND(name_, id_, method_, flags_) \
+  CSS_PROP(name_, id_, method_, flags_, X, X, X, X)
 #include "nsCSSPropList.h"
 
 // Aliases
-CSS_PROP(X, opacity, MozOpacity, X, X, X, X)
-CSS_PROP(X, outline, MozOutline, X, X, X, X)
-CSS_PROP(X, outline_color, MozOutlineColor, X, X, X, X)
-CSS_PROP(X, outline_style, MozOutlineStyle, X, X, X, X)
-CSS_PROP(X, outline_width, MozOutlineWidth, X, X, X, X)
-CSS_PROP(X, outline_offset, MozOutlineOffset, X, X, X, X)
+CSS_PROP(X, opacity, MozOpacity, 0, X, X, X, X)
+CSS_PROP(X, outline, MozOutline, 0, X, X, X, X)
+CSS_PROP(X, outline_color, MozOutlineColor, 0, X, X, X, X)
+CSS_PROP(X, outline_style, MozOutlineStyle, 0, X, X, X, X)
+CSS_PROP(X, outline_width, MozOutlineWidth, 0, X, X, X, X)
+CSS_PROP(X, outline_offset, MozOutlineOffset, 0, X, X, X, X)
 
 #undef CSS_PROP_SHORTHAND
 #undef CSS_PROP_NOTIMPLEMENTED

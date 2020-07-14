@@ -63,9 +63,10 @@ static void GetPageSize(void)
 
     /* Get page size */
 #ifdef XP_UNIX
-#if defined SUNOS4 || defined LINUX || defined BSDI || defined AIX \
+#if defined SUNOS4 || defined BSDI || defined AIX \
+        || defined LINUX || defined __GNU__ || defined __GLIBC__ \
         || defined FREEBSD || defined NETBSD || defined OPENBSD \
-        || defined DARWIN || defined NEXTSTEP
+        || defined DARWIN || defined NEXTSTEP || defined SYMBIAN
     _pr_pageSize = getpagesize();
 #elif defined(HPUX)
     /* I have no idea. Don't get me started. --Rob */
@@ -74,10 +75,6 @@ static void GetPageSize(void)
     _pr_pageSize = sysconf(_SC_PAGESIZE);
 #endif
 #endif /* XP_UNIX */
-
-#ifdef XP_MAC
-    _pr_pageSize = 4096;
-#endif /* XP_MAC */
 
 #ifdef XP_BEOS
     _pr_pageSize = B_PAGE_SIZE;

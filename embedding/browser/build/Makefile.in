@@ -51,15 +51,12 @@ EXPORT_LIBRARY	= 1
 GRE_MODULE	= 1
 LIBXUL_LIBRARY	= 1
 
-PACKAGE_FILE = webbrowser.pkg
-
 REQUIRES	= xpcom \
 		  string \
 		  docshell \
 		  dom \
 		  widget \
 		  gfx \
-		  layout \
 		  content \
 		  necko \
 		  uriloader \
@@ -78,7 +75,7 @@ CPPSRCS		= \
 		$(NULL)
 
 SHARED_LIBRARY_LIBS= \
-		$(DIST)/lib/$(LIB_PREFIX)nsWebBrowser_s.$(LIB_SUFFIX) \
+		../webBrowser/$(LIB_PREFIX)nsWebBrowser_s.$(LIB_SUFFIX) \
 		$(NULL)
 
 EXTRA_DSO_LDOPTS= \

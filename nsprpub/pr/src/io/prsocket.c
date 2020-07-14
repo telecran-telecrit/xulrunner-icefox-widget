@@ -47,7 +47,7 @@
 PRBool IsValidNetAddr(const PRNetAddr *addr)
 {
     if ((addr != NULL)
-#if defined(XP_UNIX) || defined(XP_OS2_EMX)
+#if defined(XP_UNIX) || defined(XP_OS2)
 	    && (addr->raw.family != PR_AF_LOCAL)
 #endif
 	    && (addr->raw.family != PR_AF_INET6)
@@ -64,7 +64,7 @@ static PRBool IsValidNetAddrLen(const PRNetAddr *addr, PRInt32 addr_len)
      * is not uniform, so we don't check it.
      */
     if ((addr != NULL)
-#if defined(XP_UNIX) || defined(XP_OS2_EMX)
+#if defined(XP_UNIX) || defined(XP_OS2)
             && (addr->raw.family != AF_UNIX)
 #endif
             && (PR_NETADDR_SIZE(addr) != addr_len)) {
@@ -190,7 +190,7 @@ PRInt32 iov_size, PRIntervalTime timeout)
 
 /************************************************************************/
 
-PR_IMPLEMENT(PRFileDesc *) PR_ImportTCPSocket(PRInt32 osfd)
+PR_IMPLEMENT(PRFileDesc *) PR_ImportTCPSocket(PROsfd osfd)
 {
 PRFileDesc *fd;
 
@@ -199,12 +199,19 @@ PRFileDesc *fd;
 	if (fd != NULL) {
 		_PR_MD_MAKE_NONBLOCK(fd);
 		_PR_MD_INIT_FD_INHERITABLE(fd, PR_TRUE);
+#ifdef _PR_NEED_SECRET_AF
+		/* this means we can only import IPv4 sockets here.
+		 * but this is what the function in ptio.c does.
+		 * We need a way to import IPv6 sockets, too.
+		 */
+		fd->secret->af = AF_INET;
+#endif
 	} else
 		_PR_MD_CLOSE_SOCKET(osfd);
 	return(fd);
 }
 
-PR_IMPLEMENT(PRFileDesc *) PR_ImportUDPSocket(PRInt32 osfd)
+PR_IMPLEMENT(PRFileDesc *) PR_ImportUDPSocket(PROsfd osfd)
 {
 PRFileDesc *fd;
 
@@ -221,7 +228,7 @@ PRFileDesc *fd;
 
 static const PRIOMethods* PR_GetSocketPollFdMethods(void);
 
-PR_IMPLEMENT(PRFileDesc*) PR_CreateSocketPollFd(PRInt32 osfd)
+PR_IMPLEMENT(PRFileDesc*) PR_CreateSocketPollFd(PROsfd osfd)
 {
     PRFileDesc *fd;
 
@@ -287,7 +294,7 @@ static PRStatus PR_CALLBACK SocketConnect(
 static PRStatus PR_CALLBACK SocketConnectContinue(
     PRFileDesc *fd, PRInt16 out_flags)
 {
-    PRInt32 osfd;
+    PROsfd osfd;
     int err;
 
     if (out_flags & PR_POLL_NVAL) {
@@ -348,14 +355,6 @@ static PRStatus PR_CALLBACK SocketConnectContinue(
     }
     return PR_SUCCESS;
 
-#elif defined(XP_MAC)
-
-    err = _MD_mac_get_nonblocking_connect_error(fd);
-    if (err == -1)
-        return PR_FAILURE;
-	else     
-		return PR_SUCCESS;
-
 #elif defined(XP_BEOS)
 
 #ifdef BONE_VERSION  /* bug 122364 */
@@ -397,7 +396,7 @@ PR_IMPLEMENT(PRStatus) PR_GetConnectStatus(const PRPollDesc *pd)
 static PRFileDesc* PR_CALLBACK SocketAccept(PRFileDesc *fd, PRNetAddr *addr,
 PRIntervalTime timeout)
 {
-	PRInt32 osfd;
+	PROsfd osfd;
 	PRFileDesc *fd2;
 	PRUint32 al;
 	PRThread *me = _PR_MD_CURRENT_THREAD();
@@ -452,11 +451,6 @@ PRIntervalTime timeout)
 	 * of the listening socket.  As an optimization, these
 	 * platforms can skip the following _PR_MD_MAKE_NONBLOCK
 	 * call.
-	 * 
-	 * On Mac, we MUST make this call, because _PR_MD_MAKE_NONBLOCK
-	 * (which maps to _MD_makenonblock, see macsockotpt.c)
-	 * installs the async notifier routine needed to make blocking
-	 * I/O work properly.
 	 */
 #if !defined(SOLARIS) && !defined(IRIX) && !defined(WINNT)
 	_PR_MD_MAKE_NONBLOCK(fd2);
@@ -476,7 +470,7 @@ PRIntervalTime timeout)
 PR_IMPLEMENT(PRFileDesc*) PR_NTFast_Accept(PRFileDesc *fd, PRNetAddr *addr,
 PRIntervalTime timeout)
 {
-	PRInt32 osfd;
+	PROsfd osfd;
 	PRFileDesc *fd2;
 	PRIntn al;
 	PRThread *me = _PR_MD_CURRENT_THREAD();
@@ -513,6 +507,9 @@ PRIntervalTime timeout)
 #ifdef _PR_INET6
 		if (AF_INET6 == addr->raw.family)
         	addr->raw.family = PR_AF_INET6;
+#endif
+#ifdef _PR_NEED_SECRET_AF
+		fd2->secret->af = fd->secret->af;
 #endif
 	}
 	return fd2;
@@ -596,8 +593,9 @@ PRIntervalTime timeout)
 		return -1;
 	}
 
-	PR_LOG(_pr_io_lm, PR_LOG_MAX, ("recv: fd=%p osfd=%d buf=%p amount=%d flags=%d",
-		    						fd, fd->secret->md.osfd, buf, amount, flags));
+	PR_LOG(_pr_io_lm, PR_LOG_MAX,
+		("recv: fd=%p osfd=%" PR_PRIdOSFD " buf=%p amount=%d flags=%d",
+		fd, fd->secret->md.osfd, buf, amount, flags));
 
 #ifdef _PR_HAVE_PEEK_BUFFER
 	if (fd->secret->peekBytes != 0) {
@@ -678,7 +676,7 @@ PRIntn flags, PRIntervalTime timeout)
 	count = 0;
 	while (amount > 0) {
 		PR_LOG(_pr_io_lm, PR_LOG_MAX,
-		    ("send: fd=%p osfd=%d buf=%p amount=%d",
+		    ("send: fd=%p osfd=%" PR_PRIdOSFD " buf=%p amount=%d",
 		    fd, fd->secret->md.osfd, buf, amount));
 		temp = _PR_MD_SEND(fd, buf, amount, flags, timeout);
 		if (temp < 0) {
@@ -759,10 +757,6 @@ static PRInt64 PR_CALLBACK SocketAvailable64(PRFileDesc *fd)
 
 static PRStatus PR_CALLBACK SocketSync(PRFileDesc *fd)
 {
-#if defined(XP_MAC)
-#pragma unused (fd)
-#endif
-
 	return PR_SUCCESS;
 }
 
@@ -865,7 +859,7 @@ PRIntervalTime timeout)
 
 #if defined(WINNT)
 	{
-	PRInt32 newSock;
+	PROsfd newSock;
 	PRNetAddr *raddrCopy;
 
 	if (raddr == NULL) {
@@ -905,7 +899,7 @@ PRNetAddr **raddr, void *buf, PRInt32 amount,
 PRIntervalTime timeout)
 {
 	PRInt32 rv;
-	PRInt32 newSock;
+	PROsfd newSock;
 	PRThread *me = _PR_MD_CURRENT_THREAD();
 	PRNetAddr *raddrCopy;
 
@@ -943,6 +937,9 @@ PRIntervalTime timeout)
 			if (AF_INET6 == *raddr->raw.family)
         		*raddr->raw.family = PR_AF_INET6;
 #endif
+#ifdef _PR_NEED_SECRET_AF
+			(*nd)->secret->af = sd->secret->af;
+#endif
 		}
 	}
 	return rv;
@@ -956,7 +953,7 @@ _PR_AcceptTimeoutCallback callback,
 void *callbackArg)
 {
 	PRInt32 rv;
-	PRInt32 newSock;
+	PROsfd newSock;
 	PRThread *me = _PR_MD_CURRENT_THREAD();
 	PRNetAddr *raddrCopy;
 
@@ -993,6 +990,9 @@ void *callbackArg)
 #ifdef _PR_INET6
 			if (AF_INET6 == *raddr->raw.family)
         		*raddr->raw.family = PR_AF_INET6;
+#endif
+#ifdef _PR_NEED_SECRET_AF
+			(*nd)->secret->af = sd->secret->af;
 #endif
 		}
 	}
@@ -1105,9 +1105,6 @@ static PRStatus PR_CALLBACK SocketGetPeerName(PRFileDesc *fd, PRNetAddr *addr)
 static PRInt16 PR_CALLBACK SocketPoll(
     PRFileDesc *fd, PRInt16 in_flags, PRInt16 *out_flags)
 {
-#ifdef XP_MAC
-#pragma unused( fd, in_flags )
-#endif
     *out_flags = 0;
     return in_flags;
 }  /* SocketPoll */
@@ -1250,11 +1247,11 @@ PR_EXTERN(PRStatus) _pr_push_ipv6toipv4_layer(PRFileDesc *fd);
 
 #if defined(_PR_INET6_PROBE)
 
-PR_EXTERN(PRBool) _pr_ipv6_is_present;
+extern PRBool _pr_ipv6_is_present(void);
 
 PR_IMPLEMENT(PRBool) _pr_test_ipv6_socket()
 {
-PRInt32 osfd;
+	PROsfd osfd;
 
 	osfd = _PR_MD_SOCKET(AF_INET6, SOCK_STREAM, 0);
 	if (osfd != -1) {
@@ -1269,14 +1266,14 @@ PRInt32 osfd;
 
 PR_IMPLEMENT(PRFileDesc*) PR_Socket(PRInt32 domain, PRInt32 type, PRInt32 proto)
 {
-	PRInt32 osfd;
+	PROsfd osfd;
 	PRFileDesc *fd;
 	PRInt32 tmp_domain = domain;
 
 	if (!_pr_initialized) _PR_ImplicitInitialization();
 	if (PR_AF_INET != domain
 			&& PR_AF_INET6 != domain
-#if defined(XP_UNIX) || defined(XP_OS2_EMX)
+#if defined(XP_UNIX) || defined(XP_OS2)
 			&& PR_AF_LOCAL != domain
 #endif
 			) {
@@ -1285,12 +1282,8 @@ PR_IMPLEMENT(PRFileDesc*) PR_Socket(PRInt32 domain, PRInt32 type, PRInt32 proto)
 	}
 
 #if defined(_PR_INET6_PROBE)
-	if (PR_AF_INET6 == domain) {
-		if (_pr_ipv6_is_present == PR_FALSE) 
-			domain = AF_INET;
-		else
-			domain = AF_INET6;
-	}
+	if (PR_AF_INET6 == domain)
+		domain = _pr_ipv6_is_present() ? AF_INET6 : AF_INET;
 #elif defined(_PR_INET6)
 	if (PR_AF_INET6 == domain)
 		domain = AF_INET6;
@@ -1312,6 +1305,9 @@ PR_IMPLEMENT(PRFileDesc*) PR_Socket(PRInt32 domain, PRInt32 type, PRInt32 proto)
 	if (fd != NULL) {
 		_PR_MD_MAKE_NONBLOCK(fd);
 		_PR_MD_INIT_FD_INHERITABLE(fd, PR_FALSE);
+#ifdef _PR_NEED_SECRET_AF
+		fd->secret->af = domain;
+#endif
 #if defined(_PR_INET6_PROBE) || !defined(_PR_INET6)
 		/*
 		 * For platforms with no support for IPv6 
@@ -1579,7 +1575,7 @@ failed:
 #endif
 }
 
-PR_IMPLEMENT(PRInt32)
+PR_IMPLEMENT(PROsfd)
 PR_FileDesc2NativeHandle(PRFileDesc *fd)
 {
     if (fd) {
@@ -1593,7 +1589,7 @@ PR_FileDesc2NativeHandle(PRFileDesc *fd)
 }
 
 PR_IMPLEMENT(void)
-PR_ChangeFileDescNativeHandle(PRFileDesc *fd, PRInt32 handle)
+PR_ChangeFileDescNativeHandle(PRFileDesc *fd, PROsfd handle)
 {
 	if (fd)
 		fd->secret->md.osfd = handle;
@@ -1640,14 +1636,14 @@ PR_IMPLEMENT(PRInt32) PR_FD_ISSET(PRFileDesc *fh, PR_fd_set *set)
 	return 0;
 }
 
-PR_IMPLEMENT(void) PR_FD_NSET(PRInt32 fd, PR_fd_set *set)
+PR_IMPLEMENT(void) PR_FD_NSET(PROsfd fd, PR_fd_set *set)
 {
 	PR_ASSERT( set->nsize < PR_MAX_SELECT_DESC );
 
 	set->narray[set->nsize++] = fd;
 }
 
-PR_IMPLEMENT(void) PR_FD_NCLR(PRInt32 fd, PR_fd_set *set)
+PR_IMPLEMENT(void) PR_FD_NCLR(PROsfd fd, PR_fd_set *set)
 {
 	PRUint32 index, index2;
 
@@ -1661,7 +1657,7 @@ PR_IMPLEMENT(void) PR_FD_NCLR(PRInt32 fd, PR_fd_set *set)
 		}
 }
 
-PR_IMPLEMENT(PRInt32) PR_FD_NISSET(PRInt32 fd, PR_fd_set *set)
+PR_IMPLEMENT(PRInt32) PR_FD_NISSET(PROsfd fd, PR_fd_set *set)
 {
 	PRUint32 index;
 	for (index = 0; index<set->nsize; index++)
@@ -1673,11 +1669,7 @@ PR_IMPLEMENT(PRInt32) PR_FD_NISSET(PRInt32 fd, PR_fd_set *set)
 
 
 #if !defined(NEED_SELECT)
-#if !defined(XP_MAC)
 #include "obsolete/probslet.h"
-#else
-#include "probslet.h"
-#endif
 
 #define PD_INCR 20
 

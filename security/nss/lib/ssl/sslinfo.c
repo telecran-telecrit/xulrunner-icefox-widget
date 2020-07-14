@@ -34,10 +34,25 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: sslinfo.c,v 1.14.2.1 2006/01/28 00:13:37 wtchang%redhat.com Exp $ */
+/* $Id: sslinfo.c,v 1.23.2.1 2010/09/02 01:13:46 wtc%google.com Exp $ */
 #include "ssl.h"
 #include "sslimpl.h"
 #include "sslproto.h"
+
+static const char *
+ssl_GetCompressionMethodName(SSLCompressionMethod compression)
+{
+    switch (compression) {
+    case ssl_compression_null:
+	return "NULL";
+#ifdef NSS_ENABLE_ZLIB
+    case ssl_compression_deflate:
+	return "DEFLATE";
+#endif
+    default:
+	return "???";
+    }
+}
 
 SECStatus 
 SSL_GetChannelInfo(PRFileDesc *fd, SSLChannelInfo *info, PRUintn len)
@@ -45,9 +60,11 @@ SSL_GetChannelInfo(PRFileDesc *fd, SSLChannelInfo *info, PRUintn len)
     sslSocket *      ss;
     SSLChannelInfo   inf;
     sslSessionID *   sid;
+    PRBool           enoughFirstHsDone = PR_FALSE;
 
     if (!info || len < sizeof inf.length) { 
-    	return SECSuccess;
+	PORT_SetError(SEC_ERROR_INVALID_ARGS);
+	return SECFailure;
     }
 
     ss = ssl_FindSocket(fd);
@@ -60,17 +77,33 @@ SSL_GetChannelInfo(PRFileDesc *fd, SSLChannelInfo *info, PRUintn len)
     memset(&inf, 0, sizeof inf);
     inf.length = PR_MIN(sizeof inf, len);
 
-    if (ss->opt.useSecurity && ss->firstHsDone) {
+    if (ss->firstHsDone) {
+	enoughFirstHsDone = PR_TRUE;
+    } else if (ss->version >= SSL_LIBRARY_VERSION_3_0 &&
+	       ssl3_CanFalseStart(ss)) {
+	enoughFirstHsDone = PR_TRUE;
+    }
+
+    if (ss->opt.useSecurity && enoughFirstHsDone) {
         sid = ss->sec.ci.sid;
 	inf.protocolVersion  = ss->version;
 	inf.authKeyBits      = ss->sec.authKeyBits;
 	inf.keaKeyBits       = ss->sec.keaKeyBits;
 	if (ss->version < SSL_LIBRARY_VERSION_3_0) { /* SSL2 */
-	    inf.cipherSuite      = ss->sec.cipherType | 0xff00;
+	    inf.cipherSuite           = ss->sec.cipherType | 0xff00;
+	    inf.compressionMethod     = ssl_compression_null;
+	    inf.compressionMethodName = "N/A";
 	} else if (ss->ssl3.initialized) { 	/* SSL3 and TLS */
-
-	    /* XXX  These should come from crSpec */
-	    inf.cipherSuite      = ss->ssl3.hs.cipher_suite;
+	    ssl_GetSpecReadLock(ss);
+	    /* XXX  The cipher suite should be in the specs and this
+	     * function should get it from crSpec rather than from the "hs".
+	     * See bug 275744 comment 69.
+	     */
+	    inf.cipherSuite           = ss->ssl3.hs.cipher_suite;
+	    inf.compressionMethod     = ss->ssl3.crSpec->compression_method;
+	    ssl_ReleaseSpecReadLock(ss);
+	    inf.compressionMethodName =
+		ssl_GetCompressionMethodName(inf.compressionMethod);
 	}
 	if (sid) {
 	    inf.creationTime   = sid->creationTime;
@@ -109,6 +142,8 @@ SSL_GetChannelInfo(PRFileDesc *fd, SSLChannelInfo *info, PRUintn len)
 #define K_ECDH	"ECDH", kt_ecdh
 #define K_ECDHE	"ECDHE", kt_ecdh
 
+#define C_SEED 	"SEED", calg_seed
+#define C_CAMELLIA	"CAMELLIA", calg_camellia
 #define C_AES	"AES", calg_aes
 #define C_RC4	"RC4", calg_rc4
 #define C_RC2	"RC2", calg_rc2
@@ -131,13 +166,20 @@ SSL_GetChannelInfo(PRFileDesc *fd, SSLChannelInfo *info, PRUintn len)
 
 static const SSLCipherSuiteInfo suiteInfo[] = {
 /* <------ Cipher suite --------------------> <auth> <KEA>  <bulk cipher> <MAC> <FIPS> */
+{0,CS(TLS_DHE_RSA_WITH_CAMELLIA_256_CBC_SHA), S_RSA, K_DHE, C_CAMELLIA, B_256, M_SHA, 0, 0, 0, },
+{0,CS(TLS_DHE_DSS_WITH_CAMELLIA_256_CBC_SHA), S_DSA, K_DHE, C_CAMELLIA, B_256, M_SHA, 0, 0, 0, },
 {0,CS(TLS_DHE_RSA_WITH_AES_256_CBC_SHA),      S_RSA, K_DHE, C_AES, B_256, M_SHA, 1, 0, 0, },
 {0,CS(TLS_DHE_DSS_WITH_AES_256_CBC_SHA),      S_DSA, K_DHE, C_AES, B_256, M_SHA, 1, 0, 0, },
+{0,CS(TLS_RSA_WITH_CAMELLIA_256_CBC_SHA),     S_RSA, K_RSA, C_CAMELLIA, B_256, M_SHA, 0, 0, 0, },
 {0,CS(TLS_RSA_WITH_AES_256_CBC_SHA),          S_RSA, K_RSA, C_AES, B_256, M_SHA, 1, 0, 0, },
 
+{0,CS(TLS_DHE_RSA_WITH_CAMELLIA_128_CBC_SHA), S_RSA, K_DHE, C_CAMELLIA, B_128, M_SHA, 0, 0, 0, },
+{0,CS(TLS_DHE_DSS_WITH_CAMELLIA_128_CBC_SHA), S_DSA, K_DHE, C_CAMELLIA, B_128, M_SHA, 0, 0, 0, },
 {0,CS(TLS_DHE_DSS_WITH_RC4_128_SHA),          S_DSA, K_DHE, C_RC4, B_128, M_SHA, 0, 0, 0, },
 {0,CS(TLS_DHE_RSA_WITH_AES_128_CBC_SHA),      S_RSA, K_DHE, C_AES, B_128, M_SHA, 1, 0, 0, },
 {0,CS(TLS_DHE_DSS_WITH_AES_128_CBC_SHA),      S_DSA, K_DHE, C_AES, B_128, M_SHA, 1, 0, 0, },
+{0,CS(TLS_RSA_WITH_SEED_CBC_SHA),             S_RSA, K_RSA, C_SEED,B_128, M_SHA, 1, 0, 0, },
+{0,CS(TLS_RSA_WITH_CAMELLIA_128_CBC_SHA),     S_RSA, K_RSA, C_CAMELLIA, B_128, M_SHA, 0, 0, 0, },
 {0,CS(SSL_RSA_WITH_RC4_128_MD5),              S_RSA, K_RSA, C_RC4, B_128, M_MD5, 0, 0, 0, },
 {0,CS(SSL_RSA_WITH_RC4_128_SHA),              S_RSA, K_RSA, C_RC4, B_128, M_SHA, 0, 0, 0, },
 {0,CS(TLS_RSA_WITH_AES_128_CBC_SHA),          S_RSA, K_RSA, C_AES, B_128, M_SHA, 1, 0, 0, },
@@ -272,4 +314,44 @@ SSL_IsExportCipherSuite(PRUint16 cipherSuite)
 	}
     }
     return PR_FALSE;
+}
+
+SECItem*
+SSL_GetNegotiatedHostInfo(PRFileDesc *fd)
+{
+    SECItem *sniName = NULL;
+    sslSocket *ss;
+    char *name = NULL;
+
+    ss = ssl_FindSocket(fd);
+    if (!ss) {
+	SSL_DBG(("%d: SSL[%d]: bad socket in SSL_GetNegotiatedHostInfo",
+		 SSL_GETPID(), fd));
+	return NULL;
+    }
+
+    if (ss->sec.isServer) {
+        if (ss->version > SSL_LIBRARY_VERSION_3_0 &&
+            ss->ssl3.initialized) { /* TLS */
+            SECItem *crsName;
+            ssl_GetSpecReadLock(ss); /*********************************/
+            crsName = &ss->ssl3.crSpec->srvVirtName;
+            if (crsName->data) {
+                sniName = SECITEM_DupItem(crsName);
+            }
+            ssl_ReleaseSpecReadLock(ss); /*----------------------------*/
+        }
+        return sniName;
+    } 
+    name = SSL_RevealURL(fd);
+    if (name) {
+        sniName = PORT_ZNew(SECItem);
+        if (!sniName) {
+            PORT_Free(name);
+            return NULL;
+        }
+        sniName->data = (void*)name;
+        sniName->len  = PORT_Strlen(name);
+    }
+    return sniName;
 }

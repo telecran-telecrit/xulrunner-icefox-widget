@@ -41,7 +41,7 @@
  * 
  * NOTE - These are not public interfaces
  *
- * $Id: secport.c,v 1.18.28.1 2006/08/16 00:08:19 wtchang%redhat.com Exp $
+ * $Id: secport.c,v 1.29 2010/03/28 20:46:37 nelson%bolyard.com Exp $
  */
 
 #include "seccomon.h"
@@ -50,9 +50,8 @@
 #include "plarena.h"
 #include "secerr.h"
 #include "prmon.h"
-#include "nsslocks.h"
+#include "nssilock.h"
 #include "secport.h"
-#include "prvrsion.h"
 #include "prenv.h"
 
 #ifdef DEBUG
@@ -63,7 +62,7 @@
 #include "prthread.h"
 #endif /* THREADMARK */
 
-#if defined(XP_UNIX) || defined(XP_MAC) || defined(XP_OS2) || defined(XP_BEOS)
+#if defined(XP_UNIX) || defined(XP_OS2) || defined(XP_BEOS)
 #include <stdlib.h>
 #else
 #include "wtypes.h"
@@ -178,6 +177,9 @@ PORT_Strdup(const char *str)
 void
 PORT_SetError(int value)
 {	
+#ifdef DEBUG_jp96085
+    PORT_Assert(value != SEC_ERROR_REUSED_ISSUER_AND_SERIAL);
+#endif
     PR_SetError(value, 0);
     return;
 }
@@ -188,8 +190,54 @@ PORT_GetError(void)
     return(PR_GetError());
 }
 
-/********************* Arena code follows *****************************/
-
+/********************* Arena code follows *****************************
+ * ArenaPools are like heaps.  The memory in them consists of large blocks,
+ * called arenas, which are allocated from the/a system heap.  Inside an
+ * ArenaPool, the arenas are organized as if they were in a stack.  Newly
+ * allocated arenas are "pushed" on that stack.  When you attempt to
+ * allocate memory from an ArenaPool, the code first looks to see if there
+ * is enough unused space in the top arena on the stack to satisfy your
+ * request, and if so, your request is satisfied from that arena.
+ * Otherwise, a new arena is allocated (or taken from NSPR's list of freed
+ * arenas) and pushed on to the stack.  The new arena is always big enough
+ * to satisfy the request, and is also at least a minimum size that is
+ * established at the time that the ArenaPool is created.
+ *
+ * The ArenaMark function returns the address of a marker in the arena at
+ * the top of the arena stack.  It is the address of the place in the arena
+ * on the top of the arena stack from which the next block of memory will
+ * be allocated.  Each ArenaPool has its own separate stack, and hence
+ * marks are only relevant to the ArenaPool from which they are gotten.
+ * Marks may be nested.  That is, a thread can get a mark, and then get
+ * another mark.
+ *
+ * It is intended that all the marks in an ArenaPool may only be owned by a
+ * single thread.  In DEBUG builds, this is enforced.  In non-DEBUG builds,
+ * it is not.  In DEBUG builds, when a thread gets a mark from an
+ * ArenaPool, no other thread may acquire a mark in that ArenaPool while
+ * that mark exists, that is, until that mark is unmarked or released.
+ * Therefore, it is important that every mark be unmarked or released when
+ * the creating thread has no further need for exclusive ownership of the
+ * right to manage the ArenaPool.
+ *
+ * The ArenaUnmark function discards the ArenaMark at the address given,
+ * and all marks nested inside that mark (that is, acquired from that same
+ * ArenaPool while that mark existed).   It is an error for a thread other
+ * than the mark's creator to try to unmark it.  When a thread has unmarked
+ * all its marks from an ArenaPool, then another thread is able to set
+ * marks in that ArenaPool.  ArenaUnmark does not deallocate (or "pop") any
+ * memory allocated from the ArenaPool since the mark was created.
+ *
+ * ArenaRelease "pops" the stack back to the mark, deallocating all the
+ * memory allocated from the arenas in the ArenaPool since that mark was
+ * created, and removing any arenas from the ArenaPool that have no
+ * remaining active allocations when that is done.  It implicitly releases
+ * any marks nested inside the mark being explicitly released.  It is the
+ * only operation, other than destroying the arenapool, that potentially
+ * reduces the number of arenas on the stack.  Otherwise, the stack grows
+ * until the arenapool is destroyed, at which point all the arenas are
+ * freed or returned to a "free arena list", depending on their sizes.
+ */
 PLArenaPool *
 PORT_NewArena(unsigned long chunksize)
 {
@@ -280,37 +328,23 @@ PORT_FreeArena(PLArenaPool *arena, PRBool zero)
     PORTArenaPool *pool = (PORTArenaPool *)arena;
     PRLock *       lock = (PRLock *)0;
     size_t         len  = sizeof *arena;
-    extern const PRVersionDescription * libVersionPoint(void);
-    static const PRVersionDescription * pvd;
+    static PRBool  checkedEnv = PR_FALSE;
     static PRBool  doFreeArenaPool = PR_FALSE;
 
+    if (!pool)
+    	return;
     if (ARENAPOOL_MAGIC == pool->magic ) {
 	len  = sizeof *pool;
 	lock = pool->lock;
 	PZ_Lock(lock);
     }
-    if (!pvd) {
-	/* Each of NSPR's DLLs has a function libVersionPoint().
-	** We could do a lot of extra work to be sure we're calling the
-	** one in the DLL that holds PR_FreeArenaPool, but instead we
-	** rely on the fact that ALL NSPR DLLs in the same directory
-	** must be from the same release, and we call which ever one we get. 
-	*/
+    if (!checkedEnv) {
 	/* no need for thread protection here */
-	pvd = libVersionPoint();
-	if ((pvd->vMajor > 4) || 
-	    (pvd->vMajor == 4 && pvd->vMinor > 1) ||
-	    (pvd->vMajor == 4 && pvd->vMinor == 1 && pvd->vPatch >= 1)) {
-	    const char *ev = PR_GetEnv("NSS_DISABLE_ARENA_FREE_LIST");
-	    if (!ev) doFreeArenaPool = PR_TRUE;
-	}
+	doFreeArenaPool = (PR_GetEnv("NSS_DISABLE_ARENA_FREE_LIST") == NULL);
+	checkedEnv = PR_TRUE;
     }
     if (zero) {
-	PLArena *a;
-	for (a = arena->first.next; a; a = a->next) {
-	    PR_ASSERT(a->base <= a->avail && a->avail <= a->limit);
-	    memset((void *)a->base, 0, a->avail - a->base);
-	}
+	PL_ClearArenaPool(arena, 0);
     }
     if (doFreeArenaPool) {
 	PL_FreeArenaPool(arena);
@@ -631,7 +665,7 @@ PORT_UCS2_ASCIIConversion(PRBool toUnicode, unsigned char *inBuf,
 int
 NSS_PutEnv(const char * envVarName, const char * envValue)
 {
-#if  defined(XP_MAC) || defined(_WIN32_WCE)
+#ifdef _WIN32_WCE
     return SECFailure;
 #else
     SECStatus result = SECSuccess;
@@ -662,3 +696,21 @@ NSS_PutEnv(const char * envVarName, const char * envValue)
 #endif
 }
 
+/*
+ * Perform a constant-time compare of two memory regions. The return value is
+ * 0 if the memory regions are equal and non-zero otherwise.
+ */
+int
+NSS_SecureMemcmp(const void *ia, const void *ib, size_t n)
+{
+    const unsigned char *a = (const unsigned char*) ia;
+    const unsigned char *b = (const unsigned char*) ib;
+    size_t i;
+    unsigned char r = 0;
+
+    for (i = 0; i < n; ++i) {
+        r |= *a++ ^ *b++;
+    }
+
+    return r;
+}

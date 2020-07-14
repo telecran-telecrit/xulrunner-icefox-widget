@@ -44,16 +44,20 @@
  * 04/20/2000       IBM Corp.      OS/2 VisualAge build.
  */
 
+/*
+ * style sheet and style rule processor representing data from presentational
+ * HTML attributes
+ */
+
 #include "nsHTMLStyleSheet.h"
 #include "nsINameSpaceManager.h"
 #include "nsIAtom.h"
 #include "nsIURL.h"
-#include "nsISupportsArray.h"
 #include "nsMappedAttributes.h"
 #include "nsILink.h"
 #include "nsIFrame.h"
 #include "nsStyleContext.h"
-#include "nsHTMLAtoms.h"
+#include "nsGkAtoms.h"
 #include "nsPresContext.h"
 #include "nsIEventStateManager.h"
 #include "nsIDocument.h"
@@ -64,15 +68,17 @@
 #include "nsCSSAnonBoxes.h"
 #include "nsRuleWalker.h"
 #include "nsRuleData.h"
+#include "nsContentErrors.h"
 
 NS_IMPL_ISUPPORTS1(nsHTMLStyleSheet::HTMLColorRule, nsIStyleRule)
 
 NS_IMETHODIMP
 nsHTMLStyleSheet::HTMLColorRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData->mSID == eStyleStruct_Color) {
-    if (aRuleData->mColorData->mColor.GetUnit() == eCSSUnit_Null)
-      aRuleData->mColorData->mColor = nsCSSValue(mColor);
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Color)) {
+    if (aRuleData->mColorData->mColor.GetUnit() == eCSSUnit_Null &&
+        aRuleData->mPresContext->UseDocumentColors())
+      aRuleData->mColorData->mColor.SetColorValue(mColor);
   }
   return NS_OK;
 }
@@ -103,7 +109,7 @@ nsHTMLStyleSheet::GenericTableRule::List(FILE* out, PRInt32 aIndent) const
 }
 #endif
 
-static void PostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRuleData)
+static void PostResolveCallback(void* aStyleStruct, nsRuleData* aRuleData)
 {
   nsStyleText* text = (nsStyleText*)aStyleStruct;
   if (text->mTextAlign == NS_STYLE_TEXT_ALIGN_DEFAULT) {
@@ -121,7 +127,7 @@ static void PostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRuleDa
 NS_IMETHODIMP
 nsHTMLStyleSheet::TableTHRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData && aRuleData->mSID == eStyleStruct_Text) {
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Text)) {
     aRuleData->mCanStoreInRuleTree = PR_FALSE;
     aRuleData->mPostResolveCallback = &PostResolveCallback;
   }
@@ -129,13 +135,13 @@ nsHTMLStyleSheet::TableTHRule::MapRuleInfoInto(nsRuleData* aRuleData)
 }
 
 static void 
-ProcessTableRulesAttribute(nsStyleStruct* aStyleStruct, 
-                           nsRuleData*    aRuleData,
-                           PRUint8        aSide,
-                           PRBool         aGroup,
-                           PRUint8        aRulesArg1,
-                           PRUint8        aRulesArg2,
-                           PRUint8        aRulesArg3)
+ProcessTableRulesAttribute(void*       aStyleStruct, 
+                           nsRuleData* aRuleData,
+                           PRUint8     aSide,
+                           PRBool      aGroup,
+                           PRUint8     aRulesArg1,
+                           PRUint8     aRulesArg2,
+                           PRUint8     aRulesArg3)
 {
   if (!aStyleStruct || !aRuleData || !aRuleData->mPresContext) return;
 
@@ -181,24 +187,23 @@ ProcessTableRulesAttribute(nsStyleStruct* aStyleStruct,
       borderData->SetBorderStyle(aSide, bStyle);
 
       nscolor borderColor;
-      PRBool transparent, foreground;
-      borderData->GetBorderColor(aSide, borderColor, transparent, foreground);
-      if (transparent || foreground) {
+      PRBool foreground;
+      borderData->GetBorderColor(aSide, borderColor, foreground);
+      if (foreground || NS_GET_A(borderColor) == 0) {
         // use the table's border color if it is set, otherwise use black
         nscolor tableBorderColor;
-        tableBorderData->GetBorderColor(aSide, tableBorderColor, transparent, foreground);
-        borderColor = (transparent || foreground) ? NS_RGB(0,0,0) : tableBorderColor;
+        tableBorderData->GetBorderColor(aSide, tableBorderColor, foreground);
+        borderColor = (foreground || NS_GET_A(tableBorderColor) == 0)
+                        ? NS_RGB(0,0,0) : tableBorderColor;
         borderData->SetBorderColor(aSide, borderColor);
       }
       // set the border width to be 1 pixel
-      nscoord onePixel =
-        NSToCoordRound(aRuleData->mPresContext->ScaledPixelsToTwips());
-      borderData->SetBorderWidth(aSide, onePixel);
+      borderData->SetBorderWidth(aSide, nsPresContext::CSSPixelsToAppUnits(1));
     }
   }
 }
 
-static void TbodyPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRuleData)
+static void TbodyPostResolveCallback(void* aStyleStruct, nsRuleData* aRuleData)
 {
   ::ProcessTableRulesAttribute(aStyleStruct, aRuleData, NS_SIDE_TOP, PR_TRUE, NS_STYLE_TABLE_RULES_ALL,
                                NS_STYLE_TABLE_RULES_GROUPS, NS_STYLE_TABLE_RULES_ROWS);
@@ -209,7 +214,7 @@ static void TbodyPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aR
 NS_IMETHODIMP
 nsHTMLStyleSheet::TableTbodyRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData && aRuleData->mSID == eStyleStruct_Border) {
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Border)) {
     aRuleData->mCanStoreInRuleTree = PR_FALSE;
     aRuleData->mPostResolveCallback = &TbodyPostResolveCallback;
   }
@@ -217,7 +222,7 @@ nsHTMLStyleSheet::TableTbodyRule::MapRuleInfoInto(nsRuleData* aRuleData)
 }
 // -----------------------------------------------------------
 
-static void RowPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRuleData)
+static void RowPostResolveCallback(void* aStyleStruct, nsRuleData* aRuleData)
 {
   ::ProcessTableRulesAttribute(aStyleStruct, aRuleData, NS_SIDE_TOP, PR_FALSE, NS_STYLE_TABLE_RULES_ALL,
                                NS_STYLE_TABLE_RULES_ROWS, NS_STYLE_TABLE_RULES_ROWS);
@@ -228,14 +233,14 @@ static void RowPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRul
 NS_IMETHODIMP
 nsHTMLStyleSheet::TableRowRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData && aRuleData->mSID == eStyleStruct_Border) {
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Border)) {
     aRuleData->mCanStoreInRuleTree = PR_FALSE;
     aRuleData->mPostResolveCallback = &RowPostResolveCallback;
   }
   return NS_OK;
 }
 
-static void ColgroupPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRuleData)
+static void ColgroupPostResolveCallback(void* aStyleStruct, nsRuleData* aRuleData)
 {
   ::ProcessTableRulesAttribute(aStyleStruct, aRuleData, NS_SIDE_LEFT, PR_TRUE, NS_STYLE_TABLE_RULES_ALL,
                                NS_STYLE_TABLE_RULES_GROUPS, NS_STYLE_TABLE_RULES_COLS);
@@ -246,14 +251,14 @@ static void ColgroupPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData*
 NS_IMETHODIMP
 nsHTMLStyleSheet::TableColgroupRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData && aRuleData->mSID == eStyleStruct_Border) {
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Border)) {
     aRuleData->mCanStoreInRuleTree = PR_FALSE;
     aRuleData->mPostResolveCallback = &ColgroupPostResolveCallback;
   }
   return NS_OK;
 }
 
-static void ColPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRuleData)
+static void ColPostResolveCallback(void* aStyleStruct, nsRuleData* aRuleData)
 {
   ::ProcessTableRulesAttribute(aStyleStruct, aRuleData, NS_SIDE_LEFT, PR_FALSE, NS_STYLE_TABLE_RULES_ALL,
                                NS_STYLE_TABLE_RULES_COLS, NS_STYLE_TABLE_RULES_COLS);
@@ -261,7 +266,7 @@ static void ColPostResolveCallback(nsStyleStruct* aStyleStruct, nsRuleData* aRul
                                NS_STYLE_TABLE_RULES_COLS, NS_STYLE_TABLE_RULES_COLS);
 }
 
-static void UngroupedColPostResolveCallback(nsStyleStruct* aStyleStruct,
+static void UngroupedColPostResolveCallback(void* aStyleStruct,
                                             nsRuleData* aRuleData)
 {
   // Pass PR_TRUE for aGroup, so that we find the table's style
@@ -275,7 +280,7 @@ static void UngroupedColPostResolveCallback(nsStyleStruct* aStyleStruct,
 NS_IMETHODIMP
 nsHTMLStyleSheet::TableColRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData && aRuleData->mSID == eStyleStruct_Border) {
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Border)) {
     aRuleData->mCanStoreInRuleTree = PR_FALSE;
     aRuleData->mPostResolveCallback = &ColPostResolveCallback;
   }
@@ -285,7 +290,7 @@ nsHTMLStyleSheet::TableColRule::MapRuleInfoInto(nsRuleData* aRuleData)
 NS_IMETHODIMP
 nsHTMLStyleSheet::TableUngroupedColRule::MapRuleInfoInto(nsRuleData* aRuleData)
 {
-  if (aRuleData && aRuleData->mSID == eStyleStruct_Border) {
+  if (aRuleData->mSIDs & NS_STYLE_INHERIT_BIT(Border)) {
     aRuleData->mCanStoreInRuleTree = PR_FALSE;
     aRuleData->mPostResolveCallback = &UngroupedColPostResolveCallback;
   }
@@ -297,32 +302,32 @@ struct MappedAttrTableEntry : public PLDHashEntryHdr {
   nsMappedAttributes *mAttributes;
 };
 
-PR_STATIC_CALLBACK(PLDHashNumber)
+static PLDHashNumber
 MappedAttrTable_HashKey(PLDHashTable *table, const void *key)
 {
   nsMappedAttributes *attributes =
-    NS_STATIC_CAST(nsMappedAttributes*, NS_CONST_CAST(void*, key));
+    static_cast<nsMappedAttributes*>(const_cast<void*>(key));
 
   return attributes->HashValue();
 }
 
-PR_STATIC_CALLBACK(void)
+static void
 MappedAttrTable_ClearEntry(PLDHashTable *table, PLDHashEntryHdr *hdr)
 {
-  MappedAttrTableEntry *entry = NS_STATIC_CAST(MappedAttrTableEntry*, hdr);
+  MappedAttrTableEntry *entry = static_cast<MappedAttrTableEntry*>(hdr);
 
   entry->mAttributes->DropStyleSheetReference();
   memset(entry, 0, sizeof(MappedAttrTableEntry));
 }
 
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 MappedAttrTable_MatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
                            const void *key)
 {
   nsMappedAttributes *attributes =
-    NS_STATIC_CAST(nsMappedAttributes*, NS_CONST_CAST(void*, key));
+    static_cast<nsMappedAttributes*>(const_cast<void*>(key));
   const MappedAttrTableEntry *entry =
-    NS_STATIC_CAST(const MappedAttrTableEntry*, hdr);
+    static_cast<const MappedAttrTableEntry*>(hdr);
 
   return attributes->Equals(entry->mAttributes);
 }
@@ -330,7 +335,6 @@ MappedAttrTable_MatchEntry(PLDHashTable *table, const PLDHashEntryHdr *hdr,
 static PLDHashTableOps MappedAttrTable_Ops = {
   PL_DHashAllocTable,
   PL_DHashFreeTable,
-  PL_DHashGetKeyStub,
   MappedAttrTable_HashKey,
   MappedAttrTable_MatchEntry,
   PL_DHashMoveEntryStub,
@@ -417,8 +421,7 @@ static nsresult GetBodyColor(nsPresContext* aPresContext, nscolor* aColor)
   nsCOMPtr<nsIDOMHTMLElement> body;
   domdoc->GetBody(getter_AddRefs(body));
   nsCOMPtr<nsIContent> bodyContent = do_QueryInterface(body);
-  nsIFrame *bodyFrame;
-  shell->GetPrimaryFrameFor(bodyContent, &bodyFrame);
+  nsIFrame *bodyFrame = shell->GetPrimaryFrameFor(bodyContent);
   if (!bodyFrame)
     return NS_ERROR_FAILURE;
   *aColor = bodyFrame->GetStyleColor()->mColor;
@@ -428,17 +431,17 @@ static nsresult GetBodyColor(nsPresContext* aPresContext, nscolor* aColor)
 NS_IMETHODIMP
 nsHTMLStyleSheet::RulesMatching(ElementRuleProcessorData* aData)
 {
-  nsIStyledContent *styledContent = aData->mStyledContent;
+  nsIContent *content = aData->mContent;
 
-  if (styledContent) {
+  if (content) {
     nsRuleWalker *ruleWalker = aData->mRuleWalker;
     if (aData->mIsHTMLContent) {
       nsIAtom* tag = aData->mContentTag;
 
       // if we have anchor colors, check if this is an anchor with an href
-      if (tag == nsHTMLAtoms::a) {
+      if (tag == nsGkAtoms::a) {
         if (mLinkRule || mVisitedRule || mActiveRule) {
-          if (aData->mIsHTMLLink) {
+          if (aData->mIsLink) {
             switch (aData->mLinkState) {
               case eLinkState_Unvisited:
                 if (mLinkRule)
@@ -459,28 +462,28 @@ nsHTMLStyleSheet::RulesMatching(ElementRuleProcessorData* aData)
         } // end link/visited/active rules
       } // end A tag
       // add the rule to handle text-align for a <th>
-      else if (tag == nsHTMLAtoms::th) {
+      else if (tag == nsGkAtoms::th) {
         ruleWalker->Forward(mTableTHRule);
       }
-      else if (tag == nsHTMLAtoms::tr) {
+      else if (tag == nsGkAtoms::tr) {
         ruleWalker->Forward(mTableRowRule);
       }
-      else if ((tag == nsHTMLAtoms::thead) || (tag == nsHTMLAtoms::tbody) || (tag == nsHTMLAtoms::tfoot)) {
+      else if ((tag == nsGkAtoms::thead) || (tag == nsGkAtoms::tbody) || (tag == nsGkAtoms::tfoot)) {
         ruleWalker->Forward(mTableTbodyRule);
       }
-      else if (tag == nsHTMLAtoms::col) {
+      else if (tag == nsGkAtoms::col) {
         nsIContent* parent = aData->mParentContent;
-        if (parent && parent->IsContentOfType(nsIContent::eHTML) &&
-            parent->Tag() == nsHTMLAtoms::colgroup) {
+        if (parent && parent->IsNodeOfType(nsIContent::eHTML) &&
+            parent->Tag() == nsGkAtoms::colgroup) {
           ruleWalker->Forward(mTableColRule);
         } else {
           ruleWalker->Forward(mTableUngroupedColRule);
         }
       }
-      else if (tag == nsHTMLAtoms::colgroup) {
+      else if (tag == nsGkAtoms::colgroup) {
         ruleWalker->Forward(mTableColgroupRule);
       }
-      else if (tag == nsHTMLAtoms::table) {
+      else if (tag == nsGkAtoms::table) {
         if (aData->mCompatMode == eCompatibility_NavQuirks) {
           nscolor bodyColor;
           nsresult rv =
@@ -502,7 +505,7 @@ nsHTMLStyleSheet::RulesMatching(ElementRuleProcessorData* aData)
     } // end html element
 
     // just get the style rules from the content
-    styledContent->WalkContentStyleRules(ruleWalker);
+    content->WalkContentStyleRules(ruleWalker);
   }
 
   return NS_OK;
@@ -513,10 +516,10 @@ NS_IMETHODIMP
 nsHTMLStyleSheet::HasStateDependentStyle(StateRuleProcessorData* aData,
                                          nsReStyleHint* aResult)
 {
-  if (aData->mStyledContent &&
+  if (aData->mContent &&
       aData->mIsHTMLContent &&
-      aData->mIsHTMLLink &&
-      aData->mContentTag == nsHTMLAtoms::a &&
+      aData->mIsLink &&
+      aData->mContentTag == nsGkAtoms::a &&
       ((mActiveRule && (aData->mStateMask & NS_EVENT_STATE_ACTIVE)) ||
        (mLinkRule && (aData->mStateMask & NS_EVENT_STATE_VISITED)) ||
        (mVisitedRule && (aData->mStateMask & NS_EVENT_STATE_VISITED)))) {
@@ -532,13 +535,17 @@ NS_IMETHODIMP
 nsHTMLStyleSheet::HasAttributeDependentStyle(AttributeRuleProcessorData* aData,
                                              nsReStyleHint* aResult)
 {
+  // Note: no need to worry about whether some states changed with this
+  // attribute here, because we handle that under HasStateDependentStyle() as
+  // needed.
+
   // Result is true for |href| changes on HTML links if we have link rules.
-  nsIStyledContent *styledContent = aData->mStyledContent;
-  if (aData->mAttribute == nsHTMLAtoms::href &&
+  nsIContent *content = aData->mContent;
+  if (aData->mAttribute == nsGkAtoms::href &&
       (mLinkRule || mVisitedRule || mActiveRule) &&
-      styledContent &&
-      styledContent->IsContentOfType(nsIContent::eHTML) &&
-      aData->mContentTag == nsHTMLAtoms::a) {
+      content &&
+      content->IsNodeOfType(nsINode::eHTML) &&
+      aData->mContentTag == nsGkAtoms::a) {
     *aResult = eReStyle_Self;
     return NS_OK;
   }
@@ -547,12 +554,20 @@ nsHTMLStyleSheet::HasAttributeDependentStyle(AttributeRuleProcessorData* aData,
   // to descendants of body, when we're already reresolving.
 
   // Handle the content style rules.
-  if (styledContent && styledContent->IsAttributeMapped(aData->mAttribute)) {
+  if (content && content->IsAttributeMapped(aData->mAttribute)) {
     *aResult = eReStyle_Self;
     return NS_OK;
   }
 
   *aResult = nsReStyleHint(0);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsHTMLStyleSheet::MediumFeaturesChanged(nsPresContext* aPresContext,
+                                        PRBool* aRulesChanged)
+{
+  *aRulesChanged = PR_FALSE;
   return NS_OK;
 }
 
@@ -600,12 +615,6 @@ nsHTMLStyleSheet::GetType(nsString& aType) const
 {
   aType.AssignLiteral("text/html");
   return NS_OK;
-}
-
-NS_IMETHODIMP_(PRBool)
-nsHTMLStyleSheet::UseForMedium(nsPresContext* aPresContext) const
-{
-  return PR_TRUE; // works for all media
 }
 
 NS_IMETHODIMP_(PRBool)
@@ -800,8 +809,8 @@ nsHTMLStyleSheet::UniqueMappedAttributes(nsMappedAttributes* aMapped)
       return nsnull;
     }
   }
-  MappedAttrTableEntry *entry = NS_STATIC_CAST(MappedAttrTableEntry*,
-    PL_DHashTableOperate(&mMappedAttrTable, aMapped, PL_DHASH_ADD));
+  MappedAttrTableEntry *entry = static_cast<MappedAttrTableEntry*>
+                                           (PL_DHashTableOperate(&mMappedAttrTable, aMapped, PL_DHASH_ADD));
   if (!entry)
     return nsnull;
   if (!entry->mAttributes) {

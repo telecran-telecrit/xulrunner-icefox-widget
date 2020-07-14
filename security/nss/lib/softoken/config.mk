@@ -37,16 +37,9 @@
 
 # $(PROGRAM) has explicit dependencies on $(EXTRA_LIBS)
 CRYPTOLIB=$(DIST)/lib/$(LIB_PREFIX)freebl.$(LIB_SUFFIX)
-CRYPTODIR=../freebl
-ifdef MOZILLA_SECURITY_BUILD
-	CRYPTOLIB=$(DIST)/lib/$(LIB_PREFIX)crypto.$(LIB_SUFFIX)
-	CRYPTODIR=../crypto
-endif
 
 EXTRA_LIBS += \
 	$(CRYPTOLIB) \
-	$(DIST)/lib/$(LIB_PREFIX)secutil.$(LIB_SUFFIX) \
-	$(DIST)/lib/$(LIB_PREFIX)dbm.$(LIB_SUFFIX) \
 	$(NULL)
 
 # can't do this in manifest.mn because OS_TARGET isn't defined there.
@@ -61,6 +54,10 @@ RESNAME = $(LIBRARY_NAME).rc
 
 ifdef NS_USE_GCC
 EXTRA_SHARED_LIBS += \
+	-L$(DIST)/lib \
+	-l$(SQLITE_LIB_NAME) \
+	-L$(NSSUTIL_LIB_DIR) \
+	-lnssutil3 \
 	-L$(NSPR_LIB_DIR) \
 	-lplc4 \
 	-lplds4 \
@@ -69,6 +66,8 @@ EXTRA_SHARED_LIBS += \
 else # ! NS_USE_GCC
 
 EXTRA_SHARED_LIBS += \
+	$(DIST)/lib/$(SQLITE_LIB_NAME).lib \
+	$(NSSUTIL_LIB_DIR)/nssutil3.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)plc4.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)plds4.lib \
 	$(NSPR_LIB_DIR)/$(NSPR31_LIB_PREFIX)nspr4.lib \
@@ -80,6 +79,10 @@ else
 # $(PROGRAM) has NO explicit dependencies on $(EXTRA_SHARED_LIBS)
 # $(EXTRA_SHARED_LIBS) come before $(OS_LIBS), except on AIX.
 EXTRA_SHARED_LIBS += \
+	-L$(DIST)/lib \
+	-l$(SQLITE_LIB_NAME) \
+	-L$(NSSUTIL_LIB_DIR) \
+	-lnssutil3 \
 	-L$(NSPR_LIB_DIR) \
 	-lplc4 \
 	-lplds4 \
@@ -87,16 +90,14 @@ EXTRA_SHARED_LIBS += \
 	$(NULL)
 endif
 
+ifeq ($(OS_TARGET),AIX)
+OS_LIBS += -lpthread
+endif
+
 ifeq ($(OS_TARGET),SunOS)
-# The -R '$ORIGIN' linker option instructs this library to search for its
-# dependencies in the same directory where it resides.
-MKSHLIB += -R '$$ORIGIN'
 OS_LIBS += -lbsm 
 endif
 
 ifeq ($(OS_TARGET),WINCE)
 DEFINES += -DDBM_USING_NSPR
 endif
-
-# indicates dependency on freebl static lib
-$(SHARED_LIBRARY): $(CRYPTOLIB)

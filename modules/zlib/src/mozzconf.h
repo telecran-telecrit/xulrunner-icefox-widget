@@ -37,12 +37,12 @@
 #ifndef MOZZCONF_H
 #define MOZZCONF_H
 
-#if defined(XP_WIN) && defined(ZLIB_DLL) && !defined(MOZ_ENABLE_LIBXUL)
+#if defined(XP_WIN) && defined(ZLIB_DLL)
 #undef ZLIB_DLL
-#endif
-
-#ifdef HAVE_VISIBILITY_ATTRIBUTE
+#elif defined(HAVE_VISIBILITY_ATTRIBUTE) && !defined(MOZ_ENABLE_LIBXUL)
 #define ZEXTERN __attribute__((visibility ("default"))) extern
+#elif (defined(__SUNPRO_C) || defined(__SUNPRO_CC)) && !defined(MOZ_ENABLE_LIBXUL)
+#define ZEXTERN __global extern
 #endif
 
 /* Exported Symbols */

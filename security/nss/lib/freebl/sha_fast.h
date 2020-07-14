@@ -57,8 +57,13 @@ struct SHA1ContextStr {
   SHA_HW_t H[22];		/* 5 state variables, 16 tmp values, 1 extra */
 };
 
-#if defined(_MSC_VER) && defined(_X86_)
+#if defined(_MSC_VER)
+#include <stdlib.h>
 #if defined(IS_LITTLE_ENDIAN) 
+#if (_MSC_VER >= 1300)
+#pragma intrinsic(_byteswap_ulong)
+#define SHA_HTONL(x) _byteswap_ulong(x)
+#elif defined(NSS_X86_OR_X64)
 #ifndef FORCEINLINE
 #if (_MSC_VER >= 1200)
 #define FORCEINLINE __forceinline
@@ -78,12 +83,13 @@ swap4b(PRUint32 dwd)
 }
 
 #define SHA_HTONL(x) swap4b(x)
+#endif /* NSS_X86_OR_X64 */
 #endif /* IS_LITTLE_ENDIAN */
 
 #pragma intrinsic (_lrotr, _lrotl) 
 #define SHA_ROTL(x,n) _lrotl(x,n)
 #define SHA_ROTL_IS_DEFINED 1
-#endif /* _MSC_VER && _X86_ */
+#endif /* _MSC_VER */
 
 #if defined(__GNUC__) 
 /* __x86_64__  and __x86_64 are defined by GCC on x86_64 CPUs */
@@ -102,7 +108,7 @@ static __inline__ PRUint32 SHA_ROTL(PRUint32 t, PRUint32 n)
 #endif
 #define SHA_ROTL_IS_DEFINED 1
 
-#if defined(_X86_) || defined(__x86_64__) || defined(__x86_64) 
+#if defined(NSS_X86_OR_X64)
 static __inline__ PRUint32 swap4b(PRUint32 value)
 {
     __asm__("bswap %0" : "+r" (value));
@@ -118,7 +124,7 @@ static __inline__ PRUint32 swap4b(PRUint32 value)
 #define SHA_ROTL(X,n) (tmp = (X), ((tmp) << (n)) | ((tmp) >> (32-(n))))
 #endif
 
-#if defined(_X86_) || defined(__x86_64__) || defined(__x86_64) 
+#if defined(NSS_X86_OR_X64)
 #define SHA_ALLOW_UNALIGNED_ACCESS 1
 #endif
 

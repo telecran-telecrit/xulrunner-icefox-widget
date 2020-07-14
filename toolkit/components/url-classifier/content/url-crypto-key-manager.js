@@ -1,38 +1,38 @@
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Google Safe Browsing.
- *
- * The Initial Developer of the Original Code is Google Inc.
- * Portions created by the Initial Developer are Copyright (C) 2006
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Fritz Schneider <fritz@google.com> (original author)
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+# ***** BEGIN LICENSE BLOCK *****
+# Version: MPL 1.1/GPL 2.0/LGPL 2.1
+#
+# The contents of this file are subject to the Mozilla Public License Version
+# 1.1 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+# http://www.mozilla.org/MPL/
+#
+# Software distributed under the License is distributed on an "AS IS" basis,
+# WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
+# for the specific language governing rights and limitations under the
+# License.
+#
+# The Original Code is Google Safe Browsing.
+#
+# The Initial Developer of the Original Code is Google Inc.
+# Portions created by the Initial Developer are Copyright (C) 2006
+# the Initial Developer. All Rights Reserved.
+#
+# Contributor(s):
+#   Fritz Schneider <fritz@google.com> (original author)
+#
+# Alternatively, the contents of this file may be used under the terms of
+# either the GNU General Public License Version 2 or later (the "GPL"), or
+# the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
+# in which case the provisions of the GPL or the LGPL are applicable instead
+# of those above. If you wish to allow use of your version of this file only
+# under the terms of either the GPL or the LGPL, and not to allow others to
+# use your version of this file under the terms of the MPL, indicate your
+# decision by deleting the provisions above and replace them with the notice
+# and other provisions required by the GPL or the LGPL. If you do not delete
+# the provisions above, a recipient may use your version of this file under
+# the terms of any one of the MPL, the GPL or the LGPL.
+#
+# ***** END LICENSE BLOCK *****
 
 
 // This file implements the tricky business of managing the keys for our 
@@ -67,7 +67,7 @@
 
 // We store the user key in this file.  The key can be used to verify signed
 // server updates.
-const kKeyFilename = "kf.txt";
+const kKeyFilename = "urlclassifierkey3.txt";
 
 /**
  * A key manager for UrlCrypto. There should be exactly one of these
@@ -92,11 +92,11 @@ const kKeyFilename = "kf.txt";
 function PROT_UrlCryptoKeyManager(opt_keyFilename, opt_testing) {
   this.debugZone = "urlcryptokeymanager";
   this.testing_ = !!opt_testing;
-  this.base64_ = new G_Base64();
   this.clientKey_ = null;          // Base64-encoded, as fetched from server
   this.clientKeyArray_ = null;     // Base64-decoded into an array of numbers
   this.wrappedKey_ = null;         // Opaque websafe base64-encoded server key
   this.rekeyTries_ = 0;
+  this.updating_ = false;
 
   // Don't do anything until keyUrl_ is set.
   this.keyUrl_ = null;
@@ -104,16 +104,14 @@ function PROT_UrlCryptoKeyManager(opt_keyFilename, opt_testing) {
   this.keyFilename_ = opt_keyFilename ? 
                       opt_keyFilename : kKeyFilename;
 
+  this.onNewKey_ = null;
+
   // Convenience properties
   this.MAX_REKEY_TRIES = PROT_UrlCryptoKeyManager.MAX_REKEY_TRIES;
   this.CLIENT_KEY_NAME = PROT_UrlCryptoKeyManager.CLIENT_KEY_NAME;
   this.WRAPPED_KEY_NAME = PROT_UrlCryptoKeyManager.WRAPPED_KEY_NAME;
 
   if (!this.testing_) {
-    G_Assert(this, !PROT_UrlCrypto.prototype.manager_,
-             "Already have manager?");
-    PROT_UrlCrypto.prototype.manager_ = this;
-
     this.maybeLoadOldKey();
   }
 }
@@ -125,13 +123,20 @@ PROT_UrlCryptoKeyManager.MAX_REKEY_TRIES = 2;
 // We store the time as seconds since the epoch.
 PROT_UrlCryptoKeyManager.NEXT_REKEY_PREF = "urlclassifier.keyupdatetime.";
 
-// Once a day (interval in seconds)
-PROT_UrlCryptoKeyManager.KEY_MIN_UPDATE_TIME = 24 * 60 * 60;
+// Once every 30 days (interval in seconds)
+PROT_UrlCryptoKeyManager.KEY_MIN_UPDATE_TIME = 30 * 24 * 60 * 60;
 
 // These are the names the server will respond with in protocol4 format
 PROT_UrlCryptoKeyManager.CLIENT_KEY_NAME = "clientkey";
 PROT_UrlCryptoKeyManager.WRAPPED_KEY_NAME = "wrappedkey";
 
+/**
+ * Called to get ClientKey
+ * @returns urlsafe-base64-encoded client key or null if we haven't gotten one.
+ */
+PROT_UrlCryptoKeyManager.prototype.getClientKey = function() {
+  return this.clientKey_;
+}
 
 /**
  * Called by a UrlCrypto to get the current K_C
@@ -194,7 +199,11 @@ PROT_UrlCryptoKeyManager.prototype.getPrefName_ = function(url) {
  * hit max-tries, but not an error to call maybeReKey().
  */
 PROT_UrlCryptoKeyManager.prototype.reKey = function() {
-  
+  if (this.updating_) {
+    G_Debug(this, "Already re-keying, ignoring this request");
+    return true;
+  }
+
   if (this.rekeyTries_ > this.MAX_REKEY_TRIES)
     throw new Error("Have already rekeyed " + this.rekeyTries_ + " times");
 
@@ -203,8 +212,9 @@ PROT_UrlCryptoKeyManager.prototype.reKey = function() {
   G_Debug(this, "Attempting to re-key");
   // If the keyUrl isn't set, we don't do anything.
   if (!this.testing_ && this.keyUrl_) {
-    (new PROT_XMLFetcher()).get(this.keyUrl_,
-                                BindToObject(this.onGetKeyResponse, this));
+    this.fetcher_ = new PROT_XMLFetcher();
+    this.fetcher_.get(this.keyUrl_, BindToObject(this.onGetKeyResponse, this));
+    this.updating_ = true;
 
     // Calculate the next time we're allowed to re-key.
     var prefs = new G_Preferences(PROT_UrlCryptoKeyManager.NEXT_REKEY_PREF);
@@ -233,10 +243,24 @@ PROT_UrlCryptoKeyManager.prototype.maybeReKey = function() {
 }
 
 /**
+ * Drop the existing set of keys.  Resets the rekeyTries variable to
+ * allow a rekey to succeed.
+ */
+PROT_UrlCryptoKeyManager.prototype.dropKey = function() {
+  this.rekeyTries_ = 0;
+  this.replaceKey_(null, null);
+}
+
+/**
  * @returns Boolean indicating if we have a key we can use 
  */
-PROT_UrlCryptoKeyManager.prototype.hasKey_ = function() {
+PROT_UrlCryptoKeyManager.prototype.hasKey = function() {
   return this.clientKey_ != null && this.wrappedKey_ != null;
+}
+
+PROT_UrlCryptoKeyManager.prototype.unUrlSafe = function(key)
+{
+    return key ? key.replace("-", "+").replace("_", "/") : "";
 }
 
 /**
@@ -254,10 +278,15 @@ PROT_UrlCryptoKeyManager.prototype.replaceKey_ = function(clientKey,
     G_Debug(this, "Replacing " + this.clientKey_ + " with " + clientKey);
 
   this.clientKey_ = clientKey;
-  this.clientKeyArray_ = this.base64_.decodeString(this.clientKey_);
+  this.clientKeyArray_ = Array.map(atob(this.unUrlSafe(clientKey)),
+                                   function(c) { return c.charCodeAt(0); });
   this.wrappedKey_ = wrappedKey;
 
   this.serializeKey_(this.clientKey_, this.wrappedKey_);
+
+  if (this.onNewKey_) {
+    this.onNewKey_();
+  }
 }
 
 /**
@@ -274,12 +303,28 @@ PROT_UrlCryptoKeyManager.prototype.serializeKey_ = function() {
   
   try {  
 
-    var appDir = new PROT_ApplicationDirectory();
-    if (!appDir.exists())
-      appDir.create();
-    var keyfile = appDir.getAppDirFileInterface();
+    var keyfile = Cc["@mozilla.org/file/directory_service;1"]
+                 .getService(Ci.nsIProperties)
+                 .get("ProfD", Ci.nsILocalFile); /* profile directory */
     keyfile.append(this.keyFilename_);
-    G_FileWriter.writeAll(keyfile, (new G_Protocol4Parser).serialize(map));
+
+    if (!this.clientKey_ || !this.wrappedKey_) {
+      keyfile.remove(true);
+      return;
+    }
+
+    var data = (new G_Protocol4Parser()).serialize(map);
+
+    try {
+      var stream = Cc["@mozilla.org/network/file-output-stream;1"]
+                   .createInstance(Ci.nsIFileOutputStream);
+      stream.init(keyfile,
+                  0x02 | 0x08 | 0x20 /* PR_WRONLY | PR_CREATE_FILE | PR_TRUNCATE */,
+                  -1 /* default perms */, 0 /* no special behavior */);
+      stream.write(data, data.length);
+    } finally {
+      stream.close();
+    }
     return true;
 
   } catch(e) {
@@ -302,12 +347,25 @@ PROT_UrlCryptoKeyManager.prototype.onGetKeyResponse = function(responseText) {
   var clientKey = response[this.CLIENT_KEY_NAME];
   var wrappedKey = response[this.WRAPPED_KEY_NAME];
 
+  this.updating_ = false;
+  this.fetcher_ = null;
+
   if (response && clientKey && wrappedKey) {
     G_Debug(this, "Got new key from: " + responseText);
     this.replaceKey_(clientKey, wrappedKey);
   } else {
-    G_Debug(this, "Not a valid response for /getkey");
+    G_Debug(this, "Not a valid response for /newkey");
   }
+}
+
+/**
+ * Set the callback to be called whenever we get a new key.
+ *
+ * @param callback The callback.
+ */
+PROT_UrlCryptoKeyManager.prototype.onNewKey = function(callback) 
+{
+  this.onNewKey_ = callback;
 }
 
 /**
@@ -323,11 +381,24 @@ PROT_UrlCryptoKeyManager.prototype.maybeLoadOldKey = function() {
   
   var oldKey = null;
   try {  
-    var appDir = new PROT_ApplicationDirectory();
-    var keyfile = appDir.getAppDirFileInterface();
+    var keyfile = Cc["@mozilla.org/file/directory_service;1"]
+                 .getService(Ci.nsIProperties)
+                 .get("ProfD", Ci.nsILocalFile); /* profile directory */
     keyfile.append(this.keyFilename_);
-    if (keyfile.exists())
-      oldKey = G_FileReader.readAll(keyfile);
+    if (keyfile.exists()) {
+      try {
+        var fis = Cc["@mozilla.org/network/file-input-stream;1"]
+                  .createInstance(Ci.nsIFileInputStream);
+        fis.init(keyfile, 0x01 /* PR_RDONLY */, 0444, 0);
+        var stream = Cc["@mozilla.org/scriptableinputstream;1"]
+                     .createInstance(Ci.nsIScriptableInputStream);
+        stream.init(fis);
+        oldKey = stream.read(stream.available());
+      } finally {
+        if (stream)
+          stream.close();
+      }
+    }
   } catch(e) {
     G_Debug(this, "Caught " + e + " trying to read keyfile");
     return;
@@ -342,9 +413,16 @@ PROT_UrlCryptoKeyManager.prototype.maybeLoadOldKey = function() {
   var clientKey = oldKey[this.CLIENT_KEY_NAME];
   var wrappedKey = oldKey[this.WRAPPED_KEY_NAME];
 
-  if (oldKey && clientKey && wrappedKey && !this.hasKey_()) {
+  if (oldKey && clientKey && wrappedKey && !this.hasKey()) {
     G_Debug(this, "Read old key from disk.");
     this.replaceKey_(clientKey, wrappedKey);
+  }
+}
+
+PROT_UrlCryptoKeyManager.prototype.shutdown = function() {
+  if (this.fetcher_) {
+    this.fetcher_.cancel();
+    this.fetcher_ = null;
   }
 }
 
@@ -365,8 +443,9 @@ function TEST_PROT_UrlCryptoKeyManager() {
 
     // Let's be able to clean up after ourselves
     function removeTestFile(f) {
-      var appDir = new PROT_ApplicationDirectory();
-      var file = appDir.getAppDirFileInterface();
+      var file = Cc["@mozilla.org/file/directory_service;1"]
+                 .getService(Ci.nsIProperties)
+                 .get("ProfD", Ci.nsILocalFile); /* profile directory */
       file.append(f);
       if (file.exists())
         file.remove(false /* do not recurse */);
@@ -377,21 +456,21 @@ function TEST_PROT_UrlCryptoKeyManager() {
 
     // CASE: simulate nothing on disk, then get something from server
 
-    G_Assert(z, !km.hasKey_(), "KM already has key?");
+    G_Assert(z, !km.hasKey(), "KM already has key?");
     km.maybeLoadOldKey();
-    G_Assert(z, !km.hasKey_(), "KM loaded non-existent key?");
+    G_Assert(z, !km.hasKey(), "KM loaded non-existent key?");
     km.onGetKeyResponse(null);
-    G_Assert(z, !km.hasKey_(), "KM got key from null response?");
+    G_Assert(z, !km.hasKey(), "KM got key from null response?");
     km.onGetKeyResponse("");
-    G_Assert(z, !km.hasKey_(), "KM got key from empty response?");
+    G_Assert(z, !km.hasKey(), "KM got key from empty response?");
     km.onGetKeyResponse("aslkaslkdf:34:a230\nskdjfaljsie");
-    G_Assert(z, !km.hasKey_(), "KM got key from garbage response?");
+    G_Assert(z, !km.hasKey(), "KM got key from garbage response?");
     
     var realResponse = "clientkey:24:zGbaDbx1pxoYe7siZYi8VA==\n" +
                        "wrappedkey:24:MTr1oDt6TSOFQDTvKCWz9PEn";
     km.onGetKeyResponse(realResponse);
     // Will have written it to file as a side effect
-    G_Assert(z, km.hasKey_(), "KM couldn't get key from real response?");
+    G_Assert(z, km.hasKey(), "KM couldn't get key from real response?");
     G_Assert(z, km.clientKey_ == "zGbaDbx1pxoYe7siZYi8VA==", 
              "Parsed wrong client key from response?");
     G_Assert(z, km.wrappedKey_ == "MTr1oDt6TSOFQDTvKCWz9PEn", 
@@ -400,9 +479,9 @@ function TEST_PROT_UrlCryptoKeyManager() {
     // CASE: simulate something on disk, then get something from server
     
     km = new PROT_UrlCryptoKeyManager(kf, true /* testing */);
-    G_Assert(z, !km.hasKey_(), "KM already has key?");
+    G_Assert(z, !km.hasKey(), "KM already has key?");
     km.maybeLoadOldKey();
-    G_Assert(z, km.hasKey_(), "KM couldn't load existing key from disk?");
+    G_Assert(z, km.hasKey(), "KM couldn't load existing key from disk?");
     G_Assert(z, km.clientKey_ == "zGbaDbx1pxoYe7siZYi8VA==", 
              "Parsed wrong client key from disk?");
     G_Assert(z, km.wrappedKey_ == "MTr1oDt6TSOFQDTvKCWz9PEn", 
@@ -411,18 +490,18 @@ function TEST_PROT_UrlCryptoKeyManager() {
                         "wrappedkey:24:MTpPH3pnLDKihecOci+0W5dk";
     km.onGetKeyResponse(realResponse2);
     // Will have written it to disk
-    G_Assert(z, km.hasKey_(), "KM couldn't replace key from server response?");
+    G_Assert(z, km.hasKey(), "KM couldn't replace key from server response?");
     G_Assert(z, km.clientKey_ == "dtmbEN1kgN/LmuEoYifaFw==",
              "Replace client key from server failed?");
-    G_Assert(z, km.wrappedKey_ == "MTpPH3pnLDKihecOci+0W5dk", 
+    G_Assert(z, km.wrappedKey == "MTpPH3pnLDKihecOci+0W5dk", 
              "Replace wrapped key from server failed?");
 
     // CASE: check overwriting a key on disk
 
     km = new PROT_UrlCryptoKeyManager(kf, true /* testing */);
-    G_Assert(z, !km.hasKey_(), "KM already has key?");
+    G_Assert(z, !km.hasKey(), "KM already has key?");
     km.maybeLoadOldKey();
-    G_Assert(z, km.hasKey_(), "KM couldn't load existing key from disk?");
+    G_Assert(z, km.hasKey(), "KM couldn't load existing key from disk?");
     G_Assert(z, km.clientKey_ == "dtmbEN1kgN/LmuEoYifaFw==",
              "Replace client on from disk failed?");
     G_Assert(z, km.wrappedKey_ == "MTpPH3pnLDKihecOci+0W5dk", 

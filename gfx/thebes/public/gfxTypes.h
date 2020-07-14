@@ -39,13 +39,56 @@
 #define GFX_TYPES_H
 
 #include "prtypes.h"
+
 /**
  * Currently needs to be 'double' for Cairo compatibility. Could
  * become 'float', perhaps, in some configurations.
  */
 typedef double gfxFloat;
 
+#if defined(MOZ_STATIC_BUILD)
+# define THEBES_API
+#elif defined(IMPL_THEBES)
+# define THEBES_API NS_EXPORT
+#else
+# define THEBES_API NS_IMPORT
+#endif
 
+/**
+ * gfx errors
+ */
+
+/* nsIDeviceContext.h defines a set of printer errors  */
+#define NS_ERROR_GFX_GENERAL_BASE (50) 
+
+/* Font cmap is strangely structured - avoid this font! */
+#define NS_ERROR_GFX_CMAP_MALFORMED          \
+  NS_ERROR_GENERATE_FAILURE(NS_ERROR_MODULE_GFX,NS_ERROR_GFX_GENERAL_BASE+1)
+
+/**
+ * Priority of a line break opportunity.
+ *
+ * eNoBreak       The line has no break opportunities
+ * eWordWrapBreak The line has a break opportunity only within a word. With
+ *                word-wrap: break-word we will break at this point only if
+ *                there are no other break opportunities in the line.
+ * eNormalBreak   The line has a break opportunity determined by the standard
+ *                line-breaking algorithm.
+ *
+ * Future expansion: split eNormalBreak into multiple priorities, e.g.
+ *                    punctuation break and whitespace break (bug 389710).
+ *                   As and when we implement it, text-wrap: unrestricted will
+ *                    mean that priorities are ignored and all line-break
+ *                    opportunities are equal.
+ *
+ * @see gfxTextRun::BreakAndMeasureText
+ * @see nsLineLayout::NotifyOptionalBreakPosition
+ */
+enum gfxBreakPriority {
+    eNoBreak       = 0,
+    eWordWrapBreak,
+    eNormalBreak
+};
 
 /**
  * Define refcounting for Thebes.  For now use the stuff from nsISupportsImpl
@@ -54,33 +97,27 @@ typedef double gfxFloat;
 #include "nsISupportsImpl.h"
 #include "nsAutoPtr.h"
 
-#define THEBES_IMPL_REFCOUNTING(_class)                          \
-    NS_IMPL_ADDREF(_class)                                       \
-    NS_IMPL_RELEASE(_class)
-
-#define THEBES_DECL_REFCOUNTING_ABSTRACT                         \
-public:                                                          \
-  NS_IMETHOD_(nsrefcnt) AddRef(void) = 0;                        \
-  NS_IMETHOD_(nsrefcnt) Release(void) = 0;                       \
-protected:                                                       \
-  nsAutoRefCnt mRefCnt;                                          \
-  NS_DECL_OWNINGTHREAD                                           \
+#define THEBES_INLINE_DECL_REFCOUNTING(_class)                                \
+public:                                                                       \
+    nsrefcnt AddRef(void) {                                                   \
+        NS_PRECONDITION(PRInt32(mRefCnt) >= 0, "illegal refcnt");             \
+        ++mRefCnt;                                                            \
+        NS_LOG_ADDREF(this, mRefCnt, #_class, sizeof(*this));                 \
+        return mRefCnt;                                                       \
+    }                                                                         \
+    nsrefcnt Release(void) {                                                  \
+        NS_PRECONDITION(0 != mRefCnt, "dup release");                         \
+        --mRefCnt;                                                            \
+        NS_LOG_RELEASE(this, mRefCnt, #_class);                               \
+        if (mRefCnt == 0) {                                                   \
+            mRefCnt = 1; /* stabilize */                                      \
+            NS_DELETEXPCOM(this);                                             \
+            return 0;                                                         \
+        }                                                                     \
+        return mRefCnt;                                                       \
+    }                                                                         \
+protected:                                                                    \
+    nsAutoRefCnt mRefCnt;                                                     \
 public:
-
-
-#define THEBES_DECL_REFCOUNTING                                  \
-public:                                                          \
-  NS_IMETHOD_(nsrefcnt) AddRef(void);                            \
-  NS_IMETHOD_(nsrefcnt) Release(void);                           \
-protected:                                                       \
-  nsAutoRefCnt mRefCnt;                                          \
-  NS_DECL_OWNINGTHREAD                                           \
-public:
-
-#define THEBES_DECL_ISUPPORTS_INHERITED                          \
-public:                                                          \
-  NS_IMETHOD_(nsrefcnt) AddRef(void);                            \
-  NS_IMETHOD_(nsrefcnt) Release(void);                           \
-
 
 #endif /* GFX_TYPES_H */

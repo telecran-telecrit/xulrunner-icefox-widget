@@ -19,6 +19,7 @@
 #
 # Contributor(s):
 #  Robert Strong <robert.bugzilla@gmail.com>
+#  Ehsan Akhgari <ehsan.akhgari@gmail.com>
 #
 # Alternatively, the contents of this file may be used under the terms of
 # either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -34,11 +35,10 @@
 #
 # ***** END LICENSE BLOCK *****
 
-my $topsrcdir = "$ARGV[0]";
+my $mozsrcdir = "$ARGV[0]";    # dir that contains the toolkit source
 my $appLocaleDir = "$ARGV[1]";
 my $AB_CD = "$ARGV[2]";
-my $langCP = "$ARGV[3]";
-my $configDir = "$ARGV[4]";
+my $configDir = "$ARGV[3]";
 my $nsisVer = "v6";
 # Set the language ID to 0 to make this locale the default locale. An actual
 # ID will need to be used to create a multi-language installer (e.g. for CD
@@ -51,48 +51,34 @@ my $RTL = "-";
 my $line;
 my $lnum;
 
-# RTL Locales. This also needs to be specified in locales.nsi
-if ($AB_CD eq "ar" || $AB_CD eq "he") {
-  $RTL = "RTL";
+# Read the codepage for the locale and the optional font name, font size, and
+# whether the locale is right to left from locales.nsi.
+my $inFile = "$mozsrcdir/toolkit/mozapps/installer/windows/nsis/locales.nsi";
+open(locales, "<$inFile");
+if (!-e $inFile) {
+  die "Error $inFile does not exist!";
 }
 
-# The MS Shell Dlg font is not mapped to the appropriate font for East Asian
-# locales on Win98 so the font is specified below for 1.8.1.x. If the font
-# changes the window size an image should also be specified in locales.nsi.
-if ($AB_CD eq "ja") {
-  $fontName = "‚l‚r ‚oƒSƒVƒbƒN";
-  $fontSize = "10";
+$lnum = 1;
+while( $line = <locales> ) {
+  $line =~ s/[\r\n]*//g;    # remove \r and \n
+  if ($line =~ m|^!define $AB_CD\_rtl|) {
+    $RTL = "RTL";
+  }
+  $lnum++;
 }
-elsif ($AB_CD eq "ko") {
-  $fontName = "±¼¸²";
-  $fontSize = "9";
-}
-elsif ($AB_CD eq "zh-CN") {
-  $fontName = "ËÎÌå";
-  $fontSize = "9";
-}
-elsif ($AB_CD eq "zh-TW") {
-  $fontName = "·s²Ó©úÅé";
-  $fontSize = "9";
-}
-
-# CP1252 is specified with a '-'. For all other locales specify the number for
-# the locales code page.
-if ($langCP ne "CP1252") {
-  $nsisCP = $langCP;
-  $nsisCP =~ s/^CP(.*)$/$1/g;
-}
-
+close locales;
 
 # Create the main NSIS language file with just the codepage, font, and
 # RTL information
-open(outfile, ">$configDir/baseLocale.nlf");
+open(outfile, ">$configDir/nlf.in");
 print outfile "# Header, don't edit\r\nNLF $nsisVer\r\n# Start editing here\r\n";
 print outfile "# Language ID\r\n$langID\r\n";
 print outfile "# Font and size - dash (-) means default\r\n$fontName\r\n$fontSize\r\n";
 print outfile "# Codepage - dash (-) means ANSI code page\r\n$nsisCP\r\n";
 print outfile "# RTL - anything else than RTL means LTR\r\n$RTL\r\n";
 close outfile;
+&cpConvert("nlf.in", "baseLocale.nlf");
 
 
 # Create the main NSIS language file
@@ -113,12 +99,13 @@ while( $line = <infile> ) {
   $value =~ s/\s+$//; # trim whitespace from the end of the string
   $value =~ s/^"(.*)"$/$1/g; # remove " at the beginning and end of the value
   $value =~ s/(")/\$\\$1/g;  # prefix " with $\
+  $value =~ s/(\\[rnt])/\$$1/g; # prefix all occurences of \r, \n and \t with $
   print outfile "LangString  ^@values[0] $langID \"$value\"\r\n";
   $lnum++;
 }
 close infile;
 close outfile;
-&cpConvert("override.properties", "overrideLocale.nsh", $langCP);
+&cpConvert("override.properties", "overrideLocale.nsh");
 
 
 # Create the main Modern User Interface language file
@@ -142,15 +129,16 @@ while( $line = <infile> ) {
   next if (@values[0] eq undef) || (@values[1] eq undef);
   my $value = @values[1];
   $value =~ s/(")/\$\\$1/g;  # prefix " with $\
-  $value =~ s/(\\n)/\\r$1/g; # insert \\r before each occurence of \\n
-  $value =~ s/(\\r)\\r/$1/g; # replace all ocurrences of \\r\\r with \\r
+  $value =~ s/(\\n)/\\r$1/g; # insert \r before each occurence of \n
+  $value =~ s/(\\r)\\r/$1/g; # replace all ocurrences of \r\r with \r
+  $value =~ s/(\\[rnt])/\$$1/g; # prefix all occurences of \r, \n and \t with $
   print outfile "!define @values[0] \"$value\"\r\n";
   $lnum++;
 }
 print outfile "!insertmacro MOZ_MUI_LANGUAGEFILE_END\r\n";
 close infile;
 close outfile;
-&cpConvert("mui.properties", "baseLocale.nsh", $langCP);
+&cpConvert("mui.properties", "baseLocale.nsh");
 
 
 # Create the custom language file for our custom strings
@@ -169,15 +157,15 @@ while( $line = <infile> ) {
   next if (@values[0] eq undef) || (@values[1] eq undef);
   my $string = @values[1];
   $string =~ s/"/\$\\"/g;       # replace " with $\"
-  $string =~ s/(\\n)/\\r$1/g;   # insert \\r before each occurence of \\n
-  $string =~ s/(\\r)\\r/$1/g;   # replace all ocurrences of \\r\\r with \\r
-  $string =~ s/(\\[rn])/\$$1/g; # prefix all occurences of \\r and \\n with $
+  $string =~ s/(\\n)/\\r$1/g;   # insert \r before each occurence of \n
+  $string =~ s/(\\r)\\r/$1/g;   # replace all ocurrences of \r\r with \r
+  $string =~ s/(\\[rnt])/\$$1/g; # prefix all occurences of \r, \n and \t with $
   print outfile "LangString @values[0] $langID \"$string\"\r\n";
   $lnum++;
 }
 close infile;
 close outfile;
-&cpConvert("custom.properties", "customLocale.nsh", $langCP);
+&cpConvert("custom.properties", "customLocale.nsh");
 
 
 # Converts a file's codepage
@@ -185,9 +173,9 @@ sub cpConvert
 {
   my $srcFile = $_[0];
   my $targetFile = $_[1];
-  my $targetCodepage = $_[2];
-  print "iconv -f UTF-8 -t $targetCodepage $configDir/$srcFile > $configDir/$targetFile\n";
-  system("iconv -f UTF-8 -t $targetCodepage $configDir/$srcFile > $configDir/$targetFile") &&
-    die "Error converting codepage to $targetCodepage for $configDir/$srcFile";
+  my $prependBOM = "cat $mozsrcdir/toolkit/mozapps/installer/windows/nsis/utf16-le-bom.bin -";
+  print "iconv -f UTF-8 -t UTF-16LE $configDir/$srcFile | $prependBOM > $configDir/$targetFile\n";
+  system("iconv -f UTF-8 -t UTF-16LE $configDir/$srcFile | $prependBOM > $configDir/$targetFile") &&
+    die "Error converting codepage to UTF-16LE for $configDir/$srcFile";
   unlink <$configDir/$srcFile>;
 }

@@ -38,7 +38,7 @@
 #
 # ***** END LICENSE BLOCK *****
 #
-#ident	"$Id: Makefile,v 1.15.2.2 2006/12/06 21:04:21 christophe.ravel.bugs%sun.com Exp $"
+#ident	"$Id: Makefile,v 1.16 2006/12/06 21:14:54 christophe.ravel.bugs%sun.com Exp $"
 #
 
 CORE_DEPTH = ../../..

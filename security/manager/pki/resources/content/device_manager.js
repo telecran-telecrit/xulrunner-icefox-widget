@@ -21,6 +21,7 @@
  * Contributor(s):
  *   Bob Lord <lord@netscape.com>
  *   Ian McGreer <mcgreer@netscape.com>
+ *   Kai Engert <kengert@redhat.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -47,9 +48,12 @@ const nsPK11TokenDB = "@mozilla.org/security/pk11tokendb;1";
 const nsIPK11TokenDB = Components.interfaces.nsIPK11TokenDB;
 const nsIDialogParamBlock = Components.interfaces.nsIDialogParamBlock;
 const nsDialogParamBlock = "@mozilla.org/embedcomp/dialogparam;1";
+const nsIPKCS11 = Components.interfaces.nsIPKCS11;
+const nsPKCS11ContractID = "@mozilla.org/security/pkcs11;1";
 
 var bundle;
 var secmoddb;
+var skip_enable_buttons = false;
 
 /* Do the initial load of all PKCS# modules and list them. */
 function LoadModules()
@@ -61,6 +65,31 @@ function LoadModules()
   document.addEventListener("smartcard-remove", onSmartCardChange, false);
 
   RefreshDeviceList();
+}
+
+function getPKCS11()
+{
+  return Components.classes[nsPKCS11ContractID].getService(nsIPKCS11);
+}
+
+function getNSSString(name)
+{
+  return srGetStrBundle("chrome://pipnss/locale/pipnss.properties").
+    GetStringFromName(name);
+}
+
+function doPrompt(msg)
+{
+  let prompts = Components.classes["@mozilla.org/embedcomp/prompt-service;1"].
+    getService(Components.interfaces.nsIPromptService);
+  prompts.alert(window, null, msg);
+}
+
+function doConfirm(msg)
+{
+  let prompts = Components.classes["@mozilla.org/embedcomp/prompt-service;1"].
+    getService(Components.interfaces.nsIPromptService);
+  return prompts.confirm(window, null, msg);
 }
 
 function RefreshDeviceList()
@@ -193,6 +222,9 @@ function getSelectedItem()
 
 function enableButtons()
 {
+  if (skip_enable_buttons)
+    return;
+
   var login_toggle = "true";
   var logout_toggle = "true";
   var pw_toggle = "true";
@@ -242,10 +274,17 @@ function ClearInfoList()
 
 function ClearDeviceList()
 {
+  ClearInfoList();
+
+  skip_enable_buttons = true;
+  var tree = document.getElementById('device_tree');
+  tree.view.selection.clearSelection();
+  skip_enable_buttons = false;
+
   // Remove the existing listed modules so that refresh doesn't 
   // display the module that just changed.
   var device_list = document.getElementById("device_list");
-  while (device_list.firstChild)
+  while (device_list.hasChildNodes())
     device_list.removeChild(device_list.firstChild);
 }
 
@@ -383,11 +422,27 @@ function doLoad()
   RefreshDeviceList();
 }
 
-function doUnload()
+function deleteSelected()
 {
   getSelectedItem();
-  if (selected_module) {
-    pkcs11.deletemodule(selected_module.name);
+  if (selected_module &&
+      doConfirm(getNSSString("DelModuleWarning"))) {
+    try {
+      getPKCS11().deleteModule(selected_module.name);
+    }
+    catch (e) {
+      doPrompt(getNSSString("DelModuleError"));
+      return false;
+    }
+    selected_module = null;
+    return true;
+  }
+  return false;
+}
+
+function doUnload()
+{
+  if (deleteSelected()) {
     ClearDeviceList();
     RefreshDeviceList();
   }
@@ -428,7 +483,7 @@ function doBrowseFiles()
   fp.appendFilters(nsIFilePicker.filterAll);
   if (fp.show() == nsIFilePicker.returnOK) {
     var pathbox = document.getElementById("device_path");
-    pathbox.setAttribute("value", fp.file.persistentDescriptor);
+    pathbox.setAttribute("value", fp.file.path);
   }
 }
 
@@ -436,7 +491,17 @@ function doLoadDevice()
 {
   var name_box = document.getElementById("device_name");
   var path_box = document.getElementById("device_path");
-  pkcs11.addmodule(name_box.value, path_box.value, 0,0);
+  try {
+    getPKCS11().addModule(name_box.value, path_box.value, 0,0);
+  }
+  catch (e) {
+    if (e.result == Components.results.NS_ERROR_ILLEGAL_VALUE)
+      doPrompt(getNSSString("AddModuleDup"));
+    else
+      doPrompt(getNSSString("AddModuleFailure"));
+
+    return false;
+  }
   return true;
 }
 

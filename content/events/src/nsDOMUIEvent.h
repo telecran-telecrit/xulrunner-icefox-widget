@@ -54,17 +54,19 @@ public:
   nsDOMUIEvent(nsPresContext* aPresContext, nsGUIEvent* aEvent);
 
   NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsDOMUIEvent, nsDOMEvent)
 
   // nsIDOMUIEvent Interface
   NS_DECL_NSIDOMUIEVENT
 
   // nsIDOMNSUIEvent Interface
   NS_DECL_NSIDOMNSUIEVENT
+
+  // nsIPrivateDOMEvent interface
+  NS_IMETHOD DuplicatePrivateData();
   
   // nsIPrivateCompositionEvent interface
   NS_IMETHOD GetCompositionReply(nsTextEventReply** aReply);
-  NS_IMETHOD GetReconversionReply(nsReconversionEventReply** aReply);
-  NS_IMETHOD GetQueryCaretRectReply(nsQueryCaretRectEventReply** aReply);
   
   // Forward to nsDOMEvent
   NS_FORWARD_TO_NSDOMEVENT
@@ -72,14 +74,18 @@ public:
 protected:
 
   // Internal helper functions
-  nsresult GetScrollInfo(nsIScrollableView** aScrollableView, float* aP2T,
-                         float* aT2P);
   nsPoint GetClientPoint();
   nsPoint GetScreenPoint();
+  nsPoint GetLayerPoint();
+  nsPoint GetPagePoint();
   
 protected:
   nsCOMPtr<nsIDOMAbstractView> mView;
   PRInt32 mDetail;
+  nsPoint mClientPoint;
+  // Screenpoint is mEvent->refPoint.
+  nsPoint mLayerPoint;
+  nsPoint mPagePoint;
 };
 
 #define NS_FORWARD_TO_NSDOMUIEVENT \

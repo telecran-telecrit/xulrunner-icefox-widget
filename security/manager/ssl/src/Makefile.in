@@ -52,18 +52,23 @@ MODULE_NAME	= NSS
 EXPORT_LIBRARY	= 1
 META_COMPONENT	= crypto
 GRE_MODULE	= 1
-MOZILLA_INTERNAL_API = 1
-
-PACKAGE_FILE = pipnss.pkg
+LIBXUL_LIBRARY	= 1
 
 CPPSRCS = 				\
+	nsNSSCleaner.cpp                \
+	nsCertOverrideService.cpp   \
+	nsRecentBadCerts.cpp \
+        nsClientAuthRemember.cpp        \
 	nsPSMBackgroundThread.cpp       \
 	nsSSLThread.cpp                 \
 	nsCertVerificationThread.cpp    \
 	nsCipherInfo.cpp \
+	nsProtectedAuthThread.cpp \
 	nsNSSCallbacks.cpp		\
 	nsNSSComponent.cpp		\
+	nsNSSErrors.cpp			\
 	nsNSSIOLayer.cpp		\
+	nsSSLStatus.cpp		\
 	nsNSSModule.cpp			\
 	nsSSLSocketProvider.cpp		\
 	nsTLSSocketProvider.cpp		\
@@ -90,12 +95,14 @@ CPPSRCS = 				\
   nsCRLManager.cpp \
   nsNSSShutDown.cpp \
   nsNTLMAuthModule.cpp \
-  nsNSSEvent.cpp \
   nsSmartCardMonitor.cpp \
   nsSmartCardEvent.cpp \
   nsStreamCipher.cpp \
   nsKeyModule.cpp \
-	$(NULL)
+  nsIdentityChecking.cpp \
+  nsDataSignatureVerifier.cpp \
+  nsRandomGenerator.cpp \
+  $(NULL)
 
 ifdef MOZ_XUL
 CPPSRCS += nsCertTree.cpp
@@ -109,6 +116,7 @@ REQUIRES	= nspr \
 		  necko \
 		  uriloader \
 		  pref \
+		  docshell \
 		  caps \
 		  dom \
 		  intl \

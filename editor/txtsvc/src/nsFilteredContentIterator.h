@@ -44,6 +44,7 @@
 #include "nsITextServicesFilter.h"
 #include "nsIDOMNSRange.h"
 #include "nsIRangeUtils.h"
+#include "nsCycleCollectionParticipant.h"
 
 /**
  * 
@@ -53,22 +54,23 @@ class nsFilteredContentIterator : public nsIContentIterator
 public:
 
   // nsISupports interface...
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS(nsFilteredContentIterator)
 
   nsFilteredContentIterator(nsITextServicesFilter* aFilter);
 
   virtual ~nsFilteredContentIterator();
 
   /* nsIContentIterator */
-  virtual nsresult Init(nsIContent* aRoot);
+  virtual nsresult Init(nsINode* aRoot);
   virtual nsresult Init(nsIDOMRange* aRange);
   virtual void First();
   virtual void Last();
   virtual void Next();
   virtual void Prev();
-  virtual nsIContent *GetCurrentNode();
+  virtual nsINode *GetCurrentNode();
   virtual PRBool IsDone();
-  virtual nsresult PositionAt(nsIContent* aCurNode);
+  virtual nsresult PositionAt(nsINode* aCurNode);
 
   /* Helpers */
   PRPackedBool DidSkip()      { return mDidSkip; }

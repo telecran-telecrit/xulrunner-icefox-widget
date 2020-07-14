@@ -40,7 +40,6 @@
 #include "nsPromptService.h"
 #include "nsWindowWatcher.h"
 #include "nsAppStartupNotifier.h"
-#include "nsJSConsoleService.h"
 #include "nsFind.h"
 #include "nsWebBrowserFind.h"
 #include "nsWebBrowserPersist.h"
@@ -48,13 +47,17 @@
 #include "nsControllerCommandTable.h"
 #include "nsCommandParams.h"
 #include "nsCommandGroup.h"
-#ifndef WINCE
-#include "nsPrintingPromptService.h"
-#endif
 #include "nsBaseCommandController.h"
 #include "nsPrompt.h"
 #include "nsNetCID.h"
 #include "nsEmbedCID.h"
+
+#ifdef NS_PRINTING
+#ifndef WINCE
+#include "nsPrintingPromptService.h"
+#endif
+#endif
+
 
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsWindowWatcher, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsAppStartupNotifier)
@@ -118,15 +121,11 @@ nsDefaultAuthPromptConstructor(nsISupports *outer, const nsIID &iid, void **resu
 #ifdef MOZ_XUL
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDialogParamBlock)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPromptService, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsJSConsoleService)
+#ifdef NS_PRINTING
 #ifndef WINCE
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintingPromptService, Init)
 #endif
 #endif
-
-#ifdef MOZ_PROFILESHARING
-#include "nsProfileSharingSetup.h"
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsProfileSharingSetup)
 #endif
 
 static const nsModuleComponentInfo gComponents[] = {
@@ -134,13 +133,15 @@ static const nsModuleComponentInfo gComponents[] = {
 #ifdef MOZ_XUL
   { "Dialog ParamBlock", NS_DIALOGPARAMBLOCK_CID, NS_DIALOGPARAMBLOCK_CONTRACTID, nsDialogParamBlockConstructor },
   { "Prompt Service", NS_PROMPTSERVICE_CID, NS_PROMPTSERVICE_CONTRACTID, nsPromptServiceConstructor },
-   { "Nonblocking Alert Service", NS_PROMPTSERVICE_CID, NS_NONBLOCKINGALERTSERVICE_CONTRACTID, nsPromptServiceConstructor },
-  { "JS Console Service", NS_JSCONSOLESERVICE_CID, NS_JSCONSOLESERVICE_CONTRACTID, nsJSConsoleServiceConstructor },
+  { "Nonblocking Alert Service", NS_PROMPTSERVICE_CID, NS_NONBLOCKINGALERTSERVICE_CONTRACTID, nsPromptServiceConstructor },
+#ifdef NS_PRINTING
 #ifndef WINCE
   { "Printing Prompt Service", NS_PRINTINGPROMPTSERVICE_CID, NS_PRINTINGPROMPTSERVICE_CONTRACTID, nsPrintingPromptServiceConstructor },
 #endif
 #endif
+#endif
   { "Window Watcher", NS_WINDOWWATCHER_CID, NS_WINDOWWATCHER_CONTRACTID, nsWindowWatcherConstructor },
+  { "Window Watcher", NS_WINDOWWATCHER_CID, NS_AUTHPROMPT_ADAPTER_FACTORY_CONTRACTID, nsWindowWatcherConstructor },
   { "Find",           NS_FIND_CID, NS_FIND_CONTRACTID, nsFindConstructor },
   { "WebBrowserFind",           NS_WEB_BROWSER_FIND_CID, NS_WEB_BROWSER_FIND_CONTRACTID, nsWebBrowserFindConstructor },
   { NS_APPSTARTUPNOTIFIER_CLASSNAME, NS_APPSTARTUPNOTIFIER_CID, NS_APPSTARTUPNOTIFIER_CONTRACTID, nsAppStartupNotifierConstructor },
@@ -152,9 +153,6 @@ static const nsModuleComponentInfo gComponents[] = {
   { "Base Command Controller", NS_BASECOMMANDCONTROLLER_CID, NS_BASECOMMANDCONTROLLER_CONTRACTID, nsBaseCommandControllerConstructor },
   { NS_DEFAULTPROMPT_CLASSNAME, NS_DEFAULTPROMPT_CID, NS_DEFAULTPROMPT_CONTRACTID, nsDefaultPromptConstructor },
   { NS_DEFAULTAUTHPROMPT_CLASSNAME, NS_DEFAULTAUTHPROMPT_CID, NS_DEFAULTAUTHPROMPT_CONTRACTID, nsDefaultAuthPromptConstructor }
-#ifdef MOZ_PROFILESHARING
-  ,{ "Profile Sharing Setup", NS_PROFILESHARINGSETUP_CID, NS_PROFILESHARINGSETUP_CONTRACTID, nsProfileSharingSetupConstructor }
-#endif
 };
 
 NS_IMPL_NSGETMODULE(embedcomponents, gComponents)

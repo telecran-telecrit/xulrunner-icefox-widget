@@ -38,7 +38,7 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: ssl3prot.h,v 1.10.2.2 2006/04/13 07:41:16 nelson%bolyard.com Exp $ */
+/* $Id: ssl3prot.h,v 1.19 2010/06/24 09:24:18 nelson%bolyard.com Exp $ */
 
 #ifndef __ssl3proto_h_
 #define __ssl3proto_h_
@@ -108,7 +108,7 @@ typedef enum {
     close_notify            = 0,
     unexpected_message      = 10,
     bad_record_mac          = 20,
-    decryption_failed       = 21,	/* TLS only */
+    decryption_failed_RESERVED = 21,	/* do not send; see RFC 5246 */
     record_overflow         = 22,	/* TLS only */
     decompression_failure   = 30,
     handshake_failure       = 40,
@@ -150,6 +150,7 @@ typedef enum {
     hello_request	= 0, 
     client_hello	= 1, 
     server_hello	= 2,
+    new_session_ticket	= 4,
     certificate 	= 11, 
     server_key_exchange = 12,
     certificate_request	= 13, 
@@ -172,15 +173,13 @@ typedef struct {
     uint8 length;
 } SSL3SessionID;
      
-typedef enum { compression_null = 0 } SSL3CompressionMethod;
-     
 typedef struct {
     SSL3ProtocolVersion   client_version;
     SSL3Random            random;
     SSL3SessionID         session_id;
     SECItem               cipher_suites;
     uint8                 cm_count;
-    SSL3CompressionMethod compression_methods[MAX_COMPRESSION_METHODS];
+    SSLCompressionMethod  compression_methods[MAX_COMPRESSION_METHODS];
 } SSL3ClientHello;
      
 typedef struct  {
@@ -188,7 +187,7 @@ typedef struct  {
     SSL3Random            random;
     SSL3SessionID         session_id;
     ssl3CipherSuite       cipher_suite;
-    SSL3CompressionMethod compression_method;
+    SSLCompressionMethod  compression_method;
 } SSL3ServerHello;
      
 typedef struct {
@@ -306,5 +305,46 @@ typedef SSL3Hashes SSL3Finished;
 typedef struct {
     SSL3Opaque verify_data[12];
 } TLSFinished;
+
+/*
+ * TLS extension related data structures and constants.
+ */ 
+
+/* SessionTicket extension related data structures. */
+
+/* NewSessionTicket handshake message. */
+typedef struct {
+    uint32  received_timestamp;
+    uint32  ticket_lifetime_hint;
+    SECItem ticket;
+} NewSessionTicket;
+
+typedef enum {
+    CLIENT_AUTH_ANONYMOUS   = 0,
+    CLIENT_AUTH_CERTIFICATE = 1
+} ClientAuthenticationType;
+
+typedef struct {
+    ClientAuthenticationType client_auth_type;
+    union {
+	SSL3Opaque *certificate_list;
+    } identity;
+} ClientIdentity;
+
+#define SESS_TICKET_KEY_NAME_LEN       16
+#define SESS_TICKET_KEY_NAME_PREFIX    "NSS!"
+#define SESS_TICKET_KEY_NAME_PREFIX_LEN 4
+#define SESS_TICKET_KEY_VAR_NAME_LEN   12
+
+typedef struct {
+    unsigned char *key_name;
+    unsigned char *iv;
+    SECItem encrypted_state;
+    unsigned char *mac;
+} EncryptedSessionTicket;
+
+#define TLS_EX_SESS_TICKET_MAC_LENGTH       32
+
+#define TLS_STE_NO_SERVER_NAME        -1
 
 #endif /* __ssl3proto_h_ */

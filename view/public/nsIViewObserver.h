@@ -40,31 +40,50 @@
 
 #include "nsISupports.h"
 #include "nsEvent.h"
+#include "nsColor.h"
+#include "nsRect.h"
 
 class nsIRenderingContext;
-struct nsRect;
 class nsGUIEvent;
 
+// cb03e6e3-9d14-4018-85f8-7d46af878c98
 #define NS_IVIEWOBSERVER_IID   \
-{ 0x0f4bc34a, 0xc93b, 0x4699, \
-{ 0xb6, 0xc2, 0xb3, 0xca, 0x9e, 0xe4, 0x6c, 0x95 } }
+{ 0xcb03e6e3, 0x9d14, 0x4018, \
+  { 0x85, 0xf8, 0x7d, 0x46, 0xaf, 0x87, 0x8c, 0x98 } }
 
 class nsIViewObserver : public nsISupports
 {
 public:
   
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IVIEWOBSERVER_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IVIEWOBSERVER_IID)
 
-  /* called when the observer needs to paint
-   * @param aRenderingContext - rendering context to paint to
-   * @param aDirtyRect - rectangle of dirty area
+  /* called when the observer needs to paint. This paints the entire
+   * frame subtree rooted at the view, including frame subtrees from
+   * subdocuments.
+   * @param aRenderingContext rendering context to paint to; the origin
+   * of the view is painted at (0,0) in the rendering context's current
+   * transform. For best results this should transform to pixel-aligned
+   * coordinates.
+   * @param aDirtyRegion the region to be painted, in the coordinates of aRootView
    * @return error status
    */
-  NS_IMETHOD Paint(nsIView *            aView,
-                   nsIRenderingContext& aRenderingContext,
-                   const nsRect&        aDirtyRect) = 0;
+  NS_IMETHOD Paint(nsIView*             aRootView,
+                   nsIRenderingContext* aRenderingContext,
+                   const nsRegion&      aDirtyRegion) = 0;
+
+  /**
+   * @see nsLayoutUtils::ComputeRepaintRegionForCopy
+   */
+  NS_IMETHOD ComputeRepaintRegionForCopy(nsIView*      aRootView,
+                                         nsIView*      aMovingView,
+                                         nsPoint       aDelta,
+                                         const nsRect& aCopyRect,
+                                         nsRegion*     aRepaintRegion) = 0;
 
   /* called when the observer needs to handle an event
+   * @param aView  - where to start processing the event; the root view,
+   * or the view that's currently capturing this sort of event; must be a view
+   * for this presshell
    * @param aEvent - event notification
    * @param aEventStatus - out parameter for event handling
    *                       status
@@ -72,11 +91,9 @@ public:
    *                   handle the event
    * @return error status
    */
-  NS_IMETHOD HandleEvent(nsIView *       aView,
-                         nsGUIEvent*     aEvent,
-                         nsEventStatus*  aEventStatus,
-                         PRBool          aForceHandle,
-                         PRBool&         aHandled) = 0;
+  NS_IMETHOD HandleEvent(nsIView*       aView,
+                         nsGUIEvent*    aEvent,
+                         nsEventStatus* aEventStatus) = 0;
 
   /* called when the view has been resized and the
    * content within the view needs to be reflowed.
@@ -98,6 +115,22 @@ public:
    * and geometry changes if it wants to.
    */
   NS_IMETHOD_(void) WillPaint() = 0;
+
+  /**
+   * Notify the observer that it should invalidate the frame bounds for
+   * the frame associated with this view.
+   */
+  NS_IMETHOD_(void) InvalidateFrameForView(nsIView *aView) = 0;
+
+  /**
+   * Dispatch the given synthesized mouse move event, and if
+   * aFlushOnHoverChange is true, flush layout if :hover changes cause
+   * any restyles.
+   */
+  NS_IMETHOD_(void) DispatchSynthMouseMove(nsGUIEvent *aEvent,
+                                           PRBool aFlushOnHoverChange) = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIViewObserver, NS_IVIEWOBSERVER_IID)
 
 #endif

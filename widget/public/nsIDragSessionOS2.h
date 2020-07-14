@@ -59,12 +59,12 @@
 
 #define NS_IDRAGSESSIONOS2_IID_STR "bc4258b8-33ce-4624-adcb-4b62bb5164c0"
 #define NS_IDRAGSESSIONOS2_IID \
-  { 0xbc4258b8, 0x33ce, 0x4624, { 0xad, 0xcb, 0x4b, 0x62, 0xbb, 0x51, 0x64, 0xc0 } };
+  { 0xbc4258b8, 0x33ce, 0x4624, { 0xad, 0xcb, 0x4b, 0x62, 0xbb, 0x51, 0x64, 0xc0 } }
 
 class nsIDragSessionOS2 : public nsISupports
 {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IDRAGSESSIONOS2_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_IDRAGSESSIONOS2_IID)
 
   /** the dragFlags returned by most public methods fall into two groups */
 
@@ -95,6 +95,8 @@ protected:
   NS_IMETHOD NativeRenderComplete(PDRAGTRANSFER pdxfer, USHORT usResult) = 0;
   NS_IMETHOD NativeDataToTransferable( PCSZ pszText, PCSZ pszTitle, PRBool isUrl) = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIDragSessionOS2, NS_IDRAGSESSIONOS2_IID)
 
 #endif  // nsIDragSessionOS2_h__
 

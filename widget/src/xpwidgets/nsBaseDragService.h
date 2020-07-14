@@ -44,11 +44,19 @@
 #include "nsISupportsArray.h"
 #include "nsIDOMDocument.h"
 #include "nsCOMPtr.h"
+#include "nsIRenderingContext.h"
+#include "nsIDOMDataTransfer.h"
+
+#include "gfxImageSurface.h"
+
+// translucency level for drag images
+#define DRAG_TRANSLUCENCY 0.65
 
 class nsIDOMNode;
 class nsIFrame;
 class nsPresContext;
-
+class nsIImageLoadingContent;
+class nsICanvasElement;
 
 /**
  * XP DragService wrapper base class
@@ -69,19 +77,89 @@ public:
   NS_DECL_NSIDRAGSERVICE
   NS_DECL_NSIDRAGSESSION
 
+  void SetDragEndPoint(nsIntPoint aEndDragPoint) { mEndDragPoint = aEndDragPoint; }
+
 protected:
 
-  virtual void GetFrameFromNode(nsIDOMNode* inNode, nsIFrame** outFrame,
-                                nsPresContext** outContext);
+  /**
+   * Draw the drag image, if any, to a surface and return it. The drag image
+   * is constructed from mImage if specified, or aDOMNode if mImage is null.
+   *
+   * aRegion may be used to draw only a subset of the element. This region
+   * should be supplied using x and y coordinates measured in css pixels
+   * that are relative to the upper-left corner of the window.
+   *
+   * aScreenX and aScreenY should be the screen coordinates of the mouse click
+   * for the drag.
+   *
+   * On return, aScreenDragRect will contain the screen coordinates of the
+   * area being dragged. This is used by the platform-specific part of the
+   * drag service to determine the drag feedback.
+   *
+   * If there is no drag image, the returned surface will be null, but
+   * aScreenDragRect will still be set to the drag area.
+   *
+   * aPresContext will be set to the nsPresContext used determined from
+   * whichever of mImage or aDOMNode is used.
+   */
+  nsresult DrawDrag(nsIDOMNode* aDOMNode,
+                    nsIScriptableRegion* aRegion,
+                    PRInt32 aScreenX, PRInt32 aScreenY,
+                    nsRect* aScreenDragRect,
+                    gfxASurface** aSurface,
+                    nsPresContext **aPresContext);
+
+  /**
+   * Draw a drag image for an image node specified by aImageLoader or aCanvas.
+   * This is called by DrawDrag.
+   */
+  nsresult DrawDragForImage(nsPresContext* aPresContext,
+                            nsIImageLoadingContent* aImageLoader,
+                            nsICanvasElement* aCanvas,
+                            PRInt32 aScreenX, PRInt32 aScreenY,
+                            nsRect* aScreenDragRect,
+                            gfxASurface** aSurface);
+
+  /**
+   * Convert aScreenX and aScreenY from CSS pixels into unscaled device pixels.
+   */
+  void
+  ConvertToUnscaledDevPixels(nsPresContext* aPresContext,
+                             PRInt32* aScreenX, PRInt32* aScreenY);
 
   PRPackedBool mCanDrop;
   PRPackedBool mDoingDrag;
+  // true if mImage should be used to set a drag image
+  PRPackedBool mHasImage;
+  // true if the user cancelled the drag operation
+  PRPackedBool mUserCancelled;
+
   PRUint32 mDragAction;
   nsSize mTargetSize;
-  nsCOMPtr<nsISupportsArray> mTransArray;
   nsCOMPtr<nsIDOMNode> mSourceNode;
   nsCOMPtr<nsIDOMDocument> mSourceDocument;       // the document at the drag source. will be null
                                                   //  if it came from outside the app.
+  nsCOMPtr<nsIDOMDataTransfer> mDataTransfer;
+
+  // used to determine the image to appear on the cursor while dragging
+  nsCOMPtr<nsIDOMNode> mImage;
+  // offset of cursor within the image 
+  PRInt32 mImageX;
+  PRInt32 mImageY;
+
+  // set if a selection is being dragged
+  nsCOMPtr<nsISelection> mSelection;
+
+  // the screen position where drag gesture occured, used for positioning the
+  // drag image when no image is specified. If a value is -1, no event was
+  // supplied so the screen position is not known
+  PRInt32 mScreenX;
+  PRInt32 mScreenY;
+
+  // the screen position where the drag ended
+  nsIntPoint mEndDragPoint;
+
+  PRUint32 mSuppressLevel;
 };
 
 #endif // nsBaseDragService_h__

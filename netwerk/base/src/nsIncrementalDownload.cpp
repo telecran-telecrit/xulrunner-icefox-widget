@@ -145,8 +145,7 @@ private:
   nsresult StartTimer(PRInt32 interval);
   nsresult ProcessTimeout();
   nsresult ReadCurrentSize();
-  nsresult ClearRequestHeader(nsIHttpChannel *channel, 
-                              const nsACString &header);
+  nsresult ClearRequestHeader(nsIHttpChannel *channel);
 
   nsCOMPtr<nsIRequestObserver>   mObserver;
   nsCOMPtr<nsISupports>          mObserverContext;
@@ -270,9 +269,7 @@ nsIncrementalDownload::ProcessTimeout()
   NS_ASSERTION(mCurrentSize != nsInt64(-1),
       "we should know the current file size by now");
 
-  // We don't support encodings -- they make the Content-Length not equal
-  // to the actual size of the data.
-  rv = ClearRequestHeader(http, NS_LITERAL_CSTRING("Accept-Encoding"));
+  rv = ClearRequestHeader(http);
   if (NS_FAILED(rv))
     return rv;
 
@@ -728,7 +725,7 @@ nsIncrementalDownload::GetInterface(const nsIID &iid, void **result)
 {
   if (iid.Equals(NS_GET_IID(nsIChannelEventSink))) {
     NS_ADDREF_THIS();
-    *result = NS_STATIC_CAST(nsIChannelEventSink *, this);
+    *result = static_cast<nsIChannelEventSink *>(this);
     return NS_OK;
   }
 
@@ -740,11 +737,13 @@ nsIncrementalDownload::GetInterface(const nsIID &iid, void **result)
 }
 
 nsresult 
-nsIncrementalDownload::ClearRequestHeader(nsIHttpChannel *channel,
-                                          const nsACString &header)
+nsIncrementalDownload::ClearRequestHeader(nsIHttpChannel *channel)
 {
   NS_ENSURE_ARG(channel);
-  return channel->SetRequestHeader(header,
+  
+  // We don't support encodings -- they make the Content-Length not equal
+  // to the actual size of the data. 
+  return channel->SetRequestHeader(NS_LITERAL_CSTRING("Accept-Encoding"),
                                    NS_LITERAL_CSTRING(""), PR_FALSE);
 }
 
@@ -766,10 +765,7 @@ nsIncrementalDownload::OnChannelRedirect(nsIChannel *oldChannel,
 
   NS_NAMED_LITERAL_CSTRING(rangeHdr, "Range");
 
-  // We don't support encodings -- they make the Content-Length not equal
-  // to the actual size of the data.
-  nsresult rv = ClearRequestHeader(newHttpChannel, 
-                                   NS_LITERAL_CSTRING("Accept-Encoding"));
+  nsresult rv = ClearRequestHeader(newHttpChannel);
   if (NS_FAILED(rv))
     return rv;
 

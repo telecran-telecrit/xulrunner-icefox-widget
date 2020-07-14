@@ -37,109 +37,9 @@
 
 #include "nsWidgetSupport.h"
 #include "nsRect.h"
-#include "nsIButton.h"
-#include "nsITextWidget.h"
-#include "nsILabel.h"
 #include "nsIWidget.h"
-#include "nsICheckButton.h"
 
-#ifdef XP_MAC
-#define WIDGET_SUPPORT_EXPORT(returnType) \
-        PR_PUBLIC_API(returnType)
-#else
-#define WIDGET_SUPPORT_EXPORT(returnType) \
-        returnType
-#endif
-
-WIDGET_SUPPORT_EXPORT(nsresult)
-NS_CreateButton(nsISupports* aParent,
-                nsIButton* aButton,
-                const nsRect& aRect,
-                EVENT_CALLBACK aHandleEventFunction,
-                const nsFont* aFont)
-{
-  nsCOMPtr<nsIWidget> parent = do_QueryInterface(aParent);
-  if (parent) {
-    nsCOMPtr<nsIWidget> widget = do_QueryInterface(aButton);
-    if (widget) {
-      widget->Create(parent, aRect, aHandleEventFunction, nsnull);
-      widget->Show(PR_TRUE);
-      if (aFont) {
-        widget->SetFont(*aFont);
-      }
-    }
-  }
-
-  return NS_OK;
-}
-
-WIDGET_SUPPORT_EXPORT(nsresult)
-NS_CreateCheckButton(nsISupports* aParent,
-                     nsICheckButton* aCheckButton,
-                     const nsRect& aRect,
-                     EVENT_CALLBACK aHandleEventFunction,
-                     const nsFont* aFont)
-{
-  nsCOMPtr<nsIWidget> parent = do_QueryInterface(aParent);
-  if (parent) {
-    nsCOMPtr<nsIWidget> widget = do_QueryInterface(aCheckButton);
-    if (widget) {
-      widget->Create(parent, aRect, aHandleEventFunction, nsnull);
-      widget->Show(PR_TRUE);
-      if (aFont) {
-        widget->SetFont(*aFont);
-      }
-    }
-  }
-
-  return NS_OK;
-}
-
-WIDGET_SUPPORT_EXPORT(nsresult)
-NS_CreateLabel(nsISupports* aParent,
-               nsILabel* aLabel,
-               const nsRect& aRect,
-               EVENT_CALLBACK aHandleEventFunction,
-               const nsFont* aFont)
-{
-  nsCOMPtr<nsIWidget> parent = do_QueryInterface(aParent);
-  if (parent) {
-    nsCOMPtr<nsIWidget> widget = do_QueryInterface(aLabel);
-    if (widget) {
-      widget->Create(parent, aRect, aHandleEventFunction, NULL);
-      widget->Show(PR_TRUE);
-      if (aFont) {
-        widget->SetFont(*aFont);
-      }
-    }
-  }
-
-  return NS_OK;
-}
-
-WIDGET_SUPPORT_EXPORT(nsresult)
-NS_CreateTextWidget(nsISupports* aParent,
-                    nsITextWidget* aWidget,
-                    const nsRect& aRect,
-                    EVENT_CALLBACK aHandleEventFunction,
-                    const nsFont* aFont)
-{
-  nsCOMPtr<nsIWidget> parent = do_QueryInterface(aParent);
-  if (parent) {
-    nsCOMPtr<nsIWidget> widget = do_QueryInterface(aWidget);
-    if (widget) {
-      widget->Create(parent, aRect, aHandleEventFunction, NULL);
-      widget->Show(PR_TRUE);
-      if (aFont) {
-        widget->SetFont(*aFont);
-      }
-    }
-  }
-
-  return NS_OK;
-}
-
-WIDGET_SUPPORT_EXPORT(nsresult)
+nsresult
 NS_ShowWidget(nsISupports* aWidget, PRBool aShow)
 {
   nsCOMPtr<nsIWidget> widget = do_QueryInterface(aWidget);
@@ -150,7 +50,7 @@ NS_ShowWidget(nsISupports* aWidget, PRBool aShow)
   return NS_OK;
 }
 
-WIDGET_SUPPORT_EXPORT(nsresult)
+nsresult
 NS_MoveWidget(nsISupports* aWidget, PRUint32 aX, PRUint32 aY)
 {
   nsCOMPtr<nsIWidget> widget = do_QueryInterface(aWidget);
@@ -161,7 +61,7 @@ NS_MoveWidget(nsISupports* aWidget, PRUint32 aX, PRUint32 aY)
   return NS_OK;
 }
 
-WIDGET_SUPPORT_EXPORT(nsresult)
+nsresult
 NS_EnableWidget(nsISupports* aWidget, PRBool aEnable)
 {
   nsCOMPtr<nsIWidget> widget = do_QueryInterface(aWidget);
@@ -172,7 +72,7 @@ NS_EnableWidget(nsISupports* aWidget, PRBool aEnable)
   return NS_OK;
 }
 
-WIDGET_SUPPORT_EXPORT(nsresult)
+nsresult
 NS_SetFocusToWidget(nsISupports* aWidget)
 {
   nsCOMPtr<nsIWidget> widget = do_QueryInterface(aWidget);
@@ -183,7 +83,7 @@ NS_SetFocusToWidget(nsISupports* aWidget)
   return NS_OK;
 }
 
-WIDGET_SUPPORT_EXPORT(nsresult)
+nsresult
 NS_GetWidgetNativeData(nsISupports* aWidget, void** aNativeData)
 {
   void *result = nsnull;

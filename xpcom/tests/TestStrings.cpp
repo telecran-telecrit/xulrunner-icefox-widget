@@ -41,6 +41,8 @@
 #include "nsReadableUtils.h"
 #include "nsCRT.h"
 
+namespace TestStrings {
+
 void test_assign_helper(const nsACString& in, nsACString &_retval)
   {
     _retval = in;
@@ -182,6 +184,198 @@ PRBool test_rfind_4()
         printf("i=%d\n", i);
         return PR_FALSE;
       }
+
+    return PR_TRUE;
+  }
+
+PRBool test_findinreadable()
+  {
+    const char text[] = "jar:jar:file:///c:/software/mozilla/mozilla_2006_02_21.jar!/browser/chrome/classic.jar!/";
+    nsCAutoString value(text);
+
+    nsACString::const_iterator begin, end;
+    value.BeginReading(begin);
+    value.EndReading(end);
+    nsACString::const_iterator delim_begin (begin),
+                               delim_end   (end);
+
+    // Search for last !/ at the end of the string
+    if (!FindInReadable(NS_LITERAL_CSTRING("!/"), delim_begin, delim_end))
+        return PR_FALSE;
+    char *r = ToNewCString(Substring(delim_begin, delim_end));
+    // Should match the first "!/" but not the last
+    if ((delim_end == end) || (strcmp(r, "!/")!=0))
+      {
+        printf("r = %s\n", r);
+        nsMemory::Free(r);
+        return PR_FALSE;
+      }
+    nsMemory::Free(r);
+
+    delim_begin = begin;
+    delim_end = end;
+
+    // Search for first jar:
+    if (!FindInReadable(NS_LITERAL_CSTRING("jar:"), delim_begin, delim_end))
+        return PR_FALSE;
+
+    r = ToNewCString(Substring(delim_begin, delim_end));
+    // Should not match the first jar:, but the second one
+    if ((delim_begin != begin) || (strcmp(r, "jar:")!=0))
+      {
+        printf("r = %s\n", r);
+        nsMemory::Free(r);
+        return PR_FALSE;
+      }
+    nsMemory::Free(r);
+
+    // Search for jar: in a Substring
+    delim_begin = begin; delim_begin++;
+    delim_end = end;
+    if (!FindInReadable(NS_LITERAL_CSTRING("jar:"), delim_begin, delim_end))
+        return PR_FALSE;
+
+    r = ToNewCString(Substring(delim_begin, delim_end));
+    // Should not match the first jar:, but the second one
+    if ((delim_begin == begin) || (strcmp(r, "jar:")!=0))
+      {
+        printf("r = %s\n", r);
+        nsMemory::Free(r);
+        return PR_FALSE;
+      }
+    nsMemory::Free(r);
+
+    // Should not find a match
+    if (FindInReadable(NS_LITERAL_CSTRING("gecko"), delim_begin, delim_end))
+        return PR_FALSE;
+
+    // When no match is found, range should be empty
+    if (delim_begin != delim_end) 
+        return PR_FALSE;
+
+    // Should not find a match (search not beyond Substring)
+    delim_begin = begin; for (int i=0;i<6;i++) delim_begin++;
+    delim_end = end;
+    if (FindInReadable(NS_LITERAL_CSTRING("jar:"), delim_begin, delim_end))
+        return PR_FALSE;
+
+    // When no match is found, range should be empty
+    if (delim_begin != delim_end) 
+        return PR_FALSE;
+
+    // Should not find a match (search not beyond Substring)
+    delim_begin = begin;
+    delim_end = end; for (int i=0;i<7;i++) delim_end--;
+    if (FindInReadable(NS_LITERAL_CSTRING("classic"), delim_begin, delim_end))
+        return PR_FALSE;
+
+    // When no match is found, range should be empty
+    if (delim_begin != delim_end) 
+        return PR_FALSE;
+
+    return PR_TRUE;
+  }
+
+PRBool test_rfindinreadable()
+  {
+    const char text[] = "jar:jar:file:///c:/software/mozilla/mozilla_2006_02_21.jar!/browser/chrome/classic.jar!/";
+    nsCAutoString value(text);
+
+    nsACString::const_iterator begin, end;
+    value.BeginReading(begin);
+    value.EndReading(end);
+    nsACString::const_iterator delim_begin (begin),
+                               delim_end   (end);
+
+    // Search for last !/ at the end of the string
+    if (!RFindInReadable(NS_LITERAL_CSTRING("!/"), delim_begin, delim_end))
+        return PR_FALSE;
+    char *r = ToNewCString(Substring(delim_begin, delim_end));
+    // Should match the last "!/"
+    if ((delim_end != end) || (strcmp(r, "!/")!=0))
+      {
+        printf("r = %s\n", r);
+        nsMemory::Free(r);
+        return PR_FALSE;
+      }
+    nsMemory::Free(r);
+
+    delim_begin = begin;
+    delim_end = end;
+
+    // Search for last jar: but not the first one...
+    if (!RFindInReadable(NS_LITERAL_CSTRING("jar:"), delim_begin, delim_end))
+        return PR_FALSE;
+
+    r = ToNewCString(Substring(delim_begin, delim_end));
+    // Should not match the first jar:, but the second one
+    if ((delim_begin == begin) || (strcmp(r, "jar:")!=0))
+      {
+        printf("r = %s\n", r);
+        nsMemory::Free(r);
+        return PR_FALSE;
+      }
+    nsMemory::Free(r);
+
+    // Search for jar: in a Substring
+    delim_begin = begin;
+    delim_end = begin; for (int i=0;i<6;i++) delim_end++;
+    if (!RFindInReadable(NS_LITERAL_CSTRING("jar:"), delim_begin, delim_end)) {
+        printf("Search for jar: in a Substring\n");
+        return PR_FALSE;
+    }
+
+    r = ToNewCString(Substring(delim_begin, delim_end));
+    // Should not match the first jar:, but the second one
+    if ((delim_begin != begin) || (strcmp(r, "jar:")!=0))
+      {
+        printf("r = %s\n", r);
+        nsMemory::Free(r);
+        return PR_FALSE;
+      }
+    nsMemory::Free(r);
+
+    // Should not find a match
+    delim_begin = begin;
+    delim_end = end;
+    if (RFindInReadable(NS_LITERAL_CSTRING("gecko"), delim_begin, delim_end)) {
+        printf("Should not find a match\n");
+        return PR_FALSE;
+    }
+
+    // When no match is found, range should be empty
+    if (delim_begin != delim_end) {
+        printf("1: When no match is found, range should be empty\n");
+        return PR_FALSE;
+    }
+
+    // Should not find a match (search not before Substring)
+    delim_begin = begin; for (int i=0;i<6;i++) delim_begin++;
+    delim_end = end;
+    if (RFindInReadable(NS_LITERAL_CSTRING("jar:"), delim_begin, delim_end)) {
+        printf("Should not find a match (search not before Substring)\n");
+        return PR_FALSE;
+    }
+
+    // When no match is found, range should be empty
+    if (delim_begin != delim_end) {
+        printf("2: When no match is found, range should be empty\n");
+        return PR_FALSE;
+    }
+
+    // Should not find a match (search not beyond Substring)
+    delim_begin = begin;
+    delim_end = end; for (int i=0;i<7;i++) delim_end--;
+    if (RFindInReadable(NS_LITERAL_CSTRING("classic"), delim_begin, delim_end)) {
+        printf("Should not find a match (search not beyond Substring)\n");
+        return PR_FALSE;
+    }
+
+    // When no match is found, range should be empty
+    if (delim_begin != delim_end) {
+        printf("3: When no match is found, range should be empty\n");
+        return PR_FALSE;
+    }
 
     return PR_TRUE;
   }
@@ -358,17 +552,18 @@ PRBool test_concat_2()
     return PR_FALSE;
   }
 
-#if 0
 PRBool test_concat_3()
   {
-    nsCString a("a"), b("b");
+    nsCString result;
+    nsCString ab("ab"), c("c");
 
-    // THIS DOES NOT COMPILE
-    const nsACString& r = a + b;
+    result = ab + result + c;
+    if (strcmp(result.get(), "abc") == 0)
+      return PR_TRUE;
 
-    return PR_TRUE;
+    printf("[result=%s]\n", result.get());
+    return PR_FALSE;
   }
-#endif
 
 PRBool test_xpidl_string()
   {
@@ -516,6 +711,32 @@ PRBool test_appendint64()
     return PR_TRUE;
   }
 
+PRBool test_appendfloat()
+  {
+    nsCString str;
+    double bigdouble = 11223344556.66;
+    static const char double_expected[] = "11223344556.66";
+    static const char float_expected[] = "0.01";
+
+    // AppendFloat is used to append doubles, therefore the precision must be
+    // large enough (see bug 327719)
+    str.AppendFloat( bigdouble );
+    if (!str.Equals(double_expected)) {
+      fprintf(stderr, "Error appending a big double: Got %s\n", str.get());
+      return PR_FALSE;
+    }
+    
+    str.Truncate();
+    // AppendFloat is used to append floats (bug 327719 #27)
+    str.AppendFloat( 0.1f * 0.1f );
+    if (!str.Equals(float_expected)) {
+      fprintf(stderr, "Error appending a float: Got %s\n", str.get());
+      return PR_FALSE;
+    }
+
+    return PR_TRUE;
+  }
+
 PRBool test_findcharinset()
   {
     nsCString buf("hello, how are you?");
@@ -613,6 +834,138 @@ PRBool test_stringbuffer()
     return rv;
   }
 
+PRBool test_voided()
+  {
+    const char kData[] = "hello world";
+
+    nsXPIDLCString str;
+    if (str)
+      return PR_FALSE;
+    if (!str.IsVoid())
+      return PR_FALSE;
+    if (!str.IsEmpty())
+      return PR_FALSE;
+
+    str.Assign(kData);
+    if (strcmp(str, kData) != 0)
+      return PR_FALSE;
+
+    str.SetIsVoid(PR_TRUE);
+    if (str)
+      return PR_FALSE;
+    if (!str.IsVoid())
+      return PR_FALSE;
+    if (!str.IsEmpty())
+      return PR_FALSE;
+
+    str.SetIsVoid(PR_FALSE);
+    if (strcmp(str, "") != 0)
+      return PR_FALSE;
+
+    return PR_TRUE;
+  }
+
+PRBool test_voided_autostr()
+  {
+    const char kData[] = "hello world";
+
+    nsCAutoString str;
+    if (str.IsVoid())
+      return PR_FALSE;
+    if (!str.IsEmpty())
+      return PR_FALSE;
+
+    str.Assign(kData);
+    if (strcmp(str.get(), kData) != 0)
+      return PR_FALSE;
+
+    str.SetIsVoid(PR_TRUE);
+    if (!str.IsVoid())
+      return PR_FALSE;
+    if (!str.IsEmpty())
+      return PR_FALSE;
+
+    str.Assign(kData);
+    if (str.IsVoid())
+      return PR_FALSE;
+    if (str.IsEmpty())
+      return PR_FALSE;
+    if (strcmp(str.get(), kData) != 0)
+      return PR_FALSE;
+
+    return PR_TRUE;
+  }
+
+struct ToIntegerTest
+{
+  const char *str;
+  PRUint32 radix;
+  PRInt32 result;
+  nsresult rv;
+};
+
+static const ToIntegerTest kToIntegerTests[] = {
+  { "123", 10, 123, NS_OK },
+  { "7b", 16, 123, NS_OK },
+  { "90194313659", 10, 0, NS_ERROR_ILLEGAL_VALUE },
+  { nsnull, 0, 0, 0 }
+};
+
+PRBool test_string_tointeger()
+{
+  PRInt32 rv;
+  for (const ToIntegerTest* t = kToIntegerTests; t->str; ++t) {
+    PRInt32 result = nsCAutoString(t->str).ToInteger(&rv, t->radix);
+    if (rv != t->rv || result != t->result)
+      return PR_FALSE;
+  }
+  return PR_TRUE;
+}
+
+static PRBool test_parse_string_helper(const char* str, char separator, int len,
+                                       const char* s1, const char* s2)
+{
+  nsCString data(str);
+  nsTArray<nsCString> results;
+  if (!ParseString(data, separator, results))
+    return PR_FALSE;
+  if (int(results.Length()) != len)
+    return PR_FALSE;
+  const char* strings[] = { s1, s2 };
+  for (int i = 0; i < len; ++i) {
+    if (!results[i].Equals(strings[i]))
+      return PR_FALSE;
+  }
+  return PR_TRUE;
+}
+
+static PRBool test_parse_string_helper0(const char* str, char separator)
+{
+  return test_parse_string_helper(str, separator, 0, nsnull, nsnull);
+}
+
+static PRBool test_parse_string_helper1(const char* str, char separator, const char* s1)
+{
+  return test_parse_string_helper(str, separator, 1, s1, nsnull);
+}
+
+static PRBool test_parse_string_helper2(const char* str, char separator, const char* s1, const char* s2)
+{
+  return test_parse_string_helper(str, separator, 2, s1, s2);
+}
+
+static PRBool test_parse_string()
+{
+  return test_parse_string_helper1("foo, bar", '_', "foo, bar") &&
+         test_parse_string_helper2("foo, bar", ',', "foo", " bar") &&
+         test_parse_string_helper2("foo, bar ", ' ', "foo,", "bar") &&
+         test_parse_string_helper2("foo,bar", 'o', "f", ",bar") &&
+         test_parse_string_helper0("", '_') &&
+         test_parse_string_helper0("  ", ' ') &&
+         test_parse_string_helper1(" foo", ' ', "foo") &&
+         test_parse_string_helper1("  foo", ' ', "foo");
+}
+
 //----
 
 typedef PRBool (*TestFunc)();
@@ -633,6 +986,8 @@ tests[] =
     { "test_rfind_2", test_rfind_2 },
     { "test_rfind_3", test_rfind_3 },
     { "test_rfind_4", test_rfind_4 },
+    { "test_findinreadable", test_findinreadable },
+    { "test_rfindinreadable", test_rfindinreadable },
     { "test_distance", test_distance },
     { "test_length", test_length },
     { "test_trim", test_trim },
@@ -643,18 +998,26 @@ tests[] =
     { "test_fixed_string", test_fixed_string },
     { "test_concat", test_concat },
     { "test_concat_2", test_concat_2 },
+    { "test_concat_3", test_concat_3 },
     { "test_xpidl_string", test_xpidl_string },
     { "test_empty_assign", test_empty_assign },
     { "test_set_length", test_set_length },
     { "test_substring", test_substring },
     { "test_appendint64", test_appendint64 },
+    { "test_appendfloat", test_appendfloat },
     { "test_findcharinset", test_findcharinset },
     { "test_rfindcharinset", test_rfindcharinset },
     { "test_stringbuffer", test_stringbuffer },
+    { "test_voided", test_voided },
+    { "test_voided_autostr", test_voided_autostr },
+    { "test_string_tointeger", test_string_tointeger },
+    { "test_parse_string", test_parse_string },
     { nsnull, nsnull }
   };
 
-//----
+}
+
+using namespace TestStrings;
 
 int main(int argc, char **argv)
   {

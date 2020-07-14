@@ -22,6 +22,8 @@
  * Contributor(s):
  *   Mike Pinkerton <pinkerton@netscape.com>
  *   Gus Verdun <gustavoverdun@aol.com>
+ *   Kathleen Brade <brade@comcast.net>
+ *   Mark Smith <mcs@pearlcrescent.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -38,14 +40,12 @@
  * ***** END LICENSE BLOCK ***** */
  
  
+#include "nsITransferable.h"
 #include "nsImageClipboard.h"
 #include "nsGfxCIID.h"
 #include "nsMemory.h"
 #include "prmem.h"
 #include "imgIEncoder.h"
-#ifdef MOZILLA_1_8_BRANCH
-#define imgIEncoder imgIEncoder_MOZILLA_1_8_BRANCH
-#endif
 #include "nsLiteralString.h"
 
 /* Things To Do 11/8/00
@@ -145,119 +145,52 @@ nsImageToClipboard::CalcSpanLength(PRUint32 aWidth, PRUint32 aBitCount)
 nsresult
 nsImageToClipboard::CreateFromImage ( nsIImage* inImage, HANDLE* outBitmap )
 {
-  nsresult result = NS_OK;
-  *outBitmap = nsnull;
-  
-/*
-  //pHead = (BITMAPINFOHEADER*)pImage->GetBitInfo();
-  //pImage->GetNativeData((void**)&hBitMap);
- if (hBitMap)
-  {
-         BITMAPINFO * pBMI;
-         pBMI                    = (BITMAPINFO *)new BYTE[(sizeof(BITMAPINFOHEADER)+256*4)];
-         BITMAPINFOHEADER * pBIH = (BITMAPINFOHEADER *)pBMI;
-         pBIH->biSize            = sizeof(BITMAPINFOHEADER);
-         pBIH->biBitCount        = 0;
-         pBIH->biPlanes          = 1;
-         pBIH->biSizeImage       = 0;
-         pBIH->biXPelsPerMeter   = 0;
-         pBIH->biYPelsPerMeter   = 0;
-         pBIH->biClrUsed         = 0;                            // Always use the whole palette.
+    nsresult result = NS_OK;
+    *outBitmap = nsnull;
 
-         pBIH->biClrImportant    = 0;
+    inImage->LockImagePixels(PR_FALSE);
 
-         // Get bitmap format.
+    const PRUint32 imageSize = inImage->GetLineStride() * inImage->GetHeight();
+    const PRInt32 bitmapSize = sizeof(BITMAPINFOHEADER) + imageSize;
 
-         HDC hdc  =  ::GetDC(NULL);
-         int rc   =  ::GetDIBits(hdc, hBitMap, 0, 0, NULL, pBMI, DIB_RGB_COLORS);
-         NS_ASSERTION(rc, "rc returned false");
-
-         nLength = CalcSize(pBIH->biHeight, pBIH->biClrUsed, pBIH->biBitCount, CalcSpanLength(pBIH->biWidth, pBIH->biBitCount));
-
-         // alloc and lock
-
-         mBitmap = (HANDLE)::GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE | GMEM_ZEROINIT, nLength);
-         if (mBitmap && (mHeader = (BITMAPINFOHEADER*)::GlobalLock((HGLOBAL) mBitmap)) )
-         {
-                 result = TRUE;
-
-                 pBits = (PBYTE)&mHeader[1];
-                 memcpy(mHeader, pBIH, sizeof (BITMAPINFOHEADER));
-                 rc = ::GetDIBits(hdc, hBitMap, 0, mHeader->biHeight, pBits, (BITMAPINFO *)mHeader, DIB_RGB_COLORS);
-                 NS_ASSERTION(rc, "rc returned false");
-                 delete[] (BYTE*)pBMI;
-                 ::GlobalUnlock((HGLOBAL)mBitmap); // we use mHeader to tell if we have to free it later.
-
-         }
-         ::ReleaseDC(NULL, hdc);
-  }
-  else
-  {
-*/
-
-  inImage->LockImagePixels ( PR_FALSE );
-  if ( inImage->GetBits() ) {
-    BITMAPINFOHEADER* imageHeader = NS_REINTERPRET_CAST(BITMAPINFOHEADER*, inImage->GetBitInfo());
-    NS_ASSERTION ( imageHeader, "Can't get header for image" );
-    if ( !imageHeader )
-      return NS_ERROR_FAILURE;
-      
-    PRInt32 imageSize = CalcSize(imageHeader->biHeight, imageHeader->biClrUsed, imageHeader->biBitCount, inImage->GetLineStride());
+    HGLOBAL glob = ::GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE | GMEM_ZEROINIT, bitmapSize);
+    if (!glob) {
+        inImage->UnlockImagePixels(PR_FALSE);
+        return NS_ERROR_OUT_OF_MEMORY;
+    }
 
     // Create the buffer where we'll copy the image bits (and header) into and lock it
-    BITMAPINFOHEADER*  header = nsnull;
-    *outBitmap = (HANDLE)::GlobalAlloc(GMEM_MOVEABLE | GMEM_DDESHARE | GMEM_ZEROINIT, imageSize);
-    if (*outBitmap && (header = (BITMAPINFOHEADER*)::GlobalLock((HGLOBAL) *outBitmap)) )
-    {
-      RGBQUAD *pRGBQUAD = (RGBQUAD *)&header[1];
-      PBYTE bits = (PBYTE)&pRGBQUAD[imageHeader->biClrUsed];
+    void *data = (void*)::GlobalLock(glob);
 
-      // Fill in the header info.
+    BITMAPINFOHEADER *header = (BITMAPINFOHEADER*)data;
+    header->biSize          = sizeof(BITMAPINFOHEADER);
+    header->biWidth         = inImage->GetWidth();
+    header->biHeight        = inImage->GetHeight();
 
-      header->biSize          = sizeof(BITMAPINFOHEADER);
-      header->biWidth         = imageHeader->biWidth;
-      header->biHeight        = imageHeader->biHeight;
+    header->biPlanes        = 1;
+    header->biBitCount      = inImage->GetBytesPix() * 8;
+    header->biCompression   = BI_RGB;
+    header->biSizeImage     = imageSize;
 
-      header->biPlanes        = 1;
-      header->biBitCount      = imageHeader->biBitCount;
-      header->biCompression   = BI_RGB;               // No compression
+    const PRUint32 bpr = inImage->GetLineStride();
 
-      header->biSizeImage     = 0;
-      header->biXPelsPerMeter = 0;
-      header->biYPelsPerMeter = 0;
-      header->biClrUsed       = imageHeader->biClrUsed;
-      header->biClrImportant  = 0;
-
-      // Set up the color map.
-      
-      nsColorMap *colorMap = inImage->GetColorMap();
-      if ( colorMap ) {
-        PBYTE pClr = colorMap->Index;
-
-        NS_ASSERTION(( ((DWORD)colorMap->NumColors) == header->biClrUsed), "Color counts must match");
-        for ( UINT i=0; i < header->biClrUsed; ++i ) {
-          NS_WARNING ( "Cool! You found a test case for this! Let Gus or Pink know" );
-          
-          // now verify that the order is correct
-          pRGBQUAD[i].rgbBlue  = *pClr++;
-          pRGBQUAD[i].rgbGreen = *pClr++;
-          pRGBQUAD[i].rgbRed   = *pClr++;
-        }
-      }
-      else
-        NS_ASSERTION(header->biClrUsed == 0, "Ok, now why are there colors and no table?");
-
-      // Copy!!
-      ::CopyMemory(bits, inImage->GetBits(), inImage->GetLineStride() * header->biHeight);
-      
-      ::GlobalUnlock((HGLOBAL)outBitmap);
+    BYTE *dstBits = (BYTE*)data + sizeof(BITMAPINFOHEADER);
+    BYTE *srcBits = inImage->GetBits();
+    for (PRInt32 i = 0; i < header->biHeight; ++i) {
+        PRUint32 srcOffset = imageSize - (bpr * (i + 1));
+        PRUint32 dstOffset = i * bpr;
+        ::CopyMemory(dstBits + dstOffset, srcBits + srcOffset, bpr);
     }
-    else
-      result = NS_ERROR_FAILURE;
-  } // if we can get the bits from the image
-  
-  inImage->UnlockImagePixels ( PR_FALSE );
-  return result;
+    
+    ::GlobalUnlock(glob);
+
+    *outBitmap = (HANDLE)glob;
+
+    inImage->UnlockImagePixels(PR_FALSE);
+    return NS_OK;
+
+    // Wow the old code is broken.  I'm not touching it.
+    // It should probably lock/unlock the same object....
 }
 
 nsImageFromClipboard :: nsImageFromClipboard ()
@@ -272,12 +205,13 @@ nsImageFromClipboard :: ~nsImageFromClipboard ( )
 //
 // GetEncodedImageStream
 //
-// Take the raw clipboard image data and convert it to a JPG in the form of a nsIInputStream
+// Take the raw clipboard image data and convert it to aMIMEFormat in the form of a nsIInputStream
 //
 nsresult 
-nsImageFromClipboard ::GetEncodedImageStream (unsigned char * aClipboardData, nsIInputStream** aInputStream )
+nsImageFromClipboard ::GetEncodedImageStream (unsigned char * aClipboardData, const char * aMIMEFormat, nsIInputStream** aInputStream )
 {
   NS_ENSURE_ARG_POINTER (aInputStream);
+  NS_ENSURE_ARG_POINTER (aMIMEFormat);
   nsresult rv;
   *aInputStream = nsnull;
 
@@ -295,12 +229,19 @@ nsImageFromClipboard ::GetEncodedImageStream (unsigned char * aClipboardData, ns
     BYTE  * pGlobal = (BYTE *) aClipboardData;
     // Convert the clipboard image into RGB packed pixel data
     rv = ConvertColorBitMap((unsigned char *) (pGlobal + header->bmiHeader.biSize), header, rgbData);
-    // if that succeeded, encode the bitmap as a JPG. Don't return early or we risk leaking rgbData
+    // if that succeeded, encode the bitmap as aMIMEFormat data. Don't return early or we risk leaking rgbData
     if (NS_SUCCEEDED(rv)) {
-      nsCOMPtr<imgIEncoder> encoder = do_CreateInstance("@mozilla.org/image/encoder;2?type=image/jpeg", &rv);
+      nsCAutoString encoderCID(NS_LITERAL_CSTRING("@mozilla.org/image/encoder;2?type="));
+
+      // Map image/jpg to image/jpeg (which is how the encoder is registered).
+      if (strcmp(aMIMEFormat, kJPEGImageMime) == 0)
+        encoderCID.Append("image/jpeg");
+      else
+        encoderCID.Append(aMIMEFormat);
+      nsCOMPtr<imgIEncoder> encoder = do_CreateInstance(encoderCID.get(), &rv);
       if (NS_SUCCEEDED(rv)){
         rv = encoder->InitFromData(rgbData, 0, width, height, 3 * width /* RGB * # pixels in a row */, 
-                                   imgIEncoder::INPUT_FORMAT_RGB, NS_LITERAL_STRING("transparency=none"));
+                                   imgIEncoder::INPUT_FORMAT_RGB, EmptyString());
         if (NS_SUCCEEDED(rv))
           encoder->QueryInterface(NS_GET_IID(nsIInputStream), (void **) aInputStream);
       }

@@ -49,13 +49,10 @@ IS_COMPONENT	= 1
 MODULE_NAME	= nsComposerModule
 LIBXUL_LIBRARY	= 1
 
-PACKAGE_FILE = composer.pkg
-
 REQUIRES	= xpcom \
 		  string \
 		  unicharutil \
 		  dom \
-		  js \
 		  layout \
 		  content \
 		  uriloader \
@@ -65,6 +62,7 @@ REQUIRES	= xpcom \
 		  webshell \
 		  docshell \
 		  gfx \
+		  thebes \
 		  widget \
 		  xuldoc \
 		  txtsvc \

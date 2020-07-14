@@ -1,6 +1,7 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
- * ***** BEGIN LICENSE BLOCK *****
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* vim:expandtab:shiftwidth=4:tabstop=4:
+ */
+/* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
  * The contents of this file are subject to the Mozilla Public License Version
@@ -13,15 +14,13 @@
  * for the specific language governing rights and limitations under the
  * License.
  *
- * The Original Code is IBM code.
+ * The Original Code is mozilla.org code.
  *
- * The Initial Developer of the Original Code is
- * IBM. 
- * Portions created by the Initial Developer are Copyright (C) 2000
- * the Initial Developer. All Rights Reserved.
+ * The Initial Developer of the Original Code is Christopher Blizzard
+ * <blizzard@mozilla.org>.  Portions created by the Initial Developer
+ * are Copyright (C) 2001 the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
- *   Simon Montagu
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -39,6 +38,9 @@
 
 #include "nsBidiKeyboard.h"
 
+#include <Qt>
+#include <QApplication>
+
 NS_IMPL_ISUPPORTS1(nsBidiKeyboard, nsIBidiKeyboard)
 
 nsBidiKeyboard::nsBidiKeyboard() : nsIBidiKeyboard()
@@ -51,13 +53,18 @@ nsBidiKeyboard::~nsBidiKeyboard()
 
 NS_IMETHODIMP nsBidiKeyboard::IsLangRTL(PRBool *aIsRTL)
 {
-  *aIsRTL = PR_FALSE;
-  // XXX Insert platform specific code to determine keyboard direction
-  return NS_OK;
+    *aIsRTL = PR_FALSE;
+
+    Qt::LayoutDirection layoutDir = QApplication::keyboardInputDirection();
+
+    if (layoutDir == Qt::RightToLeft) {
+        *aIsRTL = PR_TRUE;
+    }
+    
+    return NS_OK;
 }
 
 NS_IMETHODIMP nsBidiKeyboard::SetLangFromBidiLevel(PRUint8 aLevel)
 {
-  // XXX Insert platform specific code to set keyboard language
-  return NS_OK;
+    return NS_OK;
 }

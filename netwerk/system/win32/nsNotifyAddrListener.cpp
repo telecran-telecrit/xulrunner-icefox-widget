@@ -41,179 +41,20 @@
 #include <winbase.h>
 #include <wingdi.h>
 #include <winuser.h>
-#include <winsock2.h>
+#include <NetCon.h>
+#include <objbase.h>
 #include <iprtrmib.h>
-#include <time.h>
 #include "prmem.h"
-#include "prthread.h"
 #include "plstr.h"
-#include "nsEventQueueUtils.h"
+#include "nsThreadUtils.h"
 #include "nsIObserverService.h"
 #include "nsServiceManagerUtils.h"
 #include "nsNotifyAddrListener.h"
 #include "nsString.h"
+#include "nsAutoPtr.h"
 
-// Unfortunately, this header file is not available in older SDKs.
-// #include <IPTypes.h>
-
-#define MAX_ADAPTER_DESCRIPTION_LENGTH  128 // arb.
-#define MAX_ADAPTER_NAME_LENGTH         256 // arb.
-#define MAX_ADAPTER_ADDRESS_LENGTH      8   // arb.
-
-#define GAA_FLAG_SKIP_ANYCAST       0x0002
-#define GAA_FLAG_SKIP_MULTICAST     0x0004
-#define GAA_FLAG_SKIP_DNS_SERVER    0x0008
-#define GAA_FLAG_SKIP_FRIENDLY_NAME 0x0020
-
-#define IF_TYPE_SOFTWARE_LOOPBACK       24
-
-typedef enum {
-    IpPrefixOriginOther = 0,
-    IpPrefixOriginManual,
-    IpPrefixOriginWellKnown,
-    IpPrefixOriginDhcp,
-    IpPrefixOriginRouterAdvertisement
-} IP_PREFIX_ORIGIN;
-
-typedef enum {
-    IpSuffixOriginOther = 0,
-    IpSuffixOriginManual,
-    IpSuffixOriginWellKnown,
-    IpSuffixOriginDhcp,
-    IpSuffixOriginLinkLayerAddress,
-    IpSuffixOriginRandom
-} IP_SUFFIX_ORIGIN;
-
-typedef enum {
-    IpDadStateInvalid    = 0,
-    IpDadStateTentative,
-    IpDadStateDuplicate,
-    IpDadStateDeprecated,
-    IpDadStatePreferred
-} IP_DAD_STATE;
-
-typedef struct _IP_ADAPTER_UNICAST_ADDRESS {
-    union {
-        ULONGLONG Alignment;
-        struct {
-            ULONG Length;
-            DWORD Flags;
-        } s;
-    } u;
-    struct _IP_ADAPTER_UNICAST_ADDRESS *Next;
-    SOCKET_ADDRESS Address;
-
-    IP_PREFIX_ORIGIN PrefixOrigin;
-    IP_SUFFIX_ORIGIN SuffixOrigin;
-    IP_DAD_STATE DadState;
-
-    ULONG ValidLifetime;
-    ULONG PreferredLifetime;
-    ULONG LeaseLifetime;
-} IP_ADAPTER_UNICAST_ADDRESS, *PIP_ADAPTER_UNICAST_ADDRESS;
-
-typedef struct _IP_ADAPTER_ANYCAST_ADDRESS {
-    union {
-        ULONGLONG Alignment;
-        struct {
-            ULONG Length;
-            DWORD Flags;
-        } s;
-    } u;
-    struct _IP_ADAPTER_ANYCAST_ADDRESS *Next;
-    SOCKET_ADDRESS Address;
-} IP_ADAPTER_ANYCAST_ADDRESS, *PIP_ADAPTER_ANYCAST_ADDRESS;
-
-typedef struct _IP_ADAPTER_MULTICAST_ADDRESS {
-    union {
-        ULONGLONG Alignment;
-        struct {
-            ULONG Length;
-            DWORD Flags;
-        } s;
-    } u;
-    struct _IP_ADAPTER_MULTICAST_ADDRESS *Next;
-    SOCKET_ADDRESS Address;
-} IP_ADAPTER_MULTICAST_ADDRESS, *PIP_ADAPTER_MULTICAST_ADDRESS;
-
-typedef struct _IP_ADAPTER_DNS_SERVER_ADDRESS {
-    union {
-        ULONGLONG Alignment;
-        struct {
-            ULONG Length;
-            DWORD Reserved;
-        } s;
-    } u;
-    struct _IP_ADAPTER_DNS_SERVER_ADDRESS *Next;
-    SOCKET_ADDRESS Address;
-} IP_ADAPTER_DNS_SERVER_ADDRESS, *PIP_ADAPTER_DNS_SERVER_ADDRESS;
-
-typedef enum {
-    IfOperStatusUp = 1,
-    IfOperStatusDown,
-    IfOperStatusTesting,
-    IfOperStatusUnknown,
-    IfOperStatusDormant,
-    IfOperStatusNotPresent,
-    IfOperStatusLowerLayerDown
-} IF_OPER_STATUS;
-
-typedef struct _IP_ADAPTER_ADDRESSES {
-    union {
-        ULONGLONG Alignment;
-        struct {
-            ULONG Length;
-            DWORD IfIndex;
-        } s;
-    } u;
-    struct _IP_ADAPTER_ADDRESSES *Next;
-    PCHAR AdapterName;
-    PIP_ADAPTER_UNICAST_ADDRESS FirstUnicastAddress;
-    PIP_ADAPTER_ANYCAST_ADDRESS FirstAnycastAddress;
-    PIP_ADAPTER_MULTICAST_ADDRESS FirstMulticastAddress;
-    PIP_ADAPTER_DNS_SERVER_ADDRESS FirstDnsServerAddress;
-    PWCHAR DnsSuffix;
-    PWCHAR Description;
-    PWCHAR FriendlyName;
-    BYTE PhysicalAddress[MAX_ADAPTER_ADDRESS_LENGTH];
-    DWORD PhysicalAddressLength;
-    DWORD Flags;
-    DWORD Mtu;
-    DWORD IfType;
-    IF_OPER_STATUS OperStatus;
-} IP_ADAPTER_ADDRESSES, *PIP_ADAPTER_ADDRESSES;
-
-typedef struct {
-    char String[4 * 4];
-} IP_ADDRESS_STRING, *PIP_ADDRESS_STRING, IP_MASK_STRING, *PIP_MASK_STRING;
-
-typedef struct _IP_ADDR_STRING {
-    struct _IP_ADDR_STRING* Next;
-    IP_ADDRESS_STRING IpAddress;
-    IP_MASK_STRING IpMask;
-    DWORD Context;
-} IP_ADDR_STRING, *PIP_ADDR_STRING;
-
-typedef struct _IP_ADAPTER_INFO {
-    struct _IP_ADAPTER_INFO* Next;
-    DWORD ComboIndex;
-    char AdapterName[MAX_ADAPTER_NAME_LENGTH + 4];
-    char Description[MAX_ADAPTER_DESCRIPTION_LENGTH + 4];
-    UINT AddressLength;
-    BYTE Address[MAX_ADAPTER_ADDRESS_LENGTH];
-    DWORD Index;
-    UINT Type;
-    UINT DhcpEnabled;
-    PIP_ADDR_STRING CurrentIpAddress;
-    IP_ADDR_STRING IpAddressList;
-    IP_ADDR_STRING GatewayList;
-    IP_ADDR_STRING DhcpServer;
-    BOOL HaveWins;
-    IP_ADDR_STRING PrimaryWinsServer;
-    IP_ADDR_STRING SecondaryWinsServer;
-    time_t LeaseObtained;
-    time_t LeaseExpires;
-} IP_ADAPTER_INFO, *PIP_ADAPTER_INFO;
+#include <iptypes.h>
+#include <iphlpapi.h>
 
 typedef DWORD (WINAPI *GetAdaptersAddressesFunc)(ULONG, DWORD, PVOID,
                                                  PIP_ADAPTER_ADDRESSES,
@@ -222,48 +63,65 @@ typedef DWORD (WINAPI *GetAdaptersInfoFunc)(PIP_ADAPTER_INFO, PULONG);
 typedef DWORD (WINAPI *GetIfEntryFunc)(PMIB_IFROW);
 typedef DWORD (WINAPI *GetIpAddrTableFunc)(PMIB_IPADDRTABLE, PULONG, BOOL);
 typedef DWORD (WINAPI *NotifyAddrChangeFunc)(PHANDLE, LPOVERLAPPED);
+typedef void (WINAPI *NcFreeNetconPropertiesFunc)(NETCON_PROPERTIES*);
 
-static HMODULE sIPHelper;
+static HMODULE sIPHelper, sNetshell;
 static GetAdaptersAddressesFunc sGetAdaptersAddresses;
 static GetAdaptersInfoFunc sGetAdaptersInfo;
 static GetIfEntryFunc sGetIfEntry;
 static GetIpAddrTableFunc sGetIpAddrTable;
 static NotifyAddrChangeFunc sNotifyAddrChange;
+static NcFreeNetconPropertiesFunc sNcFreeNetconProperties;
 
 static void InitIPHelperLibrary(void)
 {
-    if (sIPHelper)
-        return;
-
-    sIPHelper = LoadLibraryA("iphlpapi.dll");
-    if (!sIPHelper)
-        return;
-
-    sGetAdaptersAddresses = (GetAdaptersAddressesFunc)
-        GetProcAddress(sIPHelper, "GetAdaptersAddresses");
-    sGetAdaptersInfo = (GetAdaptersInfoFunc)
-        GetProcAddress(sIPHelper, "GetAdaptersInfo");
-    sGetIfEntry = (GetIfEntryFunc)
-        GetProcAddress(sIPHelper, "GetIfEntry");
-    sGetIpAddrTable = (GetIpAddrTableFunc)
-        GetProcAddress(sIPHelper, "GetIpAddrTable");
-    sNotifyAddrChange = (NotifyAddrChangeFunc)
-        GetProcAddress(sIPHelper, "NotifyAddrChange");
+    if (!sIPHelper) {
+        sIPHelper = LoadLibraryW(L"iphlpapi.dll");
+        if (sIPHelper) {
+            sGetAdaptersAddresses = (GetAdaptersAddressesFunc)
+                GetProcAddress(sIPHelper, "GetAdaptersAddresses");
+            sGetAdaptersInfo = (GetAdaptersInfoFunc)
+                GetProcAddress(sIPHelper, "GetAdaptersInfo");
+            sGetIfEntry = (GetIfEntryFunc)
+                GetProcAddress(sIPHelper, "GetIfEntry");
+            sGetIpAddrTable = (GetIpAddrTableFunc)
+                GetProcAddress(sIPHelper, "GetIpAddrTable");
+            sNotifyAddrChange = (NotifyAddrChangeFunc)
+                GetProcAddress(sIPHelper, "NotifyAddrChange");
+        }
+    }
 }
 
-static void FreeIPHelperLibrary(void)
+static void InitNetshellLibrary(void)
 {
-    if (!sIPHelper)
-        return;
+    if (!sNetshell) {
+        sNetshell = LoadLibraryW(L"Netshell.dll");
+        if (sNetshell) {
+            sNcFreeNetconProperties = (NcFreeNetconPropertiesFunc)
+                GetProcAddress(sNetshell, "NcFreeNetconProperties");
+        }
+    }
+}
 
-    sGetAdaptersAddresses = nsnull;
-    sGetAdaptersInfo = nsnull;
-    sGetIfEntry = nsnull;
-    sGetIpAddrTable = nsnull;
-    sNotifyAddrChange = nsnull;
+static void FreeDynamicLibraries(void)
+{
+    if (sIPHelper)
+    {
+        sGetAdaptersAddresses = nsnull;
+        sGetAdaptersInfo = nsnull;
+        sGetIfEntry = nsnull;
+        sGetIpAddrTable = nsnull;
+        sNotifyAddrChange = nsnull;
 
-    FreeLibrary(sIPHelper);
-    sIPHelper = nsnull;
+        FreeLibrary(sIPHelper);
+        sIPHelper = nsnull;
+    }
+
+    if (sNetshell) {
+        sNcFreeNetconProperties = nsnull;
+        FreeLibrary(sNetshell);
+        sNetshell = nsnull;
+    }
 }
 
 NS_IMPL_THREADSAFE_ISUPPORTS3(nsNotifyAddrListener,
@@ -274,23 +132,27 @@ NS_IMPL_THREADSAFE_ISUPPORTS3(nsNotifyAddrListener,
 nsNotifyAddrListener::nsNotifyAddrListener()
     : mLinkUp(PR_TRUE)  // assume true by default
     , mStatusKnown(PR_FALSE)
-    , mThread(0)
+    , mCheckAttempted(PR_FALSE)
     , mShutdownEvent(nsnull)
 {
     mOSVerInfo.dwOSVersionInfoSize = sizeof(mOSVerInfo);
     GetVersionEx(&mOSVerInfo);
-    InitIPHelperLibrary();
 }
 
 nsNotifyAddrListener::~nsNotifyAddrListener()
 {
     NS_ASSERTION(!mThread, "nsNotifyAddrListener thread shutdown failed");
-    FreeIPHelperLibrary();
+    FreeDynamicLibraries();
 }
 
 NS_IMETHODIMP
 nsNotifyAddrListener::GetIsLinkUp(PRBool *aIsUp)
 {
+    if (!mCheckAttempted && !mStatusKnown) {
+        mCheckAttempted = PR_TRUE;
+        CheckLinkStatus();
+    }
+
     *aIsUp = mLinkUp;
     return NS_OK;
 }
@@ -311,6 +173,8 @@ nsNotifyAddrListener::Run()
     HANDLE handles[2] = { ev, mShutdownEvent };
     OVERLAPPED overlapped = { 0 };
     PRBool shuttingDown = PR_FALSE;
+
+    InitIPHelperLibrary();
 
     overlapped.hEvent = ev;
     while (!shuttingDown) {
@@ -338,7 +202,7 @@ nsNotifyAddrListener::Observe(nsISupports *subject,
                               const char *topic,
                               const PRUnichar *data)
 {
-    if (!strcmp(NS_XPCOM_SHUTDOWN_OBSERVER_ID, topic))
+    if (!strcmp("xpcom-shutdown-threads", topic))
         Shutdown();
 
     return NS_OK;
@@ -364,15 +228,14 @@ nsNotifyAddrListener::Init(void)
         do_GetService("@mozilla.org/observer-service;1", &rv);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    rv = observerService->AddObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID,
+    rv = observerService->AddObserver(this, "xpcom-shutdown-threads",
                                       PR_FALSE);
     NS_ENSURE_SUCCESS(rv, rv);
 
     mShutdownEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
     NS_ENSURE_TRUE(mShutdownEvent, NS_ERROR_OUT_OF_MEMORY);
 
-    rv = NS_NewThread(getter_AddRefs(mThread), this, 0,
-                      PR_JOINABLE_THREAD);
+    rv = NS_NewThread(getter_AddRefs(mThread), this);
     NS_ENSURE_SUCCESS(rv, rv);
 
     return NS_OK;
@@ -385,14 +248,14 @@ nsNotifyAddrListener::Shutdown(void)
     nsCOMPtr<nsIObserverService> observerService =
         do_GetService("@mozilla.org/observer-service;1");
     if (observerService)
-        observerService->RemoveObserver(this, NS_XPCOM_SHUTDOWN_OBSERVER_ID);
+        observerService->RemoveObserver(this, "xpcom-shutdown-threads");
 
     if (!mShutdownEvent)
         return NS_OK;
 
     SetEvent(mShutdownEvent);
 
-    nsresult rv = mThread->Join();
+    nsresult rv = mThread->Shutdown();
 
     // Have to break the cycle here, otherwise nsNotifyAddrListener holds
     // onto the thread and the thread holds onto the nsNotifyAddrListener
@@ -411,52 +274,26 @@ nsNotifyAddrListener::Shutdown(void)
 nsresult
 nsNotifyAddrListener::SendEventToUI(const char *aEventID)
 {
+    if (!aEventID)
+        return NS_ERROR_NULL_POINTER;
+
     nsresult rv;
-
-    if (!aEventID) return NS_ERROR_NULL_POINTER;
-
-    nsCOMPtr<nsIEventQueue> eq;
-    rv = NS_GetMainEventQ(getter_AddRefs(eq));
-    if (NS_FAILED(rv))
-        return rv;
-
-    ChangeEvent *event = new ChangeEvent(aEventID);
-    if (!event)
-        return NS_ERROR_OUT_OF_MEMORY;
-    // AddRef this because it is being placed in the PLEvent; it'll be Released
-    // when DestroyInterfaceEvent is called
-    NS_ADDREF_THIS();
-    PL_InitEvent(event, this, HandleInterfaceEvent, DestroyInterfaceEvent);
-
-    if (NS_FAILED(rv = eq->PostEvent(event))) {
-        NS_ERROR("failed to post event to UI EventQueue");
-        PL_DestroyEvent(event);
-    }
+    nsCOMPtr<nsIRunnable> event = new ChangeEvent(this, aEventID);
+    if (NS_FAILED(rv = NS_DispatchToMainThread(event)))
+        NS_WARNING("Failed to dispatch ChangeEvent");
     return rv;
 }
 
-/*static*/ void *PR_CALLBACK
-nsNotifyAddrListener::HandleInterfaceEvent(PLEvent *aEvent)
+NS_IMETHODIMP
+nsNotifyAddrListener::ChangeEvent::Run()
 {
-    ChangeEvent *event = NS_STATIC_CAST(ChangeEvent *, aEvent);
-
     nsCOMPtr<nsIObserverService> observerService =
         do_GetService("@mozilla.org/observer-service;1");
     if (observerService)
         observerService->NotifyObservers(
-            NS_STATIC_CAST(nsINetworkLinkService *, PL_GetEventOwner(aEvent)),
-            NS_NETWORK_LINK_TOPIC,
-            NS_ConvertASCIItoUTF16(event->mEventID).get());
-    return nsnull;
-}
-
-/*static*/ void PR_CALLBACK
-nsNotifyAddrListener::DestroyInterfaceEvent(PLEvent *aEvent)
-{
-    nsNotifyAddrListener *self =
-        NS_STATIC_CAST(nsNotifyAddrListener *, PL_GetEventOwner(aEvent));
-    NS_RELEASE(self);
-    delete aEvent;
+                mService, NS_NETWORK_LINK_TOPIC,
+                NS_ConvertASCIItoUTF16(mEventID).get());
+    return NS_OK;
 }
 
 DWORD
@@ -506,7 +343,9 @@ nsNotifyAddrListener::CheckIPAddrTable(void)
             for (DWORD i = 0; !linkUp && i < table->dwNumEntries; i++) {
                 if (GetOperationalStatus(table->table[i].dwIndex) >=
                         MIB_IF_OPER_STATUS_CONNECTED &&
-                        table->table[i].dwAddr != 0)
+                        table->table[i].dwAddr != 0 &&
+                        // Nor a loopback
+                        table->table[i].dwAddr != 0x0100007F)
                     linkUp = PR_TRUE;
             }
             mLinkUp = linkUp;
@@ -538,7 +377,11 @@ nsNotifyAddrListener::CheckAdaptersInfo(void)
     DWORD ret = sGetAdaptersInfo(0, &adaptersLen);
     if (ret == ERROR_BUFFER_OVERFLOW && adaptersLen > 0) {
         PIP_ADAPTER_INFO adapters = (PIP_ADAPTER_INFO) malloc(adaptersLen);
-        if (sGetAdaptersInfo(adapters, &adaptersLen) == ERROR_SUCCESS) {
+        if (!adapters)
+            return ERROR_OUTOFMEMORY;
+
+        ret = sGetAdaptersInfo(adapters, &adaptersLen);
+        if (ret == ERROR_SUCCESS) {
             PRBool linkUp = PR_FALSE;
             PIP_ADAPTER_INFO ptr;
 
@@ -556,9 +399,11 @@ nsNotifyAddrListener::CheckAdaptersInfo(void)
                     else {
                         PIP_ADDR_STRING ipAddr;
                         for (ipAddr = &ptr->IpAddressList; ipAddr && !linkUp;
-                             ipAddr = ipAddr->Next)
-                            if (PL_strcmp(ipAddr->IpAddress.String, "0.0.0.0"))
+                             ipAddr = ipAddr->Next) {
+                            if (PL_strcmp(ipAddr->IpAddress.String, "0.0.0.0")) {
                                 linkUp = PR_TRUE;
+                            }
+                        }
                     }
                 }
             }
@@ -568,6 +413,113 @@ nsNotifyAddrListener::CheckAdaptersInfo(void)
         }
     }
     return ret;
+}
+
+BOOL
+nsNotifyAddrListener::CheckIsGateway(PIP_ADAPTER_ADDRESSES aAdapter)
+{
+    if (!aAdapter->FirstUnicastAddress)
+        return FALSE;
+
+    LPSOCKADDR aAddress = aAdapter->FirstUnicastAddress->Address.lpSockaddr;
+    if (!aAddress)
+        return FALSE;
+
+    PSOCKADDR_IN in_addr = (PSOCKADDR_IN)aAddress;
+    PRBool isGateway = (aAddress->sa_family == AF_INET &&
+        in_addr->sin_addr.S_un.S_un_b.s_b1 == 192 &&
+        in_addr->sin_addr.S_un.S_un_b.s_b2 == 168 &&
+        in_addr->sin_addr.S_un.S_un_b.s_b3 == 0 &&
+        in_addr->sin_addr.S_un.S_un_b.s_b4 == 1);
+
+    if (isGateway)
+      isGateway = CheckICSStatus(aAdapter->FriendlyName);
+
+    return isGateway;
+}
+
+BOOL
+nsNotifyAddrListener::CheckICSStatus(PWCHAR aAdapterName)
+{
+    InitNetshellLibrary();
+
+    // This method enumerates all privately shared connections and checks if some
+    // of them has the same name as the one provided in aAdapterName. If such
+    // connection is found in the collection the adapter is used as ICS gateway
+    BOOL isICSGatewayAdapter = FALSE;
+
+    HRESULT hr;
+
+    hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    if (FAILED(hr))
+        return FALSE;
+
+    nsRefPtr<INetSharingManager> netSharingManager;
+    hr = CoCreateInstance(
+                CLSID_NetSharingManager,
+                NULL,
+                CLSCTX_INPROC_SERVER,
+                IID_INetSharingManager,
+                getter_AddRefs(netSharingManager));
+
+    nsRefPtr<INetSharingPrivateConnectionCollection> privateCollection;
+    if (SUCCEEDED(hr)) {
+        hr = netSharingManager->get_EnumPrivateConnections(
+                    ICSSC_DEFAULT,
+                    getter_AddRefs(privateCollection));
+    }
+
+    nsRefPtr<IEnumNetSharingPrivateConnection> privateEnum;
+    if (SUCCEEDED(hr)) {
+        nsRefPtr<IUnknown> privateEnumUnknown;
+        hr = privateCollection->get__NewEnum(getter_AddRefs(privateEnumUnknown));
+        if (SUCCEEDED(hr)) {
+            hr = privateEnumUnknown->QueryInterface(
+                        IID_IEnumNetSharingPrivateConnection,
+                        getter_AddRefs(privateEnum));
+        }
+    }
+
+    if (SUCCEEDED(hr)) {
+        ULONG fetched;
+        VARIANT connectionVariant;
+        while (!isICSGatewayAdapter &&
+               SUCCEEDED(hr = privateEnum->Next(1, &connectionVariant,
+               &fetched)) &&
+               fetched) {
+            if (connectionVariant.vt != VT_UNKNOWN) {
+                // We should call VariantClear here but it needs to link
+                // with oleaut32.lib that produces a Ts incrase about 10ms
+                // that is undesired. As it is quit unlikely the result would
+                // be of a different type anyway, let's pass the variant
+                // unfreed here.
+                NS_ERROR("Variant of unexpected type, expecting VT_UNKNOWN, we probably leak it!");
+                continue;
+            }
+
+            nsRefPtr<INetConnection> connection;
+            hr = connectionVariant.punkVal->QueryInterface(
+                        IID_INetConnection,
+                        getter_AddRefs(connection));
+            connectionVariant.punkVal->Release();
+
+            NETCON_PROPERTIES *properties;
+            if (SUCCEEDED(hr))
+                hr = connection->GetProperties(&properties);
+
+            if (SUCCEEDED(hr)) {
+                if (!wcscmp(properties->pszwName, aAdapterName))
+                    isICSGatewayAdapter = TRUE;
+
+                if (sNcFreeNetconProperties)
+                    sNcFreeNetconProperties(properties);
+            }
+        }
+    }
+
+    CoUninitialize();
+
+    return isICSGatewayAdapter;
 }
 
 DWORD
@@ -580,28 +532,36 @@ nsNotifyAddrListener::CheckAdaptersAddresses(void)
     if (!sGetAdaptersAddresses)
         return ERROR_NOT_SUPPORTED;
 
-    ULONG len = 0;
+    ULONG len = 16384;
 
-    DWORD ret = sGetAdaptersAddresses(AF_UNSPEC, 0, NULL, NULL, &len);
+    PIP_ADAPTER_ADDRESSES addresses = (PIP_ADAPTER_ADDRESSES) malloc(len);
+    if (!addresses)
+        return ERROR_OUTOFMEMORY;
+
+    DWORD ret = sGetAdaptersAddresses(AF_UNSPEC, 0, NULL, addresses, &len);
     if (ret == ERROR_BUFFER_OVERFLOW) {
-        PIP_ADAPTER_ADDRESSES addresses = (PIP_ADAPTER_ADDRESSES) malloc(len);
-        if (addresses) {
-            ret = sGetAdaptersAddresses(AF_UNSPEC, 0, NULL, addresses, &len);
-            if (ret == ERROR_SUCCESS) {
-                PIP_ADAPTER_ADDRESSES ptr;
-                BOOL linkUp = FALSE;
-
-                for (ptr = addresses; !linkUp && ptr; ptr = ptr->Next) {
-                    if (ptr->OperStatus == IfOperStatusUp &&
-                            ptr->IfType != IF_TYPE_SOFTWARE_LOOPBACK)
-                        linkUp = TRUE;
-                }
-                mLinkUp = linkUp;
-                mStatusKnown = TRUE;
-            }
-            free(addresses);
-        }
+        free(addresses);
+        addresses = (PIP_ADAPTER_ADDRESSES) malloc(len);
+        if (!addresses)
+            return ERROR_BUFFER_OVERFLOW;
+        ret = sGetAdaptersAddresses(AF_UNSPEC, 0, NULL, addresses, &len);
     }
+
+    if (ret == ERROR_SUCCESS) {
+        PIP_ADAPTER_ADDRESSES ptr;
+        BOOL linkUp = FALSE;
+
+        for (ptr = addresses; !linkUp && ptr; ptr = ptr->Next) {
+            if (ptr->OperStatus == IfOperStatusUp &&
+                    ptr->IfType != IF_TYPE_SOFTWARE_LOOPBACK &&
+                    !CheckIsGateway(ptr))
+                linkUp = TRUE;
+        }
+        mLinkUp = linkUp;
+        mStatusKnown = TRUE;
+    }
+    free(addresses);
+
     return ret;
 }
 

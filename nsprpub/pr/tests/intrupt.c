@@ -55,12 +55,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef XP_MAC
-#include "prlog.h"
-#define printf PR_LogPrint
-extern void SetupMacPrintfLog(char *logFile);
-#endif
-
 #define DEFAULT_TCP_PORT 12500
 
 static PRLock *ml = NULL;
@@ -73,7 +67,7 @@ static PRThreadScope thread_scope = PR_LOCAL_THREAD;
 static void PR_CALLBACK AbortCV(void *arg)
 {
     PRStatus rv;
-    PRThread *me = PR_CurrentThread();
+    PRThread *me = PR_GetCurrentThread();
 
     /* some other thread (main) is doing the interrupt */
     PR_Lock(ml);
@@ -258,11 +252,6 @@ void PR_CALLBACK Intrupt(void *arg)
     ml = PR_NewLock();
     cv = PR_NewCondVar(ml);
 
-#ifdef XP_MAC
-	SetupMacPrintfLog("intrupt.log");
-	debug_mode = PR_TRUE;
-#endif
-
     /* Part I */
     if (debug_mode) printf("Part I\n");
     abortCV = PR_CreateThread(
@@ -292,7 +281,7 @@ void PR_CALLBACK Intrupt(void *arg)
     if (debug_mode) printf("Part III\n");
 	setup_listen_socket(&listner, &netaddr);
     abortIO = PR_CreateThread(
-        PR_USER_THREAD, AbortIO, PR_CurrentThread(), PR_PRIORITY_NORMAL,
+        PR_USER_THREAD, AbortIO, PR_GetCurrentThread(), PR_PRIORITY_NORMAL,
         thread_scope, PR_JOINABLE_THREAD, 0);
 
     if (PR_Accept(listner, &netaddr, PR_INTERVAL_NO_TIMEOUT) == NULL)
@@ -335,7 +324,7 @@ void PR_CALLBACK Intrupt(void *arg)
     PR_DestroyLock(ml);    
 }  /* Intrupt */
 
-PRIntn main(PRIntn argc, char **argv)
+int main(int argc, char **argv)
 {
     PRThread *intrupt;
 	PLOptStatus os;

@@ -1,8 +1,0 @@
-/.cvsignore///////
-/AccessibleMarshal.c///////
-/nsIAccessibleWin32Object.idl///////
-/ISimpleDOMDocument.idl///////
-/ISimpleDOMNode.idl///////
-/ISimpleDOMText.idl///////
-/Makefile.in///////
-/AccessibleMarshal.def///////

@@ -53,6 +53,7 @@
 #include "nsStreamConverterService.h"
 #include "nsIServiceManager.h"
 #include "nsIComponentManager.h"
+#include "nsIComponentRegistrar.h"
 #include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsIAtom.h"
@@ -67,7 +68,7 @@
 
 ////////////////////////////////////////////////////////////
 // nsISupports methods
-NS_IMPL_THREADSAFE_ISUPPORTS1(nsStreamConverterService, nsIStreamConverterService)
+NS_IMPL_ISUPPORTS1(nsStreamConverterService, nsIStreamConverterService)
 
 
 ////////////////////////////////////////////////////////////
@@ -84,7 +85,7 @@ nsStreamConverterService::~nsStreamConverterService() {
 }
 
 // Delete all the entries in the adjacency list
-static PRBool PR_CALLBACK DeleteAdjacencyEntry(nsHashKey *aKey, void *aData, void* closure) {
+static PRBool DeleteAdjacencyEntry(nsHashKey *aKey, void *aData, void* closure) {
     SCTableData *entry = (SCTableData*)aData;
     NS_ASSERTION(entry->key && entry->data.edges, "malformed adjacency list entry");
     delete entry->key;
@@ -258,7 +259,7 @@ nsStreamConverterService::ParseFromTo(const char *aContractID, nsCString &aFromR
 // nsObjectHashtable enumerator functions.
 
 // Initializes the BFS state table.
-static PRBool PR_CALLBACK InitBFSTable(nsHashKey *aKey, void *aData, void* closure) {
+static PRBool InitBFSTable(nsHashKey *aKey, void *aData, void* closure) {
     NS_ASSERTION((SCTableData*)aData, "no data in the table enumeration");
     
     nsHashtable *BFSTable = (nsHashtable*)closure;
@@ -271,7 +272,7 @@ static PRBool PR_CALLBACK InitBFSTable(nsHashKey *aKey, void *aData, void* closu
     state->distance = -1;
     state->predecessor = nsnull;
 
-    SCTableData *data = new SCTableData(NS_STATIC_CAST(nsCStringKey*, aKey));
+    SCTableData *data = new SCTableData(static_cast<nsCStringKey*>(aKey));
     if (!data) {
         delete state;
         return PR_FALSE;
@@ -283,7 +284,7 @@ static PRBool PR_CALLBACK InitBFSTable(nsHashKey *aKey, void *aData, void* closu
 }
 
 // cleans up the BFS state table
-static PRBool PR_CALLBACK DeleteBFSEntry(nsHashKey *aKey, void *aData, void *closure) {
+static PRBool DeleteBFSEntry(nsHashKey *aKey, void *aData, void *closure) {
     SCTableData *data = (SCTableData*)aData;
     BFSState *state = data->data.state;
     delete state;
@@ -472,7 +473,42 @@ nsStreamConverterService::FindConverter(const char *aContractID, nsCStringArray 
 
 
 /////////////////////////////////////////////////////
-// nsIStreamConverter methods
+// nsIStreamConverterService methods
+NS_IMETHODIMP
+nsStreamConverterService::CanConvert(const char* aFromType,
+                                     const char* aToType,
+                                     PRBool* _retval) {
+    nsCOMPtr<nsIComponentRegistrar> reg;
+    nsresult rv = NS_GetComponentRegistrar(getter_AddRefs(reg));
+    if (NS_FAILED(rv))
+        return rv;
+
+    nsCAutoString contractID;
+    contractID.AssignLiteral(NS_ISTREAMCONVERTER_KEY "?from=");
+    contractID.Append(aFromType);
+    contractID.AppendLiteral("&to=");
+    contractID.Append(aToType);
+
+    // See if we have a direct match
+    rv = reg->IsContractIDRegistered(contractID.get(), _retval);
+    if (NS_FAILED(rv))
+        return rv;
+    if (*_retval)
+        return NS_OK;
+
+    // Otherwise try the graph.
+    rv = BuildGraph();
+    if (NS_FAILED(rv))
+        return rv;
+
+    nsCStringArray *converterChain = nsnull;
+    rv = FindConverter(contractID.get(), &converterChain);
+    *_retval = NS_SUCCEEDED(rv);
+
+    delete converterChain;
+    return NS_OK;
+}
+
 NS_IMETHODIMP
 nsStreamConverterService::Convert(nsIInputStream *aFromStream,
                                   const char *aFromType, 
@@ -611,8 +647,8 @@ nsStreamConverterService::AsyncConvertData(const char *aFromType,
             const char *lContractID = contractIDStr->get();
 
             // create the converter for this from/to pair
-            nsCOMPtr<nsIStreamConverter> converter(do_CreateInstance(lContractID, &rv));
-            NS_ASSERTION(NS_SUCCEEDED(rv), "graph construction problem, built a contractid that wasn't registered");
+            nsCOMPtr<nsIStreamConverter> converter(do_CreateInstance(lContractID));
+            NS_ASSERTION(converter, "graph construction problem, built a contractid that wasn't registered");
 
             nsCAutoString fromStr, toStr;
             rv = ParseFromTo(lContractID, fromStr, toStr);

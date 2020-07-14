@@ -59,7 +59,6 @@ REQUIRES	= xpcom \
 		  widget \
 		  appshell \
 		  xpconnect \
-		  jsconsole \
 		  uconv \
 		  docshell \
 		  content \
@@ -85,6 +84,11 @@ EXTRA_DSO_LDOPTS = \
 
 ifdef BUILD_DEBUG_GC
 DEFINES		+= -DDEBUG_GC
+endif
+
+DIRS            = $(NULL)
+ifdef ENABLE_TESTS
+DIRS            += test
 endif
 
 include $(topsrcdir)/config/rules.mk

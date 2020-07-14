@@ -66,6 +66,27 @@ DeleteRangeTxn::DeleteRangeTxn()
 {
 }
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(DeleteRangeTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(DeleteRangeTxn,
+                                                EditAggregateTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mRange)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mStartParent)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mEndParent)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mCommonParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(DeleteRangeTxn,
+                                                  EditAggregateTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mRange)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mStartParent)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mEndParent)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mCommonParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(DeleteRangeTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditAggregateTxn)
+
 NS_IMETHODIMP DeleteRangeTxn::Init(nsIEditor *aEditor, 
                                    nsIDOMRange *aRange,
                                    nsRangeUpdater *aRangeUpdater)
@@ -87,6 +108,17 @@ NS_IMETHODIMP DeleteRangeTxn::Init(nsIEditor *aEditor,
   NS_ASSERTION((NS_SUCCEEDED(result)), "GetEndOffset failed.");
   result = aRange->GetCommonAncestorContainer(getter_AddRefs(mCommonParent));
   NS_ASSERTION((NS_SUCCEEDED(result)), "GetCommonParent failed.");
+
+  if (!mEditor->IsModifiableNode(mStartParent)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (mStartParent!=mEndParent &&
+      (!mEditor->IsModifiableNode(mEndParent) ||
+       !mEditor->IsModifiableNode(mCommonParent)))
+  {
+      return NS_ERROR_FAILURE;
+  }
 
 #ifdef NS_DEBUG
   {
@@ -126,10 +158,6 @@ NS_IMETHODIMP DeleteRangeTxn::Init(nsIEditor *aEditor,
 #endif
   return result;
 
-}
-
-DeleteRangeTxn::~DeleteRangeTxn()
-{
 }
 
 NS_IMETHODIMP DeleteRangeTxn::DoTransaction(void)
@@ -214,13 +242,6 @@ NS_IMETHODIMP DeleteRangeTxn::RedoTransaction(void)
   return EditAggregateTxn::RedoTransaction();
 }
 
-NS_IMETHODIMP DeleteRangeTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge = PR_FALSE;
-  return NS_OK;
-}
-
 NS_IMETHODIMP DeleteRangeTxn::GetTxnDescription(nsAString& aString)
 {
   aString.AssignLiteral("DeleteRangeTxn");
@@ -247,8 +268,9 @@ DeleteRangeTxn::CreateTxnsToDeleteBetween(nsIDOMNode *aStartParent,
       numToDel = 1;
     else
       numToDel = aEndOffset-aStartOffset;
-    txn->Init(mEditor, textNode, aStartOffset, numToDel, mRangeUpdater);
-    AppendChild(txn);
+    result = txn->Init(mEditor, textNode, aStartOffset, numToDel, mRangeUpdater);
+    if (NS_SUCCEEDED(result))
+      AppendChild(txn);
     NS_RELEASE(txn);
   }
   else
@@ -276,8 +298,9 @@ DeleteRangeTxn::CreateTxnsToDeleteBetween(nsIDOMNode *aStartParent,
       if (NS_FAILED(result)) return result;
       if (!txn) return NS_ERROR_NULL_POINTER;
 
-      txn->Init(child, mRangeUpdater);
-      AppendChild(txn);
+      result = txn->Init(mEditor, child, mRangeUpdater);
+      if (NS_SUCCEEDED(result))
+        AppendChild(txn);
       NS_RELEASE(txn);
     }
   }
@@ -313,8 +336,9 @@ NS_IMETHODIMP DeleteRangeTxn::CreateTxnsToDeleteContent(nsIDOMNode *aParent,
       if (NS_FAILED(result)) return result;
       if (!txn) return NS_ERROR_NULL_POINTER;
 
-      txn->Init(mEditor, textNode, start, numToDelete, mRangeUpdater);
-      AppendChild(txn);
+      result = txn->Init(mEditor, textNode, start, numToDelete, mRangeUpdater);
+      if (NS_SUCCEEDED(result))
+        AppendChild(txn);
       NS_RELEASE(txn);
     }
   }
@@ -330,7 +354,7 @@ NS_IMETHODIMP DeleteRangeTxn::CreateTxnsToDeleteNodesBetween()
   nsresult result = iter->Init(mRange);
   if (NS_FAILED(result)) return result;
 
-  while (!iter->IsDone())
+  while (!iter->IsDone() && NS_SUCCEEDED(result))
   {
     nsCOMPtr<nsIDOMNode> node = do_QueryInterface(iter->GetCurrentNode());
     if (!node)
@@ -341,8 +365,9 @@ NS_IMETHODIMP DeleteRangeTxn::CreateTxnsToDeleteNodesBetween()
     if (NS_FAILED(result)) return result;
     if (!txn) return NS_ERROR_NULL_POINTER;
 
-    txn->Init(node, mRangeUpdater);
-    AppendChild(txn);
+    result = txn->Init(mEditor, node, mRangeUpdater);
+    if (NS_SUCCEEDED(result))
+      AppendChild(txn);
     NS_RELEASE(txn);
     iter->Next();
   }

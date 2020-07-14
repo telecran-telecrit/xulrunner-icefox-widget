@@ -49,22 +49,12 @@ LIBRARY_NAME	= gtkxtbin
 EXPORT_LIBRARY = 1
 LIBXUL_LIBRARY = 1
 
-PACKAGE_FILE = gtkxtbin.pkg
-
 ifdef MOZ_ENABLE_GTK2
 CSRCS		= \
 		gtk2xtbin.c \
 		$(NULL)
 EXTRA_DSO_LDOPTS += $(MOZ_GTK2_LIBS) $(XLDFLAGS) $(XT_LIBS) $(XLIBS)
 endif
-
-ifdef MOZ_ENABLE_GTK
-CSRCS           = \
-                gtkxtbin.c \
-		$(NULL)
-EXTRA_DSO_LDOPTS += $(MOZ_GTK_LDFLAGS) $(XT_LIBS)
-endif
-
 
 EXPORTS         = gtkxtbin.h gtk2xtbin.h 
 
@@ -74,10 +64,6 @@ include $(topsrcdir)/config/rules.mk
 
 ifdef MOZ_ENABLE_GTK2
 CFLAGS		+= $(MOZ_GTK2_CFLAGS)
-endif
-
-ifdef MOZ_ENABLE_GTK
-CFLAGS		+= $(MOZ_GTK_CFLAGS)
 endif
 
 DEFINES		+= -D_IMPL_GTKXTBIN_API -DUSE_XIM

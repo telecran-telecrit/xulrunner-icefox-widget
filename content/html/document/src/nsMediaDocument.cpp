@@ -37,7 +37,7 @@
  * ***** END LICENSE BLOCK ***** */
 
 #include "nsMediaDocument.h"
-#include "nsHTMLAtoms.h"
+#include "nsGkAtoms.h"
 #include "nsRect.h"
 #include "nsPresContext.h"
 #include "nsIPresShell.h"
@@ -233,29 +233,39 @@ nsMediaDocument::CreateSyntheticDocument()
   nsresult rv;
 
   nsCOMPtr<nsINodeInfo> nodeInfo;
-  rv = mNodeInfoManager->GetNodeInfo(nsHTMLAtoms::html, nsnull,
-                                     kNameSpaceID_None,
-                                     getter_AddRefs(nodeInfo));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::html, nsnull,
+                                           kNameSpaceID_None);
+  NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
 
   nsRefPtr<nsGenericHTMLElement> root = NS_NewHTMLHtmlElement(nodeInfo);
   if (!root) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  rv = SetRootContent(root);
+  NS_ASSERTION(GetChildCount() == 0, "Shouldn't have any kids");
+  rv = AppendChildTo(root, PR_FALSE);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = mNodeInfoManager->GetNodeInfo(nsHTMLAtoms::body, nsnull,
-                                     kNameSpaceID_None,
-                                     getter_AddRefs(nodeInfo));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::head, nsnull,
+                                           kNameSpaceID_None);
+  NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
+
+  // Create a <head> so our title has somewhere to live
+  nsRefPtr<nsGenericHTMLElement> head = NS_NewHTMLHeadElement(nodeInfo);
+  if (!head) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  root->AppendChildTo(head, PR_FALSE);
+
+  nodeInfo = mNodeInfoManager->GetNodeInfo(nsGkAtoms::body, nsnull,
+                                           kNameSpaceID_None);
+  NS_ENSURE_TRUE(nodeInfo, NS_ERROR_OUT_OF_MEMORY);
 
   nsRefPtr<nsGenericHTMLElement> body = NS_NewHTMLBodyElement(nodeInfo);
   if (!body) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  mBodyContent = do_QueryInterface(body);
 
   root->AppendChildTo(body, PR_FALSE);
 
@@ -265,18 +275,24 @@ nsMediaDocument::CreateSyntheticDocument()
 nsresult
 nsMediaDocument::StartLayout()
 {
-  PRUint32 numberOfShells = GetNumberOfShells();
-  for (PRUint32 i = 0; i < numberOfShells; i++) {
-    nsIPresShell *shell = GetShellAt(i);
-
-    // Make shell an observer for next time.
-    shell->BeginObservingDocument();
-
-    // Initial-reflow this time.
+  mMayStartLayout = PR_TRUE;
+  nsPresShellIterator iter(this);
+  nsCOMPtr<nsIPresShell> shell;
+  while ((shell = iter.GetNextShell())) {
+    PRBool didInitialReflow = PR_FALSE;
+    shell->GetDidInitialReflow(&didInitialReflow);
+    if (didInitialReflow) {
+      // Don't mess with this presshell: someone has already handled
+      // its initial reflow.
+      continue;
+    }
+    
     nsRect visibleArea = shell->GetPresContext()->GetVisibleArea();
-    shell->InitialReflow(visibleArea.width, visibleArea.height);
+    nsresult rv = shell->InitialReflow(visibleArea.width, visibleArea.height);
+    NS_ENSURE_SUCCESS(rv, rv);
 
-    // Now trigger a refresh.
+    // Now trigger a refresh.  vm might be null if the presshell got
+    // Destroy() called already.
     nsIViewManager* vm = shell->GetViewManager();
     if (vm) {
       vm->EnableRefresh(NS_VMREFRESH_IMMEDIATE);
@@ -286,6 +302,46 @@ nsMediaDocument::StartLayout()
   return NS_OK;
 }
 
+void
+nsMediaDocument::GetFileName(nsAString& aResult)
+{
+  aResult.Truncate();
+
+  nsCOMPtr<nsIURL> url = do_QueryInterface(mDocumentURI);
+  if (!url)
+    return;
+
+  nsCAutoString fileName;
+  url->GetFileName(fileName);
+  if (fileName.IsEmpty())
+    return;
+
+  nsCAutoString docCharset;
+  // Now that the charset is set in |StartDocumentLoad| to the charset of
+  // the document viewer instead of a bogus value ("ISO-8859-1" set in
+  // |nsDocument|'s ctor), the priority is given to the current charset. 
+  // This is necessary to deal with a media document being opened in a new 
+  // window or a new tab, in which case |originCharset| of |nsIURI| is not 
+  // reliable.
+  if (mCharacterSetSource != kCharsetUninitialized) {  
+    docCharset = mCharacterSet;
+  } else {  
+    // resort to |originCharset|
+    url->GetOriginCharset(docCharset);
+    SetDocumentCharacterSet(docCharset);
+  }
+
+  nsresult rv;
+  nsCOMPtr<nsITextToSubURI> textToSubURI = 
+    do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
+  if (NS_SUCCEEDED(rv)) {
+    // UnEscapeURIForUI always succeeds
+    textToSubURI->UnEscapeURIForUI(docCharset, fileName, aResult);
+  } else {
+    CopyUTF8toUTF16(fileName, aResult);
+  }
+}
+
 void 
 nsMediaDocument::UpdateTitleAndCharset(const nsACString& aTypeStr,
                                        const char* const* aFormatNames,
@@ -293,42 +349,9 @@ nsMediaDocument::UpdateTitleAndCharset(const nsACString& aTypeStr,
                                        const nsAString& aStatus)
 {
   nsXPIDLString fileStr;
-  if (mDocumentURI) {
-    nsCAutoString fileName;
-    nsCOMPtr<nsIURL> url = do_QueryInterface(mDocumentURI);
-    if (url)
-      url->GetFileName(fileName);
+  GetFileName(fileStr);
 
-    nsCAutoString docCharset;
-
-    // Now that the charset is set in |StartDocumentLoad| to the charset of
-    // the document viewer instead of a bogus value ("ISO-8859-1" set in
-    // |nsDocument|'s ctor), the priority is given to the current charset. 
-    // This is necessary to deal with a media document being opened in a new 
-    // window or a new tab, in which case |originCharset| of |nsIURI| is not 
-    // reliable.
-    if (mCharacterSetSource != kCharsetUninitialized) {  
-      docCharset = mCharacterSet;
-    }
-    else {  
-      // resort to |originCharset|
-      mDocumentURI->GetOriginCharset(docCharset);
-      SetDocumentCharacterSet(docCharset);
-    }
-    if (!fileName.IsEmpty()) {
-      nsresult rv;
-      nsCOMPtr<nsITextToSubURI> textToSubURI = 
-        do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
-      if (NS_SUCCEEDED(rv))
-        // UnEscapeURIForUI always succeeds
-        textToSubURI->UnEscapeURIForUI(docCharset, fileName, fileStr);
-      else 
-        CopyUTF8toUTF16(fileName, fileStr);
-    }
-  }
-
-
-  NS_ConvertASCIItoUCS2 typeStr(aTypeStr);
+  NS_ConvertASCIItoUTF16 typeStr(aTypeStr);
   nsXPIDLString title;
 
   if (mStringBundle) {
@@ -342,14 +365,14 @@ nsMediaDocument::UpdateTitleAndCharset(const nsACString& aTypeStr,
       if (!fileStr.IsEmpty()) {
         const PRUnichar *formatStrings[4]  = {fileStr.get(), typeStr.get(), 
           widthStr.get(), heightStr.get()};
-        NS_ConvertASCIItoUCS2 fmtName(aFormatNames[eWithDimAndFile]);
+        NS_ConvertASCIItoUTF16 fmtName(aFormatNames[eWithDimAndFile]);
         mStringBundle->FormatStringFromName(fmtName.get(), formatStrings, 4,
                                             getter_Copies(title));
       } 
       else {
         const PRUnichar *formatStrings[3]  = {typeStr.get(), widthStr.get(), 
           heightStr.get()};
-        NS_ConvertASCIItoUCS2 fmtName(aFormatNames[eWithDim]);
+        NS_ConvertASCIItoUTF16 fmtName(aFormatNames[eWithDim]);
         mStringBundle->FormatStringFromName(fmtName.get(), formatStrings, 3,
                                             getter_Copies(title));
       }
@@ -358,13 +381,13 @@ nsMediaDocument::UpdateTitleAndCharset(const nsACString& aTypeStr,
     // If we got a filename, display it
       if (!fileStr.IsEmpty()) {
         const PRUnichar *formatStrings[2] = {fileStr.get(), typeStr.get()};
-        NS_ConvertASCIItoUCS2 fmtName(aFormatNames[eWithFile]);
+        NS_ConvertASCIItoUTF16 fmtName(aFormatNames[eWithFile]);
         mStringBundle->FormatStringFromName(fmtName.get(), formatStrings, 2,
                                             getter_Copies(title));
       }
       else {
         const PRUnichar *formatStrings[1] = {typeStr.get()};
-        NS_ConvertASCIItoUCS2 fmtName(aFormatNames[eWithNoInfo]);
+        NS_ConvertASCIItoUTF16 fmtName(aFormatNames[eWithNoInfo]);
         mStringBundle->FormatStringFromName(fmtName.get(), formatStrings, 1,
                                             getter_Copies(title));
       }

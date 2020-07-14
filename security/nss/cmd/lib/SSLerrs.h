@@ -196,7 +196,7 @@ ER3(SSL_ERROR_RX_UNEXPECTED_CERT_VERIFY     , (SSL_ERROR_BASE + 48),
 "SSL received an unexpected Certificate Verify handshake message.")
 
 ER3(SSL_ERROR_RX_UNEXPECTED_CLIENT_KEY_EXCH , (SSL_ERROR_BASE + 49),
-"SSL received an unexpected Cllient Key Exchange handshake message.")
+"SSL received an unexpected Client Key Exchange handshake message.")
 
 ER3(SSL_ERROR_RX_UNEXPECTED_FINISHED        , (SSL_ERROR_BASE + 50),
 "SSL received an unexpected Finished handshake message.")
@@ -238,7 +238,7 @@ ER3(SSL_ERROR_HANDSHAKE_UNEXPECTED_ALERT    , (SSL_ERROR_BASE + 59),
 "SSL peer was not expecting a handshake message it received.")
 
 ER3(SSL_ERROR_DECOMPRESSION_FAILURE_ALERT   , (SSL_ERROR_BASE + 60),
-"SSL peer was unable to succesfully decompress an SSL record it received.")
+"SSL peer was unable to successfully decompress an SSL record it received.")
 
 ER3(SSL_ERROR_HANDSHAKE_FAILURE_ALERT       , (SSL_ERROR_BASE + 61),
 "SSL peer was unable to negotiate an acceptable set of security parameters.")
@@ -384,3 +384,24 @@ ER3(SSL_ERROR_BAD_CERT_STATUS_RESPONSE_ALERT , (SSL_ERROR_BASE + 107),
 
 ER3(SSL_ERROR_BAD_CERT_HASH_VALUE_ALERT      , (SSL_ERROR_BASE + 108),
 "SSL peer reported bad certificate hash value.")
+
+ER3(SSL_ERROR_RX_UNEXPECTED_NEW_SESSION_TICKET, (SSL_ERROR_BASE + 109),
+"SSL received an unexpected New Session Ticket handshake message.")
+
+ER3(SSL_ERROR_RX_MALFORMED_NEW_SESSION_TICKET, (SSL_ERROR_BASE + 110),
+"SSL received a malformed New Session Ticket handshake message.")
+
+ER3(SSL_ERROR_DECOMPRESSION_FAILURE,           (SSL_ERROR_BASE + 111),
+"SSL received a compressed record that could not be decompressed.")
+
+ER3(SSL_ERROR_RENEGOTIATION_NOT_ALLOWED,       (SSL_ERROR_BASE + 112),
+"Renegotiation is not allowed on this SSL socket.")
+
+ER3(SSL_ERROR_UNSAFE_NEGOTIATION,              (SSL_ERROR_BASE + 113),
+"Peer attempted old style (potentially vulnerable) handshake.")
+
+ER3(SSL_ERROR_RX_UNEXPECTED_UNCOMPRESSED_RECORD, (SSL_ERROR_BASE + 114),
+"SSL received an unexpected uncompressed record.")
+
+ER3(SSL_ERROR_WEAK_SERVER_EPHEMERAL_DH_KEY,    (SSL_ERROR_BASE + 115),
+"SSL received a weak ephemeral Diffie-Hellman key in Server Key Exchange handshake message.")

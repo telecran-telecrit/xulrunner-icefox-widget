@@ -42,7 +42,7 @@
 #include "nsIDocument.h"
 #include "nsIDOMXULDocument.h"
 #include "nsIDOMNodeList.h"
-#include "nsHTMLAtoms.h"
+#include "nsGkAtoms.h"
 #include "nsINameSpaceManager.h"
 
 #include "nsIWidget.h"
@@ -51,110 +51,103 @@
 #include "nsIDocShellTreeItem.h"
 #include "nsIDocShellTreeOwner.h"
 #include "nsIBaseWindow.h"
-#include "nsIScriptGlobalObject.h"
-#include "nsIViewManager.h"
-#include "nsXULAtoms.h"
+#include "nsPIDOMWindow.h"
 #include "nsGUIEvent.h"
+#include "nsEventDispatcher.h"
 
 //
-// NS_NewXULButtonFrame
+// NS_NewResizerFrame
 //
-// Creates a new Button frame and returns it in |aNewFrame|
+// Creates a new Resizer frame and returns it
 //
-nsresult
-NS_NewResizerFrame( nsIPresShell* aPresShell, nsIFrame** aNewFrame )
+nsIFrame*
+NS_NewResizerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
 {
-  NS_PRECONDITION(aNewFrame, "null OUT ptr");
-  if (nsnull == aNewFrame) {
-    return NS_ERROR_NULL_POINTER;
-  }
-  nsTitleBarFrame* it = new (aPresShell) nsResizerFrame(aPresShell);
-  if (nsnull == it)
-    return NS_ERROR_OUT_OF_MEMORY;
+  return new (aPresShell) nsResizerFrame(aPresShell, aContext);
+} // NS_NewResizerFrame
 
-  // it->SetFlags(aFlags);
-  *aNewFrame = it;
-  return NS_OK;
-  
-} // NS_NewTitleBarFrame
-
-nsResizerFrame::nsResizerFrame(nsIPresShell* aPresShell)
-:nsTitleBarFrame(aPresShell) 
+nsResizerFrame::nsResizerFrame(nsIPresShell* aPresShell, nsStyleContext* aContext)
+:nsTitleBarFrame(aPresShell, aContext)
 {
-	mDirection = topleft; // by default...
 }
-
-NS_IMETHODIMP  nsResizerFrame::Init(nsPresContext*  aPresContext,
-                nsIContent*      aContent,
-                nsIFrame*        aParent,
-                nsStyleContext*  aContext,
-                nsIFrame*        asPrevInFlow)
-{
-	nsresult rv = nsTitleBarFrame::Init(aPresContext, aContent, aParent, aContext, asPrevInFlow);
-
-	GetInitialDirection(mDirection);
-
-	return rv;
-}
-
 
 NS_IMETHODIMP
-nsResizerFrame::HandleEvent(nsPresContext* aPresContext, 
+nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
                             nsGUIEvent* aEvent,
                             nsEventStatus* aEventStatus)
 {
+  nsWeakFrame weakFrame(this);
   PRBool doDefault = PR_TRUE;
+
+  // what direction should we go in? 
+  Direction direction = GetDirection();
 
   switch (aEvent->message) {
 
-	 case NS_MOUSE_LEFT_BUTTON_DOWN:	{
-			 
-			 // we're tracking.
-			 mTrackingMouseMove = PR_TRUE;
-			 
-			 // start capture.		 
-			 aEvent->widget->CaptureMouse(PR_TRUE);
-			 CaptureMouseEvents(aPresContext,PR_TRUE);
+   case NS_MOUSE_BUTTON_DOWN: {
+       if (aEvent->eventStructType == NS_MOUSE_EVENT &&
+           static_cast<nsMouseEvent*>(aEvent)->button ==
+             nsMouseEvent::eLeftButton)
+       {
+
+         nsresult rv = NS_OK;
+
+         // ask the widget implementation to begin a resize drag if it can
+         rv = aEvent->widget->BeginResizeDrag(aEvent, 
+             direction.mHorizontal, direction.mVertical);
+
+         if (rv == NS_ERROR_NOT_IMPLEMENTED) {
+           // there's no native resize support, 
+           // we need to window resizing ourselves
+
+           // we're tracking.
+           mTrackingMouseMove = PR_TRUE;
+
+           // start capture.
+           aEvent->widget->CaptureMouse(PR_TRUE);
+           CaptureMouseEvents(aPresContext,PR_TRUE);
+
+           // remember current mouse coordinates.
+           mLastPoint = aEvent->refPoint;
+           aEvent->widget->GetScreenBounds(mWidgetRect);
+         }
+
+         *aEventStatus = nsEventStatus_eConsumeNoDefault;
+         doDefault = PR_FALSE;
+       }
+     }
+     break;
 
 
-			 
-			 // remember current mouse coordinates.
-			 mLastPoint = aEvent->refPoint;
-			 aEvent->widget->GetScreenBounds(mWidgetRect);
+   case NS_MOUSE_BUTTON_UP: {
 
-			 *aEventStatus = nsEventStatus_eConsumeNoDefault;
-			 doDefault = PR_FALSE;
-		 }
-		 break;
-		 
+       if(mTrackingMouseMove && aEvent->eventStructType == NS_MOUSE_EVENT &&
+          static_cast<nsMouseEvent*>(aEvent)->button ==
+            nsMouseEvent::eLeftButton)
+       {
+         // we're done tracking.
+         mTrackingMouseMove = PR_FALSE;
 
-	 case NS_MOUSE_LEFT_BUTTON_UP: {
+         // end capture
+         aEvent->widget->CaptureMouse(PR_FALSE);
+         CaptureMouseEvents(aPresContext,PR_FALSE);
 
-			 if(mTrackingMouseMove)
-			 {
-				 // we're done tracking.
-				 mTrackingMouseMove = PR_FALSE;
-				 
-				 // end capture
-				 aEvent->widget->CaptureMouse(PR_FALSE);				 
-				 CaptureMouseEvents(aPresContext,PR_FALSE);
+         *aEventStatus = nsEventStatus_eConsumeNoDefault;
+         doDefault = PR_FALSE;
+       }
+     }
+     break;
 
-				 *aEventStatus = nsEventStatus_eConsumeNoDefault;
-				 doDefault = PR_FALSE;
-			 }
-		 }
-		 break;
-
-	 case NS_MOUSE_MOVE: {
-			 if(mTrackingMouseMove)
-			 {				 				 
-			   // get the document and the global script object - should this be cached?
-			   nsIScriptGlobalObject *scriptGlobalObject =
-           aPresContext->PresShell()->GetDocument()->GetScriptGlobalObject();
-         NS_ENSURE_TRUE(scriptGlobalObject, NS_ERROR_FAILURE);
+   case NS_MOUSE_MOVE: {
+       if(mTrackingMouseMove)
+       {
+         // get the document and the window - should this be cached?
+         nsPIDOMWindow *domWindow =
+           aPresContext->PresShell()->GetDocument()->GetWindow();
+         NS_ENSURE_TRUE(domWindow, NS_ERROR_FAILURE);
 
          nsCOMPtr<nsIDocShellTreeItem> docShellAsItem =
-           do_QueryInterface(scriptGlobalObject->GetDocShell());
+           do_QueryInterface(domWindow->GetDocShell());
          NS_ENSURE_TRUE(docShellAsItem, NS_ERROR_FAILURE);
 
          nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
@@ -166,190 +159,101 @@ nsResizerFrame::HandleEvent(nsPresContext* aPresContext,
            return NS_OK;
          }
 
-				 nsPoint nsMoveBy(0,0),nsSizeBy(0,0);
-				 nsPoint nsMouseMove(aEvent->refPoint - mLastPoint);
-				 				 
+         PRInt32 x,y,cx,cy;
+         window->GetPositionAndSize(&x,&y,&cx,&cy);
+         nsIntPoint oldWindowTopLeft(x, y);
 
-				 switch(mDirection)
-				 {
-						case topleft:
-							nsMoveBy = nsMouseMove;
-							nsSizeBy -= nsMouseMove;
-							break;
-						case top:
-							nsMoveBy.y = nsMouseMove.y;
-							nsSizeBy.y = - nsMouseMove.y;
-							break;
-						case topright:
-							nsMoveBy.y = nsMouseMove.y;
-							nsSizeBy.x = nsMouseMove.x;
-							mLastPoint.x += nsMouseMove.x;
-							nsSizeBy.y = -nsMouseMove.y;
-							break;
-						case left:
-							nsMoveBy.x = nsMouseMove.x;
-							nsSizeBy.x = -nsMouseMove.x;
-							break;						
-						case right:
-							nsSizeBy.x = nsMouseMove.x;							
-							mLastPoint.x += nsMouseMove.x;
-							break;
-						case bottomleft:
-							nsMoveBy.x = nsMouseMove.x;
-							nsSizeBy.y = nsMouseMove.y;
-							nsSizeBy.x = -nsMouseMove.x;
-							mLastPoint.y += nsMouseMove.y;							
-							break;
-						case bottom:													
-							nsSizeBy.y = nsMouseMove.y;							
-							mLastPoint.y += nsMouseMove.y;
-							break;
-						case bottomright:							
-							nsSizeBy = nsMouseMove;		
-							mLastPoint += nsMouseMove;							
-							break;
-				 }
+         // both MouseMove and direction are negative when pointing to the
+         // top and left, and positive when pointing to the bottom and right
+         nsIntPoint mouseMove(aEvent->refPoint - mLastPoint);
+         
+         AdjustDimensions(&x, &cx, mouseMove.x, direction.mHorizontal);
+         AdjustDimensions(&y, &cy, mouseMove.y, direction.mVertical);
+
+         // remember the last mouse point, relative to the *new* window
+         mLastPoint = aEvent->refPoint + (oldWindowTopLeft - nsIntPoint(x, y));
+
+         window->SetPositionAndSize(x,y,cx,cy,PR_TRUE); // do the repaint.
+
+         *aEventStatus = nsEventStatus_eConsumeNoDefault;
+
+         doDefault = PR_FALSE;
+       }
+     }
+     break;
 
 
 
-				 PRInt32 x,y,cx,cy;
-				 window->GetPositionAndSize(&x,&y,&cx,&cy);
-
-				 x+=nsMoveBy.x;
-				 y+=nsMoveBy.y;
-				 cx+=nsSizeBy.x;
-				 cy+=nsSizeBy.y;
-
-				 window->SetPositionAndSize(x,y,cx,cy,PR_TRUE); // do the repaint.
-
-				 /*
-				 if(nsSizeBy.x || nsSizeBy.y)
-				 {
-					window->ResizeBy(nsSizeBy.x,nsSizeBy.y);
-				 }
-
-				 if(nsMoveBy.x || nsMoveBy.y)
-				 {
-					window->MoveBy(nsMoveBy.x,nsMoveBy.y);
-				 }	*/
-				 
-				 
-				 
-				 *aEventStatus = nsEventStatus_eConsumeNoDefault;				
-				 
-				 doDefault = PR_FALSE;
-			 }
-		 }
-		 break;
-
-
-
-    case NS_MOUSE_LEFT_CLICK:
-      MouseClicked(aPresContext, aEvent);
+    case NS_MOUSE_CLICK:
+      if (NS_IS_MOUSE_LEFT_CLICK(aEvent))
+      {
+        MouseClicked(aPresContext, aEvent);
+      }
       break;
   }
-  
-  if ( doDefault )  
-	  return nsTitleBarFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
+
+  if (doDefault && weakFrame.IsAlive())
+    return nsTitleBarFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
   else
-	  return NS_OK;
+    return NS_OK;
 }
 
-
-
-/* returns true if aText represented a valid direction 
+/* adjust the window position and size according to the mouse movement and
+ * the resizer direction
  */
-PRBool 
-nsResizerFrame::EvalDirection(nsAutoString& aText,eDirection& aDir)
+void
+nsResizerFrame::AdjustDimensions(PRInt32* aPos, PRInt32* aSize,
+                                 PRInt32 aMovement, PRInt8 aResizerDirection)
 {
-	PRBool aResult = PR_TRUE;
-	
-	if( aText.Equals( NS_LITERAL_STRING("topleft") ) )
-	{
-		aDir = topleft;
-	}
-	else if( aText.Equals( NS_LITERAL_STRING("top") ) )
-	{
-		aDir = top;
-	}
-	else if( aText.Equals( NS_LITERAL_STRING("topright") ) )
-	{
-		aDir = topright;
-	}
-	else if( aText.Equals( NS_LITERAL_STRING("left") ) )
-	{
-		aDir = left;
-	}	
-	else if( aText.Equals( NS_LITERAL_STRING("right") ) )
-	{
-		aDir = right;
-	}
-	else if( aText.Equals( NS_LITERAL_STRING("bottomleft") ) )
-	{
-		aDir = bottomleft;
-	}
-	else if( aText.Equals( NS_LITERAL_STRING("bottom") ) )
-	{
-		aDir = bottom;
-	}
-	else if( aText.Equals( NS_LITERAL_STRING("bottomright") ) )
-	{
-		aDir = bottomright;
-	}
-	else
-	{
-		aResult = PR_FALSE;
-	}
-	
-	return aResult;
-}
-
-
-/* Returns true if it was set.
- */
-PRBool
-nsResizerFrame::GetInitialDirection(eDirection& aDirection)
-{
- // see what kind of resizer we are.
-  nsAutoString value;
-
-  nsCOMPtr<nsIContent> content;
-  GetContentOf(getter_AddRefs(content));
-
-  if (!content)
-     return PR_FALSE;
-
-  if (NS_CONTENT_ATTR_HAS_VALUE == content->GetAttr(kNameSpaceID_None, nsXULAtoms::dir, value))
+  switch(aResizerDirection)
   {
-	   return EvalDirection(value,aDirection); 
-  }  
-
-  return PR_FALSE;
+    case -1: // only move the window when the direction is top and/or left
+      *aPos+= aMovement;
+    case 1: // falling through: the window is resized in both cases
+      *aSize+= aResizerDirection*aMovement;
+  }
 }
 
-
-NS_IMETHODIMP
-nsResizerFrame::AttributeChanged(nsIContent* aChild,
-                                 PRInt32 aNameSpaceID,
-                                 nsIAtom* aAttribute,
-                                 PRInt32 aModType)
+/* returns a Direction struct containing the horizontal and vertical direction
+ */
+nsResizerFrame::Direction
+nsResizerFrame::GetDirection()
 {
-    nsresult rv = nsTitleBarFrame::AttributeChanged(aChild, aNameSpaceID,
-                                                    aAttribute, aModType);
+  static const nsIContent::AttrValuesArray strings[] =
+    {&nsGkAtoms::topleft,    &nsGkAtoms::top,    &nsGkAtoms::topright,
+     &nsGkAtoms::left,                           &nsGkAtoms::right,
+     &nsGkAtoms::bottomleft, &nsGkAtoms::bottom, &nsGkAtoms::bottomright,
+                                                 &nsGkAtoms::bottomend,
+     nsnull};
 
-    if (aAttribute == nsXULAtoms::dir ) 
-	 {
-	 
-        GetInitialDirection(mDirection);
-    }
-  
-  return rv;
+  static const Direction directions[] =
+    {{-1, -1}, {0, -1}, {1, -1},
+     {-1,  0},          {1,  0},
+     {-1,  1}, {0,  1}, {1,  1},
+                        {1,  1}
+    };
+
+  if (!GetContent())
+    return directions[0]; // default: topleft
+
+  PRInt32 index = GetContent()->FindAttrValueIn(kNameSpaceID_None,
+                                                nsGkAtoms::dir,
+                                                strings, eCaseMatters);
+  if(index < 0)
+    return directions[0]; // default: topleft
+  else if (index >= 8 && GetStyleVisibility()->mDirection == NS_STYLE_DIRECTION_RTL) {
+    // Directions 8 and higher are RTL-aware directions and should reverse the
+    // horizontal component if RTL.
+    Direction direction = directions[index];
+    direction.mHorizontal *= -1;
+    return direction;
+  }
+  else
+    return directions[index];
 }
 
-
-
-void 
-nsResizerFrame::MouseClicked(nsPresContext* aPresContext, nsGUIEvent *aEvent) 
+void
+nsResizerFrame::MouseClicked(nsPresContext* aPresContext, nsGUIEvent *aEvent)
 {
   // Execute the oncommand event handler.
   nsEventStatus status = nsEventStatus_eIgnore;
@@ -357,6 +261,5 @@ nsResizerFrame::MouseClicked(nsPresContext* aPresContext, nsGUIEvent *aEvent)
   nsXULCommandEvent event(aEvent ? NS_IS_TRUSTED_EVENT(aEvent) : PR_FALSE,
                           NS_XUL_COMMAND, nsnull);
 
-  mContent->HandleDOMEvent(aPresContext, &event, nsnull, NS_EVENT_FLAG_INIT,
-                           &status);
+  nsEventDispatcher::Dispatch(mContent, aPresContext, &event, nsnull, &status);
 }

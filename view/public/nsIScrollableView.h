@@ -39,18 +39,15 @@
 #define nsIScrollableView_h___
 
 #include "nsCoord.h"
-#include "nsIViewManager.h"
-#include "nsIView.h"
 
 class nsIView;
 class nsIScrollPositionListener;
-struct nsMargin;
 struct nsSize;
 
 // IID for the nsIScrollableView interface
 #define NS_ISCROLLABLEVIEW_IID    \
-{ 0x36083bcf, 0x61d7, 0x4c24, \
-{ 0xa6, 0xd4, 0x2f, 0x05, 0xba, 0x2c, 0x1b, 0x51 } }
+{ 0x00bba69f, 0xbbef, 0x4725, \
+{ 0x8b, 0xee, 0xec, 0xfe, 0x82, 0xf7, 0xbd, 0xb0 } }
 
 /**
  * A scrolling view allows an arbitrary view that you supply to be scrolled
@@ -64,7 +61,7 @@ struct nsSize;
  */
 class nsIScrollableView {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_ISCROLLABLEVIEW_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ISCROLLABLEVIEW_IID)
 
   /**
    * Create the controls used to allow scrolling. Call this method
@@ -103,7 +100,7 @@ public:
    * legal. Updates the display based on aUpdateFlags.
    * @param aX left edge to scroll to
    * @param aY top edge to scroll to
-   * @param aUpdateFlags passed onto nsIViewManager->UpdateView()
+   * @param aUpdateFlags indicate smooth or async scrolling
    * @return error status
    */
   NS_IMETHOD ScrollTo(nscoord aX, nscoord aY, PRUint32 aUpdateFlags) = 0;
@@ -145,9 +142,11 @@ public:
    * Prevents scrolling off the end of the view.
    * @param aNumLinesX number of lines to scroll the view horizontally
    * @param aNumLinesY number of lines to scroll the view vertically
+   * @param aUpdateFlags indicate smooth or async scrolling
    * @return error status
    */
-  NS_IMETHOD ScrollByLines(PRInt32 aNumLinesX, PRInt32 aNumLinexY) = 0;
+  NS_IMETHOD ScrollByLines(PRInt32 aNumLinesX, PRInt32 aNumLinexY,
+                           PRUint32 aUpdateFlags = 0) = 0;
 
   /**
    * Get the desired size of a page scroll in each dimension.
@@ -163,17 +162,32 @@ public:
    * Prevents scrolling off the end of the view.
    * @param aNumPagesX number of pages to scroll the view horizontally
    * @param aNumPagesY number of pages to scroll the view vertically
+   * @param aUpdateFlags indicate smooth or async scrolling
    * @return error status
    */
-  NS_IMETHOD ScrollByPages(PRInt32 aNumPagesX, PRInt32 aNumPagesY) = 0;
+  NS_IMETHOD ScrollByPages(PRInt32 aNumPagesX, PRInt32 aNumPagesY,
+                           PRUint32 aUpdateFlags = 0) = 0;
 
   /**
    * Scroll the view to the top or bottom of the document depending
    * on the value of aTop.
    * @param aForward indicates whether to scroll to top or bottom
+   * @param aUpdateFlags indicate smooth or async scrolling
    * @return error status
    */
-  NS_IMETHOD ScrollByWhole(PRBool aTop) = 0;
+  NS_IMETHOD ScrollByWhole(PRBool aTop, PRUint32 aUpdateFlags = 0) = 0;
+
+  /**
+   * Scroll the view left or right by aNumLinesX pixels.  Positive values move 
+   * right.  Scroll the view up or down by aNumLinesY pixels.  Positive values
+   * move down.  Prevents scrolling off the end of the view.
+   * @param aNumLinesX number of lines to scroll the view horizontally
+   * @param aNumLinesY number of lines to scroll the view vertically
+   * @param aUpdateFlags indicate smooth or async scrolling
+   * @return error status
+   */
+  NS_IMETHOD ScrollByPixels(PRInt32 aNumPixelsX, PRInt32 aNumPixelsY,
+                            PRUint32 aUpdateFlags = 0) = 0;
 
   /**
    * Check the view can scroll from current offset.
@@ -200,33 +214,10 @@ public:
   NS_IMETHOD RemoveScrollPositionListener(nsIScrollPositionListener* aListener) = 0;
 };
 
+NS_DEFINE_STATIC_IID_ACCESSOR(nsIScrollableView, NS_ISCROLLABLEVIEW_IID)
+
 //regardless of the transparency or opacity settings
 //for this view, it can always be scrolled via a blit
 #define NS_SCROLL_PROPERTY_ALWAYS_BLIT    0x0001
-
-//regardless of the transparency or opacity settings
-//for this view, it can never be scrolled via a blit
-#define NS_SCROLL_PROPERTY_NEVER_BLIT     0x0002
-
-// {A1985DF6-047A-4DD7-A21A-C72559470323}
-#define NS_ISCROLLABLEVIEW_MOZILLA_1_8_BRANCH_IID \
-{ 0xA1985DF6, 0x047A, 0x4DD7, \
-{ 0xA2, 0x1A, 0xC7, 0x25, 0x59, 0x47, 0x03, 0x23 } }
-
-class nsIScrollableView_MOZILLA_1_8_BRANCH : public nsIScrollableView
-{
-public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_ISCROLLABLEVIEW_MOZILLA_1_8_BRANCH_IID)
-
-  /**
-   * Scroll the view left or right by aNumLinesX pixels.  Positive values move 
-   * right.  Scroll the view up or down by aNumLinesY pixels.  Positive values
-   * move down.  Prevents scrolling off the end of the view.
-   * @param aNumLinesX number of lines to scroll the view horizontally
-   * @param aNumLinesY number of lines to scroll the view vertically
-   * @return error status
-   */
-  NS_IMETHOD ScrollByPixels(PRInt32 aNumPixelsX, PRInt32 aNumPixelsY) = 0;
-};
 
 #endif

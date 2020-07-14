@@ -60,11 +60,10 @@
 #include "nsIWindowWatcher.h"
 #include "jsapi.h"
 #include "nsReadableUtils.h"
-#include "nsICloseAllWindows.h"
+#include "nsIObserverService.h"
 #include "nsIPrefService.h"
-#ifdef MOZ_THUNDERBIRD
 #include "nsICommandLineRunner.h"
-#endif
+#include "nsDirectoryServiceDefs.h"
 
 #include "nsAEEventHandling.h"
 #include "nsXPFEComponentsCID.h"
@@ -169,8 +168,12 @@ nsresult nsMacCommandLine::Initialize(int& argc, char**& argv)
   
   // Here, we may actually get useful args.
   // Copy them first to mArgv.
-  for (int arg = 0; arg < argc; arg++)
-    AddToCommandLine(argv[arg]);
+  for (int arg = 0; arg < argc; arg++) {
+    char* flag = argv[arg];
+    // don't pass on the psn (Process Serial Number) flag from the OS
+    if (strncmp(flag, "-psn_", 5) != 0)
+      AddToCommandLine(flag);
+  }
 
   // Set up AppleEvent handling.
   OSErr err = CreateAEHandlerClasses(false);
@@ -187,9 +190,6 @@ nsresult nsMacCommandLine::Initialize(int& argc, char**& argv)
   // Spin a native event loop to allow AE handlers for waiting events to be
   // called
   ProcessAppleEvents();
-
-  if (GetCurrentKeyModifiers() & optionKey)
-    AddToCommandLine("-p");
 
   // we've started up now
   mStartedUp = PR_TRUE;
@@ -294,10 +294,10 @@ nsresult nsMacCommandLine::AddToCommandLine(const char* inOptionString, const FS
 
   ::CFRelease(url);
 
-  AddToCommandLine(inOptionString);
+  AddToCommandLine(inOptionString);  
   AddToCommandLine((char*)buffer);
 
-   return NS_OK;
+  return NS_OK;
 }
 
 //----------------------------------------------------------------------------------------
@@ -359,39 +359,33 @@ OSErr nsMacCommandLine::HandleOpenOneDoc(const FSSpec& inFileSpec, OSType inFile
     // add a command-line "-url" argument to the global list. This means that if
     // the app is opened with documents on the mac, they'll be handled the same
     // way as if they had been typed on the command line in Unix or DOS.
-    return AddToCommandLine("-url", inFileSpec);
+    rv = AddToCommandLine("-url", inFileSpec);
+    return (NS_SUCCEEDED(rv)) ? noErr : errAEEventNotHandled;
   }
 
-  // Final case: we're not just starting up. How do we handle this?
-  nsCAutoString specBuf;
-  rv = NS_GetURLSpecFromFile(inFile, specBuf);
-  if (NS_FAILED(rv))
-    return errAEEventNotHandled;
-  
-#ifdef MOZ_THUNDERBIRD
+  // Final case: we're not just starting up, use the arg as a -file <arg>
   nsCOMPtr<nsICommandLineRunner> cmdLine
     (do_CreateInstance("@mozilla.org/toolkit/command-line;1"));
   if (!cmdLine) {
     NS_ERROR("Couldn't create command line!");
     return errAEEventNotHandled;
   }
-  nsCOMPtr<nsILocalFile> workingDir;
   nsCString filePath;
   rv = inFile->GetNativePath(filePath);
   if (NS_FAILED(rv))
     return errAEEventNotHandled;
-  char *urlPtr = ToNewCString(filePath);
-  char **argv = new char *[2];
-  argv[0] = nsnull;
-  argv[1] = urlPtr;
-  rv = cmdLine->Init(2, argv, workingDir, nsICommandLine::STATE_REMOTE_EXPLICIT);
-  nsMemory::Free(urlPtr);
-  delete [] argv;
+
+  nsCOMPtr<nsIFile> workingDir;
+  rv = NS_GetSpecialDirectory(NS_OS_CURRENT_WORKING_DIR, getter_AddRefs(workingDir));
   if (NS_FAILED(rv))
     return errAEEventNotHandled;
-  return cmdLine->Run();
-#endif // MOZ_THUNDERBIRD  
-  return OpenURL(specBuf.get());
+
+  const char *argv[3] = {nsnull, "-file", filePath.get()};
+  rv = cmdLine->Init(3, const_cast<char**>(argv), workingDir, nsICommandLine::STATE_REMOTE_EXPLICIT);
+  if (NS_FAILED(rv))
+    return errAEEventNotHandled;
+  rv = cmdLine->Run();
+  return (NS_SUCCEEDED(rv)) ? noErr : errAEEventNotHandled;
 }
 
 OSErr nsMacCommandLine::OpenURL(const char* aURL)
@@ -409,7 +403,7 @@ OSErr nsMacCommandLine::OpenURL(const char* aURL)
     browserURL.Assign("chrome://navigator/content/navigator.xul");
   }
      
-  rv = OpenWindow(browserURL.get(), NS_ConvertASCIItoUCS2(aURL).get());
+  rv = OpenWindow(browserURL.get(), NS_ConvertASCIItoUTF16(aURL).get());
   if (NS_FAILED(rv))
     return errAEEventNotHandled;
     
@@ -478,16 +472,26 @@ OSErr nsMacCommandLine::Quit(TAskSave askSave)
 {
   nsresult rv;
   
-  nsCOMPtr<nsICloseAllWindows> closer =
-           do_CreateInstance("@mozilla.org/appshell/closeallwindows;1", &rv);
+  nsCOMPtr<nsIObserverService> obsServ =
+           do_GetService("@mozilla.org/observer-service;1", &rv);
   if (NS_FAILED(rv))
     return errAEEventNotHandled;
 
-  PRBool doQuit;
-  rv = closer->CloseAll(askSave != eSaveNo, &doQuit);
+  nsCOMPtr<nsISupportsPRBool> cancelQuit =
+           do_CreateInstance(NS_SUPPORTS_PRBOOL_CONTRACTID, &rv);
   if (NS_FAILED(rv))
     return errAEEventNotHandled;
-  if (!doQuit)
+
+  cancelQuit->SetData(PR_FALSE);
+  if (askSave != eSaveNo) {
+    rv = obsServ->NotifyObservers(cancelQuit, "quit-application-requested", nsnull);
+    if (NS_FAILED(rv))
+      return errAEEventNotHandled;
+  }
+
+  PRBool abortQuit;
+  cancelQuit->GetData(&abortQuit);
+  if (abortQuit)
     return userCanceledErr;
 
   nsCOMPtr<nsIAppStartup> appStartup =

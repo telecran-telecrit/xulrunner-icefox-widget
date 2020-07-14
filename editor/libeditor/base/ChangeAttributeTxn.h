@@ -58,8 +58,6 @@ public:
 
   static const nsIID& GetCID() { static const nsIID iid = CHANGE_ATTRIBUTE_TXN_CID; return iid; }
 
-  virtual ~ChangeAttributeTxn();
-
   /** Initialize the transaction.
     * @param aEditor the object providing core editing operations
     * @param aNode   the node whose attribute will be changed
@@ -77,16 +75,12 @@ private:
   ChangeAttributeTxn();
 
 public:
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ChangeAttributeTxn, EditTxn)
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void** aInstancePtr);
 
-  NS_IMETHOD DoTransaction(void);
+  NS_DECL_EDITTXN
 
-  NS_IMETHOD UndoTransaction(void);
-
-  NS_IMETHOD RedoTransaction(void);
-
-  NS_IMETHOD Merge(nsITransaction *aTransaction, PRBool *aDidMerge);
-
-  NS_IMETHOD GetTxnDescription(nsAString& aTxnDescription);
+  NS_IMETHOD RedoTransaction();
 
 protected:
 

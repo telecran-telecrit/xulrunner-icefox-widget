@@ -73,7 +73,9 @@ var nsTransferable = {
             }
           else 
             {
-              // non-string data. TBD!
+              // non-string data.
+              supports = currData.supports;
+              length = 0; // kFlavorHasDataProvider
             }
           trans.setTransferData(currFlavour, supports, length * 2);
         }
@@ -265,17 +267,15 @@ function FlavourData(aData, aLength, aFlavour)
 FlavourData.prototype = {
   get data ()
   {
-    if (this.flavour && 
-        this.flavour.dataIIDKey != "nsISupportsString" )
+    if (this.flavour &&
+        this.flavour.dataIIDKey != "nsISupportsString")
       return this.supports.QueryInterface(Components.interfaces[this.flavour.dataIIDKey]); 
-    else {
-      var unicode = this.supports.QueryInterface(Components.interfaces.nsISupportsString);
-      if (unicode) 
-        return unicode.data.substring(0, this.contentLength/2);
+
+    var supports = this.supports;
+    if (supports instanceof Components.interfaces.nsISupportsString)
+      return supports.data.substring(0, this.contentLength/2);
      
-      return this.supports;
-    }
-    return "";
+    return supports;
   }
 }
 
@@ -294,9 +294,11 @@ var transferUtils = {
   {
     switch (flavour) {
       case "text/unicode":
-        return aData;
+      case "text/plain":
+      case "text/x-moz-text-internal":
+        return aData.replace(/^\s+|\s+$/g, "");
       case "text/x-moz-url":
-        return aData.toString().split("\n")[0];
+        return ((aData instanceof Components.interfaces.nsISupportsString) ? aData.toString() : aData).split("\n")[0];
       case "application/x-moz-file":
         var ioService = Components.classes["@mozilla.org/network/io-service;1"]
                                   .getService(Components.interfaces.nsIIOService);
@@ -316,7 +318,7 @@ var transferUtils = {
  * Use: map the handler functions to the 'ondraggesture', 'ondragover' and
  *   'ondragdrop' event handlers on your XML element, e.g.                   
  *   <xmlelement ondraggesture="nsDragAndDrop.startDrag(event, observer);"   
- *               ondragover="nsDragAndDrop.startDrag(event, observer);"      
+ *               ondragover="nsDragAndDrop.dragOver(event, observer);"      
  *               ondragdrop="nsDragAndDrop.drop(event, observer);"/>         
  *                                                                           
  *   You need to create an observer js object with the following member      
@@ -379,61 +381,33 @@ var nsDragAndDrop = {
 
       if (!transferData.data) return;
       transferData = transferData.data;
-      
-      var transArray = Components.classes["@mozilla.org/supports-array;1"]
-                                 .createInstance(Components.interfaces.nsISupportsArray);
 
-      var region = null;
-      if (aEvent.originalTarget.localName == "treechildren") {
-        // let's build the drag region
-        var tree = aEvent.originalTarget.parentNode;
-        try {
-          region = Components.classes["@mozilla.org/gfx/region;1"].createInstance(Components.interfaces.nsIScriptableRegion);
-          region.init();
-          var obo = tree.treeBoxObject;
-          var bo = obo.treeBody.boxObject;
-          var sel= obo.view.selection;
-
-          var rowX = bo.x;
-          var rowY = bo.y;
-          var rowHeight = obo.rowHeight;
-          var rowWidth = bo.width;
-
-          //add a rectangle for each visible selected row
-          for (var i = obo.getFirstVisibleRow(); i <= obo.getLastVisibleRow(); i ++)
-          {
-            if (sel.isSelected(i))
-              region.unionRect(rowX, rowY, rowWidth, rowHeight);
-            rowY = rowY + rowHeight;
-          }
-      
-          //and finally, clip the result to be sure we don't spill over...
-          region.intersectRect(bo.x, bo.y, bo.width, bo.height);
-        } catch(ex) {
-          dump("Error while building selection region: " + ex + "\n");
-          region = null;
-        }
-      }
-
+      var dt = aEvent.dataTransfer;
       var count = 0;
-      do 
-        {
-          var trans = nsTransferable.set(transferData._XferID == "TransferData" 
+      do {
+        var tds = transferData._XferID == "TransferData" 
                                          ? transferData 
-                                         : transferData.dataList[count++]);
-          transArray.AppendElement(trans.QueryInterface(Components.interfaces.nsISupports));
+                                         : transferData.dataList[count]
+        for (var i = 0; i < tds.dataList.length; ++i) 
+        {
+          var currData = tds.dataList[i];
+          var currFlavour = currData.flavour.contentType;
+          var value = currData.supports;
+          if (value instanceof Components.interfaces.nsISupportsString)
+            value = value.toString();
+          dt.mozSetDataAt(currFlavour, value, count);
         }
+
+        count++;
+      }
       while (transferData._XferID == "TransferDataSet" && 
              count < transferData.dataList.length);
-      
-      try {
-        this.mDragService.invokeDragSession(aEvent.target, transArray, region, dragAction.action);
-      }
-      catch(ex) {
-        // this could be because the user pressed escape to
-        // cancel the drag. even if it's not, there's not much
-        // we can do, so be silent.
-      }
+
+      dt.effectAllowed = "all";
+      // a drag targeted at a tree should instead use the treechildren so that
+      // the current selection is used as the drag feedback
+      dt.addElement(aEvent.originalTarget.localName == "treechildren" ?
+                    aEvent.originalTarget : aEvent.target);
       aEvent.stopPropagation();
     },
 
@@ -463,6 +437,7 @@ var nsDragAndDrop = {
                                            flavourSet.flavourTable[flavour], 
                                            this.mDragSession);
               aEvent.stopPropagation();
+              aEvent.preventDefault();
               break;
             }
         }
@@ -487,14 +462,39 @@ var nsDragAndDrop = {
         return;
       if (!this.checkCanDrop(aEvent, aDragDropObserver))
         return;  
-      if (this.mDragSession.canDrop) {
-        var flavourSet = aDragDropObserver.getSupportedFlavours();
-        var transferData = nsTransferable.get(flavourSet, this.getDragData, true);
-        // hand over to the client to respond to dropped data
-        var multiple = "canHandleMultipleItems" in aDragDropObserver && aDragDropObserver.canHandleMultipleItems;
-        var dropData = multiple ? transferData : transferData.first.first;
-        aDragDropObserver.onDrop(aEvent, dropData, this.mDragSession);
+
+      var flavourSet = aDragDropObserver.getSupportedFlavours();
+
+      var dt = aEvent.dataTransfer;
+      var dataArray = [];
+      var count = dt.mozItemCount;
+      for (var i = 0; i < count; ++i) {
+        var types = dt.mozTypesAt(i);
+        for (var j = 0; j < flavourSet.flavours.length; j++) {
+          var type = flavourSet.flavours[j].contentType;
+          // dataTransfer uses text/plain but older code used text/unicode, so
+          // switch this for compatibility
+          var modtype = (type == "text/unicode") ? "text/plain" : type;
+          if (Array.indexOf(types, modtype) >= 0) {
+            var data = dt.mozGetDataAt(modtype, i);
+            if (data) {
+              // Non-strings need some non-zero value used for their data length.
+              const kNonStringDataLength = 4;
+
+              var length = (typeof data == "string") ? data.length : kNonStringDataLength;
+              dataArray[i] = FlavourToXfer(data, length, flavourSet.flavourTable[type]);
+              break;
+            }
+          }
+        }
       }
+
+      var transferData = new TransferDataSet(dataArray)
+
+      // hand over to the client to respond to dropped data
+      var multiple = "canHandleMultipleItems" in aDragDropObserver && aDragDropObserver.canHandleMultipleItems;
+      var dropData = multiple ? transferData : transferData.first.first;
+      aDragDropObserver.onDrop(aEvent, dropData, this.mDragSession);
       aEvent.stopPropagation();
     },
 
@@ -535,31 +535,6 @@ var nsDragAndDrop = {
       if ("onDragEnter" in aDragDropObserver)
         aDragDropObserver.onDragEnter(aEvent, this.mDragSession);
     },  
-    
-  /** 
-   * nsISupportsArray getDragData (Object aFlavourList)
-   *
-   * Creates a nsISupportsArray of all droppable items for the given
-   * set of supported flavours.
-   * 
-   * @param FlavourSet aFlavourSet
-   *        formatted flavour list.
-   **/  
-  getDragData: function (aFlavourSet)
-    {
-      var supportsArray = Components.classes["@mozilla.org/supports-array;1"]
-                                    .createInstance(Components.interfaces.nsISupportsArray);
-
-      for (var i = 0; i < nsDragAndDrop.mDragSession.numDropItems; ++i)
-        {
-          var trans = nsTransferable.createTransferable();
-          for (var j = 0; j < aFlavourSet.flavours.length; ++j)
-            trans.addDataFlavor(aFlavourSet.flavours[j].contentType);
-          nsDragAndDrop.mDragSession.getData(trans, i);
-          supportsArray.AppendElement(trans);
-        }
-      return supportsArray;
-    },
 
   /** 
    * Boolean checkCanDrop (DOMEvent aEvent, Object aDragDropObserver) ;
@@ -583,6 +558,62 @@ var nsDragAndDrop = {
       if ("canDrop" in aDragDropObserver)
         this.mDragSession.canDrop &= aDragDropObserver.canDrop(aEvent, this.mDragSession);
       return true;
-    } 
+    },
+
+  /**
+   * Do a security check for drag n' drop. Make sure the source document
+   * can load the dragged link.
+   *
+   * @param DOMEvent aEvent
+   *        the DOM event fired by leaving the element
+   * @param Object aDragDropObserver
+   *        javascript object of format described above that specifies
+   *        the way in which the element responds to drag events.
+   * @param String aDraggedText
+   *        the text being dragged
+   **/
+  dragDropSecurityCheck: function (aEvent, aDragSession, aDraggedText)
+    {
+      // Strip leading and trailing whitespace, then try to create a
+      // URI from the dropped string. If that succeeds, we're
+      // dropping a URI and we need to do a security check to make
+      // sure the source document can load the dropped URI. We don't
+      // so much care about creating the real URI here
+      // (i.e. encoding differences etc don't matter), we just want
+      // to know if aDraggedText really is a URI.
+
+      aDraggedText = aDraggedText.replace(/^\s*|\s*$/g, '');
+
+      var uri;
+
+      try {
+        uri = Components.classes["@mozilla.org/network/io-service;1"]
+                        .getService(Components.interfaces.nsIIOService)
+                        .newURI(aDraggedText, null, null);
+      } catch (e) {
+      }
+
+      if (!uri)
+        return;
+
+      // aDraggedText is a URI, do the security check.
+      const nsIScriptSecurityManager = Components.interfaces
+                                                 .nsIScriptSecurityManager;
+      var secMan = Components.classes["@mozilla.org/scriptsecuritymanager;1"]
+                             .getService(nsIScriptSecurityManager);
+
+      var sourceDoc = aDragSession.sourceDocument;
+      var sourceURI = sourceDoc ? sourceDoc.documentURI : "file:///";
+
+      try {
+        secMan.checkLoadURIStr(sourceURI, aDraggedText,
+                               nsIScriptSecurityManager.STANDARD);
+      } catch (e) {
+        // Stop event propagation right here.
+        aEvent.stopPropagation();
+
+        throw "Drop of " + aDraggedText + " denied.";
+      }
+    }
 };
 

@@ -37,7 +37,7 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: sslsecur.c,v 1.34.2.2 2006/04/23 03:05:42 nelson%bolyard.com Exp $ */
+/* $Id: sslsecur.c,v 1.43.2.2 2010/08/26 18:06:55 wtc%google.com Exp $ */
 #include "cert.h"
 #include "secitem.h"
 #include "keyhi.h"
@@ -46,6 +46,8 @@
 #include "sslproto.h"
 #include "secoid.h"	/* for SECOID_GetALgorithmTag */
 #include "pk11func.h"	/* for PK11_GenerateRandom */
+#include "nss.h"        /* for NSS_RegisterShutdown */
+#include "prinit.h"     /* for PR_CallOnceWithArg */
 
 #define MAX_BLOCK_CYPHER_SIZE	32
 
@@ -184,6 +186,29 @@ ssl_SetAlwaysBlock(sslSocket *ss)
 	ss->handshake = AlwaysBlock;
 	ss->nextHandshake = 0;
     }
+}
+
+static SECStatus 
+ssl_SetTimeout(PRFileDesc *fd, PRIntervalTime timeout)
+{
+    sslSocket *ss;
+
+    ss = ssl_FindSocket(fd);
+    if (!ss) {
+	SSL_DBG(("%d: SSL[%d]: bad socket in SetTimeout", SSL_GETPID(), fd));
+	return SECFailure;
+    }
+    SSL_LOCK_READER(ss);
+    ss->rTimeout = timeout;
+    if (ss->opt.fdx) {
+        SSL_LOCK_WRITER(ss);
+    }
+    ss->wTimeout = timeout;
+    if (ss->opt.fdx) {
+        SSL_UNLOCK_WRITER(ss);
+    }
+    SSL_UNLOCK_READER(ss);
+    return SECSuccess;
 }
 
 /* Acquires and releases HandshakeLock.
@@ -433,6 +458,20 @@ sslBuffer_Grow(sslBuffer *b, unsigned int newLen)
     return SECSuccess;
 }
 
+SECStatus 
+sslBuffer_Append(sslBuffer *b, const void * data, unsigned int len)
+{
+    unsigned int newLen = b->len + len;
+    SECStatus rv;
+
+    rv = sslBuffer_Grow(b, newLen);
+    if (rv != SECSuccess)
+    	return rv;
+    PORT_Memcpy(b->buf + b->len, data, len);
+    b->len += len;
+    return SECSuccess;
+}
+
 /*
 ** Save away write data that is trying to be written before the security
 ** handshake has been completed. When the handshake is completed, we will
@@ -442,22 +481,13 @@ sslBuffer_Grow(sslBuffer *b, unsigned int newLen)
 SECStatus 
 ssl_SaveWriteData(sslSocket *ss, const void *data, unsigned int len)
 {
-    unsigned int newlen;
     SECStatus    rv;
 
     PORT_Assert( ss->opt.noLocks || ssl_HaveXmitBufLock(ss) );
-    newlen = ss->pendingBuf.len + len;
-    if (newlen > ss->pendingBuf.space) {
-	rv = sslBuffer_Grow(&ss->pendingBuf, newlen);
-	if (rv) {
-	    return rv;
-	}
-    }
-    SSL_TRC(5, ("%d: SSL[%d]: saving %d bytes of data (%d total saved so far)",
-		 SSL_GETPID(), ss->fd, len, newlen));
-    PORT_Memcpy(ss->pendingBuf.buf + ss->pendingBuf.len, data, len);
-    ss->pendingBuf.len = newlen;
-    return SECSuccess;
+    rv = sslBuffer_Append(&ss->pendingBuf, data, len);
+    SSL_TRC(5, ("%d: SSL[%d]: saving %u bytes of data (%u total saved so far)",
+		 SSL_GETPID(), ss->fd, len, ss->pendingBuf.len));
+    return rv;
 }
 
 /*
@@ -616,6 +646,105 @@ ssl_FindCertKEAType(CERTCertificate * cert)
 
 }
 
+static const PRCallOnceType pristineCallOnce;
+static       PRCallOnceType setupServerCAListOnce;
+
+static SECStatus serverCAListShutdown(void* appData, void* nssData)
+{
+    PORT_Assert(ssl3_server_ca_list);
+    if (ssl3_server_ca_list) {
+	CERT_FreeDistNames(ssl3_server_ca_list);
+	ssl3_server_ca_list = NULL;
+    }
+    setupServerCAListOnce = pristineCallOnce;
+    return SECSuccess;
+}
+
+static PRStatus serverCAListSetup(void *arg)
+{
+    CERTCertDBHandle *dbHandle = (CERTCertDBHandle *)arg;
+    SECStatus rv = NSS_RegisterShutdown(serverCAListShutdown, NULL);
+    PORT_Assert(SECSuccess == rv);
+    if (SECSuccess == rv) {
+	ssl3_server_ca_list = CERT_GetSSLCACerts(dbHandle);
+	return PR_SUCCESS;
+    }
+    return PR_FAILURE;
+}
+
+SECStatus
+ssl_ConfigSecureServer(sslSocket *ss, CERTCertificate *cert,
+                       CERTCertificateList *certChain,
+                       ssl3KeyPair *keyPair, SSLKEAType kea)
+{
+    CERTCertificateList *localCertChain = NULL;
+    sslServerCerts  *sc = ss->serverCerts + kea;
+
+    /* load the server certificate */
+    if (sc->serverCert != NULL) {
+	CERT_DestroyCertificate(sc->serverCert);
+    	sc->serverCert = NULL;
+        sc->serverKeyBits = 0;
+    }
+    /* load the server cert chain */
+    if (sc->serverCertChain != NULL) {
+	CERT_DestroyCertificateList(sc->serverCertChain);
+    	sc->serverCertChain = NULL;
+    }
+    if (cert) {
+        sc->serverCert = CERT_DupCertificate(cert);
+        /* get the size of the cert's public key, and remember it */
+        sc->serverKeyBits = SECKEY_PublicKeyStrengthInBits(keyPair->pubKey);
+        if (!certChain) {
+            localCertChain =
+                CERT_CertChainFromCert(sc->serverCert, certUsageSSLServer,
+                                       PR_TRUE);
+            if (!localCertChain)
+                goto loser;
+        }
+        sc->serverCertChain = (certChain) ? CERT_DupCertList(certChain) :
+                                            localCertChain;
+        if (!sc->serverCertChain) {
+            goto loser;
+        }
+        localCertChain = NULL;      /* consumed */
+    }
+
+    /* get keyPair */
+    if (sc->serverKeyPair != NULL) {
+        ssl3_FreeKeyPair(sc->serverKeyPair);
+        sc->serverKeyPair = NULL;
+    }
+    if (keyPair) {
+        SECKEY_CacheStaticFlags(keyPair->privKey);
+        sc->serverKeyPair = ssl3_GetKeyPairRef(keyPair);
+    }
+    if (kea == kt_rsa && cert && sc->serverKeyBits > 512 &&
+        !ss->opt.noStepDown && !ss->stepDownKeyPair) { 
+        if (ssl3_CreateRSAStepDownKeys(ss) != SECSuccess) {
+            goto loser;
+        }
+    }
+    return SECSuccess;
+
+loser:
+    if (localCertChain) {
+        CERT_DestroyCertificateList(localCertChain);
+    }
+    if (sc->serverCert != NULL) {
+	CERT_DestroyCertificate(sc->serverCert);
+	sc->serverCert = NULL;
+    }
+    if (sc->serverCertChain != NULL) {
+	CERT_DestroyCertificateList(sc->serverCertChain);
+	sc->serverCertChain = NULL;
+    }
+    if (sc->serverKeyPair != NULL) {
+	ssl3_FreeKeyPair(sc->serverKeyPair);
+	sc->serverKeyPair = NULL;
+    }
+    return SECFailure;
+}
 
 /* XXX need to protect the data that gets changed here.!! */
 
@@ -623,10 +752,10 @@ SECStatus
 SSL_ConfigSecureServer(PRFileDesc *fd, CERTCertificate *cert,
 		       SECKEYPrivateKey *key, SSL3KEAType kea)
 {
-    SECStatus rv;
     sslSocket *ss;
-    sslServerCerts  *sc;
-    SECKEYPublicKey * pubKey = NULL;
+    SECKEYPublicKey *pubKey = NULL;
+    ssl3KeyPair *keyPair = NULL;
+    SECStatus rv = SECFailure;
 
     ss = ssl_FindSocket(fd);
     if (!ss) {
@@ -652,41 +781,13 @@ SSL_ConfigSecureServer(PRFileDesc *fd, CERTCertificate *cert,
 	return SECFailure;
     }
 
-    sc = ss->serverCerts + kea;
-    /* load the server certificate */
-    if (sc->serverCert != NULL) {
-	CERT_DestroyCertificate(sc->serverCert);
-    	sc->serverCert = NULL;
-    }
     if (cert) {
-	sc->serverCert = CERT_DupCertificate(cert);
-	if (!sc->serverCert)
-	    goto loser;
     	/* get the size of the cert's public key, and remember it */
 	pubKey = CERT_ExtractPublicKey(cert);
 	if (!pubKey) 
-	    goto loser;
-	sc->serverKeyBits = SECKEY_PublicKeyStrengthInBits(pubKey);
+            return SECFailure;
     }
 
-
-    /* load the server cert chain */
-    if (sc->serverCertChain != NULL) {
-	CERT_DestroyCertificateList(sc->serverCertChain);
-    	sc->serverCertChain = NULL;
-    }
-    if (cert) {
-	sc->serverCertChain = CERT_CertChainFromCert(
-			    sc->serverCert, certUsageSSLServer, PR_TRUE);
-	if (sc->serverCertChain == NULL)
-	     goto loser;
-    }
-
-    /* load the private key */
-    if (sc->serverKeyPair != NULL) {
-        ssl3_FreeKeyPair(sc->serverKeyPair);
-        sc->serverKeyPair = NULL;
-    }
     if (key) {
 	SECKEYPrivateKey * keyCopy	= NULL;
 	CK_MECHANISM_TYPE  keyMech	= CKM_INVALID_MECHANISM;
@@ -714,50 +815,34 @@ SSL_ConfigSecureServer(PRFileDesc *fd, CERTCertificate *cert,
 	    keyCopy = SECKEY_CopyPrivateKey(key);
 	if (keyCopy == NULL)
 	    goto loser;
-	SECKEY_CacheStaticFlags(keyCopy);
-        sc->serverKeyPair = ssl3_NewKeyPair(keyCopy, pubKey);
-        if (sc->serverKeyPair == NULL) {
+        keyPair = ssl3_NewKeyPair(keyCopy, pubKey);
+        if (keyPair == NULL) {
             SECKEY_DestroyPrivateKey(keyCopy);
             goto loser;
         }
 	pubKey = NULL; /* adopted by serverKeyPair */
     }
-
-    if (kea == kt_rsa && cert && sc->serverKeyBits > 512) {
-	if (ss->opt.noStepDown) {
-	    /* disable all export ciphersuites */
-	} else {
-	    rv = ssl3_CreateRSAStepDownKeys(ss);
-	    if (rv != SECSuccess) {
-		return SECFailure; /* err set by ssl3_CreateRSAStepDownKeys */
-	    }
-	}
+    if (ssl_ConfigSecureServer(ss, cert, NULL,
+                               keyPair, kea) == SECFailure) {
+        goto loser;
     }
 
     /* Only do this once because it's global. */
-    if (ssl3_server_ca_list == NULL)
-	ssl3_server_ca_list = CERT_GetSSLCACerts(ss->dbHandle);
-
-    return SECSuccess;
+    if (PR_SUCCESS == PR_CallOnceWithArg(&setupServerCAListOnce, 
+                                         &serverCAListSetup,
+                                         (void *)(ss->dbHandle))) {
+        rv = SECSuccess;
+    }
 
 loser:
+    if (keyPair) {
+        ssl3_FreeKeyPair(keyPair);
+    }
     if (pubKey) {
 	SECKEY_DestroyPublicKey(pubKey); 
 	pubKey = NULL;
     }
-    if (sc->serverCert != NULL) {
-	CERT_DestroyCertificate(sc->serverCert);
-	sc->serverCert = NULL;
-    }
-    if (sc->serverCertChain != NULL) {
-	CERT_DestroyCertificateList(sc->serverCertChain);
-	sc->serverCertChain = NULL;
-    }
-    if (sc->serverKeyPair != NULL) {
-	ssl3_FreeKeyPair(sc->serverKeyPair);
-	sc->serverKeyPair = NULL;
-    }
-    return SECFailure;
+    return rv;
 }
 
 /************************************************************************/
@@ -938,14 +1023,38 @@ ssl_SecureConnect(sslSocket *ss, const PRNetAddr *sa)
     return rv;
 }
 
+/*
+ * The TLS 1.2 RFC 5246, Section 7.2.1 says:
+ *
+ *     Unless some other fatal alert has been transmitted, each party is
+ *     required to send a close_notify alert before closing the write side
+ *     of the connection.  The other party MUST respond with a close_notify
+ *     alert of its own and close down the connection immediately,
+ *     discarding any pending writes.  It is not required for the initiator
+ *     of the close to wait for the responding close_notify alert before
+ *     closing the read side of the connection.
+ *
+ * The second sentence requires that we send a close_notify alert when we
+ * have received a close_notify alert.  In practice, all SSL implementations
+ * close the socket immediately after sending a close_notify alert (which is
+ * allowed by the third sentence), so responding with a close_notify alert
+ * would result in a write failure with the ECONNRESET error.  This is why
+ * we don't respond with a close_notify alert.
+ *
+ * Also, in the unlikely event that the TCP pipe is full and the peer stops
+ * reading, the SSL3_SendAlert call in ssl_SecureClose and ssl_SecureShutdown
+ * may block indefinitely in blocking mode, and may fail (without retrying)
+ * in non-blocking mode.
+ */
+
 int
 ssl_SecureClose(sslSocket *ss)
 {
     int rv;
 
     if (ss->version >= SSL_LIBRARY_VERSION_3_0 	&&
-    	ss->firstHsDone 			&& 
 	!(ss->shutdownHow & ssl_SHUTDOWN_SEND)	&&
+    	ss->firstHsDone 			&& 
 	!ss->recvdCloseNotify                   &&
 	ss->ssl3.initialized) {
 
@@ -975,8 +1084,8 @@ ssl_SecureShutdown(sslSocket *ss, int nsprHow)
     }
 
     if ((sslHow & ssl_SHUTDOWN_SEND) != 0 		&&
+    	ss->version >= SSL_LIBRARY_VERSION_3_0		&&
 	!(ss->shutdownHow & ssl_SHUTDOWN_SEND)		&&
-    	(ss->version >= SSL_LIBRARY_VERSION_3_0)	&&
 	ss->firstHsDone 				&& 
 	!ss->recvdCloseNotify                   	&&
 	ss->ssl3.initialized) {
@@ -1057,13 +1166,18 @@ ssl_SecureSend(sslSocket *ss, const unsigned char *buf, int len, int flags)
 {
     int              rv		= 0;
 
+    SSL_TRC(2, ("%d: SSL[%d]: SecureSend: sending %d bytes",
+		SSL_GETPID(), ss->fd, len));
+
     if (ss->shutdownHow & ssl_SHUTDOWN_SEND) {
 	PORT_SetError(PR_SOCKET_SHUTDOWN_ERROR);
-    	return PR_FAILURE;
+    	rv = PR_FAILURE;
+	goto done;
     }
     if (flags) {
 	PORT_SetError(PR_INVALID_ARGUMENT_ERROR);
-    	return PR_FAILURE;
+    	rv = PR_FAILURE;
+	goto done;
     }
 
     ssl_GetXmitBufLock(ss);
@@ -1078,38 +1192,46 @@ ssl_SecureSend(sslSocket *ss, const unsigned char *buf, int len, int flags)
     }
     ssl_ReleaseXmitBufLock(ss);
     if (rv < 0) {
-	return rv;
+	goto done;
     }
 
     if (len > 0) 
     	ss->writerThread = PR_GetCurrentThread();
     /* If any of these is non-zero, the initial handshake is not done. */
     if (!ss->firstHsDone) {
+	PRBool canFalseStart = PR_FALSE;
 	ssl_Get1stHandshakeLock(ss);
-	if (ss->handshake || ss->nextHandshake || ss->securityHandshake) {
+	if (ss->version >= SSL_LIBRARY_VERSION_3_0 &&
+	    (ss->ssl3.hs.ws == wait_change_cipher ||
+	     ss->ssl3.hs.ws == wait_finished ||
+	     ss->ssl3.hs.ws == wait_new_session_ticket) &&
+	    ssl3_CanFalseStart(ss)) {
+	    canFalseStart = PR_TRUE;
+	}
+	if (!canFalseStart &&
+	    (ss->handshake || ss->nextHandshake || ss->securityHandshake)) {
 	    rv = ssl_Do1stHandshake(ss);
 	}
 	ssl_Release1stHandshakeLock(ss);
     }
     if (rv < 0) {
     	ss->writerThread = NULL;
-	return rv;
+	goto done;
     }
 
     /* Check for zero length writes after we do housekeeping so we make forward
      * progress.
      */
     if (len == 0) {
-    	return 0;
+    	rv = 0;
+	goto done;
     }
     PORT_Assert(buf != NULL);
     if (!buf) {
 	PORT_SetError(PR_INVALID_ARGUMENT_ERROR);
-    	return PR_FAILURE;
+    	rv = PR_FAILURE;
+	goto done;
     }
-    
-    SSL_TRC(2, ("%d: SSL[%d]: SecureSend: sending %d bytes",
-		SSL_GETPID(), ss->fd, len));
 
     /* Send out the data using one of these functions:
      *	ssl2_SendClear, ssl2_SendStream, ssl2_SendBlock, 
@@ -1119,6 +1241,14 @@ ssl_SecureSend(sslSocket *ss, const unsigned char *buf, int len, int flags)
     rv = (*ss->sec.send)(ss, buf, len, flags);
     ssl_ReleaseXmitBufLock(ss);
     ss->writerThread = NULL;
+done:
+    if (rv < 0) {
+	SSL_TRC(2, ("%d: SSL[%d]: SecureSend: returning %d count, error %d",
+		    SSL_GETPID(), ss->fd, rv, PORT_GetError()));
+    } else {
+	SSL_TRC(2, ("%d: SSL[%d]: SecureSend: returning %d count",
+		    SSL_GETPID(), ss->fd, rv));
+    }
     return rv;
 }
 
@@ -1148,7 +1278,8 @@ SSL_BadCertHook(PRFileDesc *fd, SSLBadCertHandler f, void *arg)
 
 /*
  * Allow the application to pass the url or hostname into the SSL library
- * so that we can do some checking on it.
+ * so that we can do some checking on it. It will be used for the value in
+ * SNI extension of client hello message.
  */
 SECStatus
 SSL_SetURL(PRFileDesc *fd, const char *url)
@@ -1180,6 +1311,41 @@ SSL_SetURL(PRFileDesc *fd, const char *url)
 }
 
 /*
+ * Allow the application to pass the set of trust anchors
+ */
+SECStatus
+SSL_SetTrustAnchors(PRFileDesc *fd, CERTCertList *certList)
+{
+    sslSocket *   ss = ssl_FindSocket(fd);
+    CERTDistNames *names = NULL;
+
+    if (!certList) {
+        PORT_SetError(SEC_ERROR_INVALID_ARGS);
+        return SECFailure;
+    }
+    if (!ss) {
+	SSL_DBG(("%d: SSL[%d]: bad socket in SSL_SetTrustAnchors",
+		 SSL_GETPID(), fd));
+	return SECFailure;
+    }
+
+    names = CERT_DistNamesFromCertList(certList);
+    if (names == NULL) {
+        return SECFailure;
+    }
+    ssl_Get1stHandshakeLock(ss);
+    ssl_GetSSL3HandshakeLock(ss);
+    if (ss->ssl3.ca_list) {
+        CERT_FreeDistNames(ss->ssl3.ca_list);
+    }
+    ss->ssl3.ca_list = names;
+    ssl_ReleaseSSL3HandshakeLock(ss);
+    ssl_Release1stHandshakeLock(ss);
+
+    return SECSuccess;
+}
+
+/*
 ** Returns Negative number on error, zero or greater on success.
 ** Returns the amount of data immediately available to be read.
 */
@@ -1192,16 +1358,9 @@ SSL_DataPending(PRFileDesc *fd)
     ss = ssl_FindSocket(fd);
 
     if (ss && ss->opt.useSecurity) {
-
-	ssl_Get1stHandshakeLock(ss);
-	ssl_GetSSL3HandshakeLock(ss);
-
 	ssl_GetRecvBufLock(ss);
 	rv = ss->gs.writeOffset - ss->gs.readOffset;
 	ssl_ReleaseRecvBufLock(ss);
-
-	ssl_ReleaseSSL3HandshakeLock(ss);
-	ssl_Release1stHandshakeLock(ss);
     }
 
     return rv;
@@ -1346,4 +1505,23 @@ SSL_RestartHandshakeAfterServerCert(sslSocket *ss)
 
     ssl_Release1stHandshakeLock(ss);
     return rv;
+}
+
+/* For more info see ssl.h */
+SECStatus 
+SSL_SNISocketConfigHook(PRFileDesc *fd, SSLSNISocketConfig func,
+                        void *arg)
+{
+    sslSocket *ss;
+
+    ss = ssl_FindSocket(fd);
+    if (!ss) {
+	SSL_DBG(("%d: SSL[%d]: bad socket in SNISocketConfigHook",
+		 SSL_GETPID(), fd));
+	return SECFailure;
+    }
+
+    ss->sniSocketConfig = func;
+    ss->sniSocketConfigArg = arg;
+    return SECSuccess;
 }

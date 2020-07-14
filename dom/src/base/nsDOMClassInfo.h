@@ -45,15 +45,14 @@
 #include "jsapi.h"
 #include "nsIScriptSecurityManager.h"
 #include "nsIScriptContext.h"
+#include "nsDOMJSUtils.h" // for GetScriptContextFromJSContext
 
 class nsIDOMWindow;
 class nsIDOMNSHTMLOptionCollection;
 class nsIPluginInstance;
 class nsIForm;
-class nsIDOMNode;
 class nsIDOMNodeList;
 class nsIDOMDocument;
-class nsIDOMGCParticipant;
 class nsIHTMLDocument;
 class nsGlobalWindow;
 
@@ -62,6 +61,7 @@ struct nsDOMClassInfoData;
 typedef nsIClassInfo* (*nsDOMClassInfoConstructorFnc)
   (nsDOMClassInfoData* aData);
 
+typedef nsresult (*nsDOMConstructorFunc)(nsISupports** aNewObject);
 
 struct nsDOMClassInfoData
 {
@@ -76,7 +76,7 @@ struct nsDOMClassInfoData
   const nsIID *mProtoChainInterface;
   const nsIID **mInterfaces;
   PRUint32 mScriptableFlags : 31; // flags must not use more than 31 bits!
-  PRBool mHasClassInterface : 1;
+  PRUint32 mHasClassInterface : 1;
 #ifdef NS_DEBUG
   PRUint32 mDebugID;
 #endif
@@ -120,7 +120,6 @@ public:
   // GetClassInfoA so I can't, those $%#@^! bastards!!! What gives
   // them the right to do that?
 
-  static nsIClassInfo* GetClassInfoInstance(nsDOMClassInfoID aID);
   static nsIClassInfo* GetClassInfoInstance(nsDOMClassInfoData* aData);
 
   static void ShutDown();
@@ -131,11 +130,22 @@ public:
   }
 
   static nsresult WrapNative(JSContext *cx, JSObject *scope,
-                             nsISupports *native, const nsIID& aIID,
+                             nsISupports *native, const nsIID* aIID,
                              jsval *vp,
-                             // aHolder keeps the jsval alive while
-                             // there's a ref to it
-                             nsIXPConnectJSObjectHolder** aHolder);
+                             // If non-null aHolder will keep the jsval alive
+                             // while there's a ref to it
+                             nsIXPConnectJSObjectHolder** aHolder = nsnull);
+
+  // Same as the WrapNative above, but use this one if aIID is nsISupports' IID.
+  static nsresult WrapNative(JSContext *cx, JSObject *scope,
+                             nsISupports *native, jsval *vp,
+                             // If non-null aHolder will keep the jsval alive
+                             // while there's a ref to it
+                             nsIXPConnectJSObjectHolder** aHolder = nsnull)
+  {
+    return WrapNative(cx, scope, native, nsnull, vp, aHolder);
+  }
+
   static nsresult ThrowJSException(JSContext *cx, nsresult aResult);
 
   static nsresult InitDOMJSClass(JSContext *cx, JSObject *obj);
@@ -171,92 +181,14 @@ public:
 #endif
 
     return sXPCNativeWrapperClass &&
-      ::JS_GetClass(cx, obj) == sXPCNativeWrapperClass;
+      ::JS_GET_CLASS(cx, obj) == sXPCNativeWrapperClass;
   }
 
-  /**
-   * Note that the XPConnect wrapper should be protected from garbage
-   * collection as long as the GC participant is reachable.
-   *
-   * A preservation with a given key overwrites any previous
-   * preservation with that key.
-   *
-   * No strong references are held as a result of this function call, so
-   * the caller is responsible for calling |ReleaseWrapper| sometime
-   * before |aParticipant|'s destructor runs.
-   *
-   * aRootWhenExternallyReferenced should be true if the preservation is
-   * for an event handler that could be triggered by the participant
-   * being externally referenced by a network load.
-   */
-  static nsresult PreserveWrapper(void* aKey,
-                                  nsIXPConnectJSObjectHolder* (*aKeyToWrapperFunc)(void* aKey),
-                                  nsIDOMGCParticipant *aParticipant,
-                                  PRBool aRootWhenExternallyReferenced);
-
-
-  /**
-   * Easier way to call the above just for DOM nodes (and better, since
-   * we get the performance benefits of having the same identity function).
-   * The call to |PreserveWrapper| is made with |aKey| == |aWrapper|.
-   *
-   * The caller need not call |ReleaseWrapper| since the node's
-   * wrapper's scriptable helper does so in its finalize callback.
-   */
-  static nsresult PreserveNodeWrapper(nsIXPConnectWrappedNative *aWrapper,
-                                      PRBool aRootWhenExternallyReferenced =
-                                        PR_FALSE);
-
-  /**
-   * Undoes the effects of any prior |PreserveWrapper| calls made with
-   * |aKey|.
-   */
-  static void ReleaseWrapper(void* aKey);
-
-  /**
-   * Mark all preserved wrappers reachable from |aDOMNode| via DOM APIs.
-   */
-  static void MarkReachablePreservedWrappers(nsIDOMGCParticipant *aParticipant,
-                                             JSContext *cx, void *arg);
-
-  /**
-   * Add/remove |aParticipant| from the table of externally referenced
-   * participants.  Does not maintain a count, so an object should not
-   * be added when it is already in the table.
-   *
-   * The table of externally referenced participants is a list of
-   * participants that should be marked at GC-time **if they are a
-   * participant in the preserved wrapper table added with
-   * aRootWhenExternallyReferenced**, whether or not they are reachable
-   * from marked participants.  This should be used for participants
-   * that hold onto scripts (typically onload or onerror handlers) that
-   * can be triggered at the end of a currently-ongoing operation
-   * (typically a network request) and that could thus expose the
-   * participant to script again in the future even though it is not
-   * otherwise reachable.
-   *
-   * The caller is responsible for ensuring that the GC participant is
-   * alive while it is in this table; the table does not own a reference.
-   *
-   * UnsetExternallyReferenced must be called exactly once for every
-   * successful SetExternallyReferenced call, and in no other cases.
-   */
-  static nsresult SetExternallyReferenced(nsIDOMGCParticipant *aParticipant);
-  static void UnsetExternallyReferenced(nsIDOMGCParticipant *aParticipant);
-
-  /**
-   * Classify the wrappers for use by |MarkReachablePreservedWrappers|
-   * during the GC.  Returns false to indicate failure (out-of-memory).
-   */
-  static PRBool BeginGCMark(JSContext *cx);
-
-  /**
-   * Clean up data structures (and strong references) created by
-   * |BeginGCMark|.
-   */
-  static void EndGCMark();
+  static void PreserveNodeWrapper(nsIXPConnectWrappedNative *aWrapper);
 
 protected:
+  friend nsIClassInfo* NS_GetDOMClassInfoInstance(nsDOMClassInfoID aID);
+
   const nsDOMClassInfoData* mData;
 
   static nsresult Init();
@@ -307,10 +239,6 @@ protected:
             id == sName_id);
   }
 
-  nsresult doCheckPropertyAccess(JSContext *cx, JSObject *obj, jsval id,
-                                 nsIXPConnectWrappedNative *wrapper,
-                                 PRUint32 accessMode, PRBool isWindow);
-
   static JSClass sDOMConstructorProtoClass;
   static JSFunctionSpec sDOMJSClass_methods[];
 
@@ -328,7 +256,6 @@ protected:
   static jsval sParent_id;
   static jsval sScrollbars_id;
   static jsval sLocation_id;
-  static jsval sComponents_id;
   static jsval sConstructor_id;
   static jsval s_content_id;
   static jsval sContent_id;
@@ -337,6 +264,7 @@ protected:
   static jsval sLocationbar_id;
   static jsval sPersonalbar_id;
   static jsval sStatusbar_id;
+  static jsval sDialogArguments_id;
   static jsval sDirectories_id;
   static jsval sControllers_id;
   static jsval sLength_id;
@@ -375,6 +303,13 @@ protected:
   static jsval sOnpaint_id;
   static jsval sOnresize_id;
   static jsval sOnscroll_id;
+  static jsval sOndrag_id;
+  static jsval sOndragend_id;
+  static jsval sOndragenter_id;
+  static jsval sOndragleave_id;
+  static jsval sOndragover_id;
+  static jsval sOndragstart_id;
+  static jsval sOndrop_id;
   static jsval sScrollIntoView_id;
   static jsval sScrollX_id;
   static jsval sScrollY_id;
@@ -394,6 +329,22 @@ protected:
   static jsval sAll_id;
   static jsval sTags_id;
   static jsval sAddEventListener_id;
+  static jsval sBaseURIObject_id;
+  static jsval sNodePrincipal_id;
+  static jsval sDocumentURIObject_id;
+  static jsval sOncopy_id;
+  static jsval sOncut_id;
+  static jsval sOnpaste_id;
+  static jsval sJava_id;
+  static jsval sPackages_id;
+#ifdef OJI
+  static jsval sNetscape_id;
+  static jsval sSun_id;
+  static jsval sJavaObject_id;
+  static jsval sJavaClass_id;
+  static jsval sJavaArray_id;
+  static jsval sJavaMember_id;
+#endif
 
   static const JSClass *sObjectClass;
   static const JSClass *sXPCNativeWrapperClass;
@@ -404,39 +355,14 @@ public:
 
 typedef nsDOMClassInfo nsDOMGenericSH;
 
-// Scriptable helper for implementations of nsIDOMGCParticipant that
-// need a mark callback.
-class nsDOMGCParticipantSH : public nsDOMGenericSH
-{
-protected:
-  nsDOMGCParticipantSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
-  {
-  }
-
-  virtual ~nsDOMGCParticipantSH()
-  {
-  }
-
-public:
-  NS_IMETHOD Finalize(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                      JSObject *obj);
-  NS_IMETHOD Mark(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                  JSObject *obj, void *arg, PRUint32 *_retval);
-
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsDOMGCParticipantSH(aData);
-  }
-};
-
 // EventProp scriptable helper, this class should be the base class of
 // all objects that should support things like
 // obj.onclick=function{...}
 
-class nsEventReceiverSH : public nsDOMGCParticipantSH
+class nsEventReceiverSH : public nsDOMGenericSH
 {
 protected:
-  nsEventReceiverSH(nsDOMClassInfoData* aData) : nsDOMGCParticipantSH(aData)
+  nsEventReceiverSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
   {
   }
 
@@ -459,10 +385,8 @@ protected:
     return PR_FALSE;
   }
 
-  static JSBool JS_DLL_CALLBACK AddEventListenerHelper(JSContext *cx,
-                                                       JSObject *obj,
-                                                       uintN argc, jsval *argv,
-                                                       jsval *rval);
+  static JSBool AddEventListenerHelper(JSContext *cx, JSObject *obj,
+                                       uintN argc, jsval *argv, jsval *rval);
 
   nsresult RegisterCompileHandler(nsIXPConnectWrappedNative *wrapper,
                                   JSContext *cx, JSObject *obj, jsval id,
@@ -478,8 +402,37 @@ public:
                          PRBool *_retval);
   NS_IMETHOD AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                          JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+  static nsresult DefineAddEventListener(JSContext *cx, JSObject *obj,
+                                        jsval id, JSObject **objp);
 };
 
+// Adds support for 4th parameter of addEventListener.
+// Simpler than nsEventReceiverSH
+// Makes also sure that the wrapper is preserved if new properties are added.
+class nsEventTargetSH : public nsDOMGenericSH
+{
+protected:
+  nsEventTargetSH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
+  {
+  }
+
+  virtual ~nsEventTargetSH()
+  {
+  }
+public:
+  NS_IMETHOD PreCreate(nsISupports *nativeObj, JSContext *cx,
+                       JSObject *globalObj, JSObject **parentObj);
+  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                        JSObject *obj, jsval id, PRUint32 flags,
+                        JSObject **objp, PRBool *_retval);
+  NS_IMETHOD AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
+  {
+    return new nsEventTargetSH(aData);
+  }
+};
 
 // Window scriptable helper
 
@@ -524,18 +477,13 @@ public:
   NS_IMETHOD InnerObject(nsIXPConnectWrappedNative *wrapper, JSContext * cx,
                          JSObject * obj, JSObject * *_retval);
 
-  static JSBool JS_DLL_CALLBACK GlobalScopePolluterNewResolve(JSContext *cx,
-                                                              JSObject *obj,
-                                                              jsval id,
-                                                              uintN flags,
-                                                              JSObject **objp);
-  static JSBool JS_DLL_CALLBACK GlobalScopePolluterGetProperty(JSContext *cx,
-                                                               JSObject *obj,
-                                                               jsval id,
-                                                               jsval *vp);
-  static JSBool JS_DLL_CALLBACK SecurityCheckOnSetProp(JSContext *cx,
-                                                       JSObject *obj, jsval id,
-                                                       jsval *vp);
+  static JSBool GlobalScopePolluterNewResolve(JSContext *cx, JSObject *obj,
+                                              jsval id, uintN flags,
+                                              JSObject **objp);
+  static JSBool GlobalScopePolluterGetProperty(JSContext *cx, JSObject *obj,
+                                               jsval id, jsval *vp);
+  static JSBool SecurityCheckOnSetProp(JSContext *cx, JSObject *obj, jsval id,
+                                       jsval *vp);
   static void InvalidateGlobalScopePolluter(JSContext *cx, JSObject *obj);
   static nsresult InstallGlobalScopePolluter(JSContext *cx, JSObject *obj,
                                              nsIHTMLDocument *doc);
@@ -613,10 +561,31 @@ protected:
   {
   }
 
+  // Helper to check whether a capability is enabled
+  PRBool IsCapabilityEnabled(const char* aCapability);
+
+  inline PRBool IsPrivilegedScript() {
+    return IsCapabilityEnabled("UniversalXPConnect");
+  }
+
+  // Helper to define a void property with JSPROP_SHARED; this can do all the
+  // work so it's safe to just return whatever it returns.  |obj| is the object
+  // we're defining on, |id| is the name of the prop.  This must be a string
+  // jsval.  |objp| is the out param if we define successfully.
+  nsresult DefineVoidProp(JSContext* cx, JSObject* obj, jsval id,
+                          JSObject** objp);
+
 public:
   NS_IMETHOD PreCreate(nsISupports *nativeObj, JSContext *cx,
                        JSObject *globalObj, JSObject **parentObj);
   NS_IMETHOD AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                        JSObject *obj, jsval id, PRUint32 flags,
+                        JSObject **objp, PRBool *_retval);
+  NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+  NS_IMETHOD SetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                          JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
   NS_IMETHOD GetFlags(PRUint32 *aFlags);
 
@@ -643,6 +612,8 @@ protected:
 public:
   NS_IMETHOD PostCreate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                         JSObject *obj);
+  NS_IMETHOD Enumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                       JSObject *obj, PRBool *_retval);
 
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
@@ -671,6 +642,9 @@ public:
   NS_IMETHOD Enumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                        JSObject *obj, PRBool *_retval);
   
+  virtual nsresult GetLength(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                             JSObject *obj, PRUint32 *length);
+
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
     return new nsGenericArraySH(aData);
@@ -678,7 +652,7 @@ public:
 };
 
 
-// NodeList scriptable helper
+// Array scriptable helper
 
 class nsArraySH : public nsGenericArraySH
 {
@@ -691,16 +665,42 @@ protected:
   {
   }
 
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  // Subclasses need to override this, if the implementation can't fail it's
+  // allowed to not set *aResult.
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult) = 0;
 
 public:
   NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                          JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
 
+private:
+  // Not implemented, nothing should create an instance of this class.
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData);
+};
+
+
+// NodeList scriptable helper
+ 
+class nsNodeListSH : public nsArraySH
+{
+protected:
+  nsNodeListSH(nsDOMClassInfoData* aData) : nsArraySH(aData)
+  {
+  }
+
+public:
+  NS_IMETHOD PreCreate(nsISupports *nativeObj, JSContext *cx,
+                       JSObject *globalObj, JSObject **parentObj);
+
+  virtual nsresult GetLength(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                             JSObject *obj, PRUint32 *length);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
+ 
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
-    return new nsArraySH(aData);
+    return new nsNodeListSH(aData);
   }
 };
 
@@ -718,12 +718,17 @@ protected:
   {
   }
 
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult) = 0;
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult) = 0;
 
 public:
   NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                          JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+
+private:
+  // Not implemented, nothing should create an instance of this class.
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData);
 };
 
 
@@ -740,14 +745,13 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -770,14 +774,15 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsresult GetLength(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                             JSObject *obj, PRUint32 *length);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -789,14 +794,10 @@ public:
 
 // ContentList helper
 
-class nsContentListSH : public nsHTMLCollectionSH
+class nsContentListSH : public nsNamedArraySH
 {
 protected:
-  nsContentListSH(nsDOMClassInfoData* aData) : nsHTMLCollectionSH(aData)
-  {
-  }
-
-  virtual ~nsContentListSH()
+  nsContentListSH(nsDOMClassInfoData* aData) : nsNamedArraySH(aData)
   {
   }
 
@@ -804,38 +805,20 @@ public:
   NS_IMETHOD PreCreate(nsISupports *nativeObj, JSContext *cx,
                        JSObject *globalObj, JSObject **parentObj);
 
+  virtual nsresult GetLength(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                             JSObject *obj, PRUint32 *length);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
+
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
     return new nsContentListSH(aData);
   }
 };
 
-
-
-// FomrControlList helper
-
-class nsFormControlListSH : public nsHTMLCollectionSH
-{
-protected:
-  nsFormControlListSH(nsDOMClassInfoData* aData) : nsHTMLCollectionSH(aData)
-  {
-  }
-
-  virtual ~nsFormControlListSH()
-  {
-  }
-
-  // Override nsNamedArraySH::GetNamedItem() since our NamedItem() can
-  // return either a nsIDOMNode or a nsIHTMLCollection
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
-
-public:
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsFormControlListSH(aData);
-  }
-};
 
 
 // Document helper, for document.location and document.on*
@@ -866,6 +849,8 @@ public:
   NS_IMETHOD GetFlags(PRUint32* aFlags);
   NS_IMETHOD PostCreate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                         JSObject *obj);
+  NS_IMETHOD Finalize(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                      JSObject *obj);
 
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
@@ -890,39 +875,28 @@ protected:
   static nsresult ResolveImpl(JSContext *cx,
                               nsIXPConnectWrappedNative *wrapper, jsval id,
                               nsISupports **result);
-  static JSBool JS_DLL_CALLBACK DocumentOpen(JSContext *cx, JSObject *obj,
-                                             uintN argc, jsval *argv,
-                                             jsval *rval);
+  static JSBool DocumentOpen(JSContext *cx, JSObject *obj, uintN argc,
+                             jsval *argv, jsval *rval);
   static JSBool GetDocumentAllNodeList(JSContext *cx, JSObject *obj,
                                        nsIDOMDocument *doc,
                                        nsIDOMNodeList **nodeList);
 
 public:
-  static JSBool JS_DLL_CALLBACK DocumentAllGetProperty(JSContext *cx,
-                                                       JSObject *obj, jsval id,
-                                                       jsval *vp);
-  static JSBool JS_DLL_CALLBACK DocumentAllNewResolve(JSContext *cx,
-                                                      JSObject *obj, jsval id,
-                                                      uintN flags,
-                                                      JSObject **objp);
-  static void JS_DLL_CALLBACK ReleaseDocument(JSContext *cx, JSObject *obj);
-  static JSBool JS_DLL_CALLBACK CallToGetPropMapper(JSContext *cx,
-                                                    JSObject *obj, uintN argc,
-                                                    jsval *argv, jsval *rval);
-  static JSBool JS_DLL_CALLBACK DocumentAllHelperGetProperty(JSContext *cx,
-                                                             JSObject *obj,
-                                                             jsval id,
-                                                             jsval *vp);
-  static JSBool JS_DLL_CALLBACK DocumentAllHelperNewResolve(JSContext *cx,
-                                                            JSObject *obj,
-                                                            jsval id,
-                                                            uintN flags,
-                                                            JSObject **objp);
-  static JSBool JS_DLL_CALLBACK DocumentAllTagsNewResolve(JSContext *cx,
-                                                          JSObject *obj,
-                                                          jsval id,
-                                                          uintN flags,
-                                                          JSObject **objp);
+  static JSBool DocumentAllGetProperty(JSContext *cx, JSObject *obj, jsval id,
+                                       jsval *vp);
+  static JSBool DocumentAllNewResolve(JSContext *cx, JSObject *obj, jsval id,
+                                      uintN flags, JSObject **objp);
+  static void ReleaseDocument(JSContext *cx, JSObject *obj);
+  static JSBool CallToGetPropMapper(JSContext *cx, JSObject *obj, uintN argc,
+                                    jsval *argv, jsval *rval);
+  static JSBool DocumentAllHelperGetProperty(JSContext *cx, JSObject *obj,
+                                             jsval id, jsval *vp);
+  static JSBool DocumentAllHelperNewResolve(JSContext *cx, JSObject *obj,
+                                            jsval id, uintN flags,
+                                            JSObject **objp);
+  static JSBool DocumentAllTagsNewResolve(JSContext *cx, JSObject *obj,
+                                          jsval id, uintN flags,
+                                          JSObject **objp);
 
   NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                         JSObject *obj, jsval id, PRUint32 flags,
@@ -950,9 +924,8 @@ protected:
   {
   }
 
-  static JSBool JS_DLL_CALLBACK ScrollIntoView(JSContext *cx, JSObject *obj,
-                                               uintN argc, jsval *argv,
-                                               jsval *rval);
+  static JSBool ScrollIntoView(JSContext *cx, JSObject *obj, uintN argc,
+                               jsval *argv, jsval *rval);
 
 public:
   NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
@@ -1002,39 +975,6 @@ public:
 };
 
 
-// HTML[I]FrameElement helper
-
-class nsHTMLFrameElementSH : public nsHTMLElementSH
-{
-protected:
-  nsHTMLFrameElementSH(nsDOMClassInfoData* aData) : nsHTMLElementSH(aData)
-  {
-  }
-
-  virtual ~nsHTMLFrameElementSH()
-  {
-  }
-
-public:
-  NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
-  NS_IMETHOD SetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
-  NS_IMETHOD AddProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
-  NS_IMETHOD DelProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
-  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                        JSObject *obj, jsval id, PRUint32 flags,
-                        JSObject **objp, PRBool *_retval);
-
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsHTMLFrameElementSH(aData);
-  }
-};
-
-
 // HTMLSelectElement helper
 
 class nsHTMLSelectElementSH : public nsHTMLElementSH
@@ -1065,29 +1005,37 @@ public:
 };
 
 
-// Base helper for external HTML object (such as a plugin or an
-// applet)
+// HTMLEmbed/Object/AppletElement helper
 
-class nsHTMLExternalObjSH : public nsHTMLElementSH
+class nsHTMLPluginObjElementSH : public nsHTMLElementSH
 {
 protected:
-  nsHTMLExternalObjSH(nsDOMClassInfoData* aData) : nsHTMLElementSH(aData)
+  nsHTMLPluginObjElementSH(nsDOMClassInfoData* aData)
+    : nsHTMLElementSH(aData)
   {
   }
 
-  virtual ~nsHTMLExternalObjSH()
+  virtual ~nsHTMLPluginObjElementSH()
   {
   }
 
-  nsresult GetPluginInstance(nsIXPConnectWrappedNative *aWrapper,
-                             nsIPluginInstance **aResult);
+  static nsresult GetPluginInstanceIfSafe(nsIXPConnectWrappedNative *aWrapper,
+                                          nsIPluginInstance **aResult);
 
-  virtual nsresult GetPluginJSObject(JSContext *cx, JSObject *obj,
-                                     nsIPluginInstance *plugin_inst,
-                                     JSObject **plugin_obj,
-                                     JSObject **plugin_proto) = 0;
+  static nsresult GetPluginJSObject(JSContext *cx, JSObject *obj,
+                                    nsIPluginInstance *plugin_inst,
+                                    JSObject **plugin_obj,
+                                    JSObject **plugin_proto);
+
+  static nsresult GetJavaPluginJSObject(JSContext *cx, JSObject *obj,
+                                        nsIPluginInstance *plugin_inst,
+                                        JSObject **plugin_obj,
+                                        JSObject **plugin_proto);
 
 public:
+  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                        JSObject *obj, jsval id, PRUint32 flags,
+                        JSObject **objp, PRBool *_retval);
   NS_IMETHOD PostCreate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                         JSObject *obj);
   NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
@@ -1097,58 +1045,10 @@ public:
   NS_IMETHOD Call(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                   JSObject *obj, PRUint32 argc, jsval *argv, jsval *vp,
                   PRBool *_retval);
-};
 
 
-// HTMLAppletElement helper
-
-class nsHTMLAppletElementSH : public nsHTMLExternalObjSH
-{
-protected:
-  nsHTMLAppletElementSH(nsDOMClassInfoData* aData) : nsHTMLExternalObjSH(aData)
-  {
-  }
-
-  virtual ~nsHTMLAppletElementSH()
-  {
-  }
-
-  virtual nsresult GetPluginJSObject(JSContext *cx, JSObject *obj,
-                                     nsIPluginInstance *plugin_inst,
-                                     JSObject **plugin_obj,
-                                     JSObject **plugin_proto);
-
-public:
-  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
-  {
-    return new nsHTMLAppletElementSH(aData);
-  }
-};
-
-
-// HTMLEmbed/ObjectElement helper
-
-class nsHTMLPluginObjElementSH : public nsHTMLAppletElementSH
-{
-protected:
-  nsHTMLPluginObjElementSH(nsDOMClassInfoData* aData)
-    : nsHTMLAppletElementSH(aData)
-  {
-  }
-
-  virtual ~nsHTMLPluginObjElementSH()
-  {
-  }
-
-  virtual nsresult GetPluginJSObject(JSContext *cx, JSObject *obj,
-                                     nsIPluginInstance *plugin_inst,
-                                     JSObject **plugin_obj,
-                                     JSObject **plugin_proto);
-
-public:
-  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
-                        JSObject *obj, jsval id, PRUint32 flags,
-                        JSObject **objp, PRBool *_retval);
+  static nsresult SetupProtoChain(nsIXPConnectWrappedNative *wrapper,
+                                  JSContext *cx, JSObject *obj);
 
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
@@ -1171,8 +1071,8 @@ protected:
   {
   }
 
-  static JSBool JS_DLL_CALLBACK Add(JSContext *cx, JSObject *obj, uintN argc,
-                                    jsval *argv, jsval *rval);
+  static JSBool Add(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
+                    jsval *rval);
 
 public:
   NS_IMETHOD SetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
@@ -1201,14 +1101,13 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1231,14 +1130,13 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1261,14 +1159,13 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1389,10 +1286,8 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1415,10 +1310,8 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1465,15 +1358,36 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
     return new nsCSSRuleListSH(aData);
+  }
+};
+
+// ClientRectList helper
+
+class nsClientRectListSH : public nsArraySH
+{
+protected:
+  nsClientRectListSH(nsDOMClassInfoData* aData) : nsArraySH(aData)
+  {
+  }
+
+  virtual ~nsClientRectListSH()
+  {
+  }
+
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
+
+public:
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
+  {
+    return new nsClientRectListSH(aData);
   }
 };
 
@@ -1492,14 +1406,13 @@ protected:
   {
   }
 
-  // Override nsArraySH::GetItemAt() since our list isn't a
-  // nsIDOMNodeList
-  virtual nsresult GetItemAt(nsISupports *aNative, PRUint32 aIndex,
-                             nsISupports **aResult);
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
 
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1533,14 +1446,52 @@ protected:
                           JSObject *obj, PRUint32 enum_op, jsval *statep,
                           jsid *idp, PRBool *_retval);
 
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult)
+  {
+    return nsnull;
+  }
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
   {
     return new nsStorageSH(aData);
+  }
+};
+
+
+class nsStorage2SH : public nsDOMGenericSH
+{
+protected:
+  nsStorage2SH(nsDOMClassInfoData* aData) : nsDOMGenericSH(aData)
+  {
+  }
+
+  virtual ~nsStorage2SH()
+  {
+  }
+
+  NS_IMETHOD NewResolve(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                        JSObject *obj, jsval id, PRUint32 flags,
+                        JSObject **objp, PRBool *_retval);
+  NS_IMETHOD SetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+  NS_IMETHOD GetProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+  NS_IMETHOD DelProperty(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                         JSObject *obj, jsval id, jsval *vp, PRBool *_retval);
+  NS_IMETHOD NewEnumerate(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                          JSObject *obj, PRUint32 enum_op, jsval *statep,
+                          jsid *idp, PRBool *_retval);
+
+public:
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
+  {
+    return new nsStorage2SH(aData);
   }
 };
 
@@ -1555,9 +1506,15 @@ protected:
   {
   }
 
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult)
+  {
+    return nsnull;
+  }
   // Override nsNamedArraySH::GetNamedItem()
-  virtual nsresult GetNamedItem(nsISupports *aNative, const nsAString& aName,
-                                nsISupports **aResult);
+  virtual nsISupports* GetNamedItem(nsISupports *aNative,
+                                    const nsAString& aName,
+                                    nsresult *aResult);
 
 public:
   static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
@@ -1599,11 +1556,11 @@ protected:
   {
   }
 
-  virtual ~nsDOMConstructorSH()
-  {
-  }
-
 public:
+  NS_IMETHOD Call(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
+                  JSObject *obj, PRUint32 argc, jsval *argv, jsval *vp,
+                  PRBool *_retval);
+
   NS_IMETHOD Construct(nsIXPConnectWrappedNative *wrapper, JSContext *cx,
                        JSObject *obj, PRUint32 argc, jsval *argv,
                        jsval *vp, PRBool *_retval);
@@ -1638,21 +1595,67 @@ public:
   }
 };
 
-void InvalidateContextAndWrapperCache();
+// Need this to override GetFlags() on nsNodeSH
+class nsAttributeSH : public nsNodeSH
+{
+protected:
+  nsAttributeSH(nsDOMClassInfoData* aData) : nsNodeSH(aData)
+  {
+  }
 
+  virtual ~nsAttributeSH()
+  {
+  }
 
-/**
- * nsIClassInfo helper macros
- */
+public:
+  NS_IMETHOD GetFlags(PRUint32 *aFlags);
 
-#define NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(_class)                          \
-  if (aIID.Equals(NS_GET_IID(nsIClassInfo))) {                                \
-    foundInterface =                                                          \
-      nsDOMClassInfo::GetClassInfoInstance(eDOMClassInfo_##_class##_id);      \
-    if (!foundInterface) {                                                    \
-      *aInstancePtr = nsnull;                                                 \
-      return NS_ERROR_OUT_OF_MEMORY;                                          \
-    }                                                                         \
-  } else
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
+  {
+    return new nsAttributeSH(aData);
+  }
+};
+
+class nsOfflineResourceListSH : public nsStringArraySH
+{
+protected:
+  nsOfflineResourceListSH(nsDOMClassInfoData* aData) : nsStringArraySH(aData)
+  {
+  }
+
+  virtual ~nsOfflineResourceListSH()
+  {
+  }
+
+  virtual nsresult GetStringAt(nsISupports *aNative, PRInt32 aIndex,
+                               nsAString& aResult);
+
+public:
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
+  {
+    return new nsOfflineResourceListSH(aData);
+  }
+};
+
+class nsFileListSH : public nsArraySH
+{
+protected:
+  nsFileListSH(nsDOMClassInfoData *aData) : nsArraySH(aData)
+  {
+  }
+
+  virtual ~nsFileListSH()
+  {
+  }
+
+  virtual nsISupports* GetItemAt(nsISupports *aNative, PRUint32 aIndex,
+                                 nsresult *aResult);
+
+public:
+  static nsIClassInfo *doCreate(nsDOMClassInfoData* aData)
+  {
+    return new nsFileListSH(aData);
+  }
+};
 
 #endif /* nsDOMClassInfo_h___ */

@@ -38,7 +38,6 @@
 
 #include "nsIModule.h"
 #include "nsIGenericFactory.h"
-#include "nsJVMAuthTools.h"
 #include "nsJVMManager.h"
 #include "nsJVMConfigManager.h"
 
@@ -54,6 +53,7 @@
 #ifdef XP_UNIX
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsJVMConfigManagerUnix)
 #endif
+NS_GENERIC_AGGREGATED_CONSTRUCTOR_INIT(nsJVMManager, Init)
 
 // The list of components we register
 static const nsModuleComponentInfo components[] = 
@@ -61,13 +61,7 @@ static const nsModuleComponentInfo components[] =
     { "JVM Manager Service", 
       NS_JVMMANAGER_CID,  
       "@mozilla.org/oji/jvm-mgr;1", 
-      nsJVMManager::Create
-    },
-
-    { "JVM Authentication Service", 
-      NS_JVMAUTHTOOLS_CID,  
-      "@mozilla.org/oji/jvm-auth-tools;1", 
-      nsJVMAuthTools::Create
+      nsJVMManagerConstructor
     },
 #ifdef XP_UNIX
     { "JVM Config Manager",

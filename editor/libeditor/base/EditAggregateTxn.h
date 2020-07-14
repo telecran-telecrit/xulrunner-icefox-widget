@@ -41,7 +41,8 @@
 #include "EditTxn.h"
 #include "nsIAtom.h"
 #include "nsCOMPtr.h"
-#include "nsISupportsArray.h"
+#include "nsTArray.h"
+#include "nsAutoPtr.h"
 
 #define EDIT_AGGREGATE_TXN_CID \
 {/* 345921a0-ac49-11d2-86d8-000064657374 */ \
@@ -56,26 +57,18 @@
 class EditAggregateTxn : public EditTxn
 {
 public:
-
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_IMETHOD QueryInterface(REFNSIID aIID, void **aInstancePtr);
 
   static const nsIID& GetCID() { static const nsIID cid = EDIT_AGGREGATE_TXN_CID; return cid; }
 
   EditAggregateTxn();
 
-  virtual ~EditAggregateTxn();
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(EditAggregateTxn, EditTxn)
 
-  NS_IMETHOD DoTransaction(void);
+  NS_DECL_EDITTXN
 
-  NS_IMETHOD UndoTransaction(void);
-
-  NS_IMETHOD RedoTransaction(void);
-
-  NS_IMETHOD GetIsTransient(PRBool *aIsTransient);
-
+  NS_IMETHOD RedoTransaction();
   NS_IMETHOD Merge(nsITransaction *aTransaction, PRBool *aDidMerge);
-
-  NS_IMETHOD GetTxnDescription(nsAString& aTxnDescription);
 
   /** append a transaction to this aggregate */
   NS_IMETHOD AppendChild(EditTxn *aTxn);
@@ -98,7 +91,7 @@ public:
 
 protected:
 
-  nsCOMPtr<nsISupportsArray> mChildren;
+  nsTArray< nsRefPtr<EditTxn> > mChildren;
   nsCOMPtr<nsIAtom> mName;
 };
 

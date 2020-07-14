@@ -46,16 +46,17 @@ class nsISO2022KRToUnicode : public nsBasicDecoderSupport
 public:
   nsISO2022KRToUnicode()
   { 
-    mState = mState_ASCII;
+    mState = mState_Init;
     mLastLegalState = mState_ASCII;
     mData = 0;
     mEUCKRDecoder = nsnull;
-  };
+    mRunLength = 0;
+  }
 
   virtual ~nsISO2022KRToUnicode()
   {
     NS_IF_RELEASE(mEUCKRDecoder);
-  };
+  }
 
   NS_IMETHOD Convert(const char * aSrc, PRInt32 * aSrcLength,
      PRUnichar * aDest, PRInt32 * aDestLength) ;
@@ -65,17 +66,19 @@ public:
   {
     *aDestLength = aSrcLength;
     return NS_OK;
-  };
+  }
 
   NS_IMETHOD Reset()
   {
-    mState = mState_ASCII;
+    mState = mState_Init;
     mLastLegalState = mState_ASCII;
+    mRunLength = 0;
     return NS_OK;
-  };
+  }
 
 private:
   enum {
+    mState_Init,
     mState_ASCII,
     mState_ESC,
     mState_ESC_24,
@@ -86,6 +89,9 @@ private:
   } mState, mLastLegalState;
 
   PRUint8 mData;
+
+  // Length of non-ASCII run
+  PRUint32 mRunLength;
 
   nsIUnicodeDecoder *mEUCKRDecoder;
 };

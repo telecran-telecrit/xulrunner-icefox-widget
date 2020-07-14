@@ -38,6 +38,7 @@
 /* Implement shared vtbl methods. */
 
 #include "xptcprivate.h"
+#include "xptiprivate.h"
 
 extern "C" {
     nsresult
@@ -47,7 +48,6 @@ extern "C" {
 
         nsXPTCMiniVariant paramBuffer[PARAM_BUFFER_COUNT];
         nsXPTCMiniVariant* dispatchParams = NULL;
-        nsIInterfaceInfo* iface_info = NULL;
         const nsXPTMethodInfo* info;
         PRUint8 paramCount;
         PRUint8 i;
@@ -55,11 +55,8 @@ extern "C" {
 
         NS_ASSERTION(self,"no self");
 
-        self->GetInterfaceInfo(&iface_info);
-        NS_ASSERTION(iface_info,"no interface info");
-
-        iface_info->GetMethodInfo(PRUint16(methodIndex), &info);
-        NS_ASSERTION(info,"no interface info");
+        self->mEntry->GetMethodInfo(PRUint16(methodIndex), &info);
+        NS_ASSERTION(info,"no method info");
 
         paramCount = info->GetParamCount();
 
@@ -107,9 +104,7 @@ extern "C" {
             }
         }
 
-        result = self->CallMethod((PRUint16)methodIndex, info, dispatchParams);
-
-        NS_RELEASE(iface_info);
+        result = self->mOuter->CallMethod((PRUint16)methodIndex, info, dispatchParams);
 
         if(dispatchParams != paramBuffer)
             delete [] dispatchParams;
@@ -121,18 +116,8 @@ extern "C" {
 #define STUB_ENTRY(n) \
 nsresult nsXPTCStubBase::Stub##n() \
 { \
-  register nsresult result asm("d0"); \
   void *frame = __builtin_frame_address(0); \
-  __asm__ __volatile__( \
-    "pea   %2@(12)\n\t"             /* args */ \
-    "pea  "#n"\n\t"                 /* method index */ \
-    "movl  %1, %/sp@-\n\t"          /* this */ \
-    "jbsr  PrepareAndDispatch\n\t" \
-    "addw  #12, %/sp" \
-    : "=d" (result)     /* %0 */ \
-    : "a" (this), "a" (frame) \
-    : "a0", "a1", "d0", "d1", "memory" ); \
-    return result; \
+  return PrepareAndDispatch(this, n, (uint32*)frame + 3); \
 }
 
 #define SENTINEL_ENTRY(n) \

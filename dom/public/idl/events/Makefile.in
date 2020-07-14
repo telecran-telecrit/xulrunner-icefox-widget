@@ -54,21 +54,29 @@ SDK_XPIDLSRCS =                                 \
 	nsIDOM3DocumentEvent.idl		\
 	nsIDOM3EventTarget.idl			\
 	nsIDOMEventGroup.idl			\
-	nsIDOMCustomEvent.idl			\
 	nsIDOMMouseEvent.idl			\
+	nsIDOMMouseScrollEvent.idl      \
 	nsIDOMUIEvent.idl			\
+	nsIDOMProgressEvent.idl			\
 	$(NULL)
 
 XPIDLSRCS =					\
 	nsIDOMNSEvent.idl			\
+	nsIDOMDataContainerEvent.idl	\
 	nsIDOMKeyEvent.idl			\
 	nsIDOMMutationEvent.idl			\
 	nsIDOMNSUIEvent.idl			\
+	nsIDOMDragEvent.idl  			\
+	nsIDOMDataTransfer.idl  			\
 	nsIDOMPopupBlockedEvent.idl		\
 	nsIDOMBeforeUnloadEvent.idl		\
 	nsIDOMNSEventTarget.idl			\
 	nsIDOMSmartCardEvent.idl                \
 	nsIDOMPageTransitionEvent.idl		\
+	nsIDOMCommandEvent.idl			\
+	nsIDOMMessageEvent.idl			\
+	nsIDOMNotifyPaintEvent.idl              \
+	nsIDOMSimpleGestureEvent.idl		\
 	$(NULL)
 
 include $(topsrcdir)/config/rules.mk

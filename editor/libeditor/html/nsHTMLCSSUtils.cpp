@@ -56,6 +56,8 @@
 #include "nsUnicharUtils.h"
 #include "nsHTMLCSSUtils.h"
 #include "nsColor.h"
+#include "nsAttrName.h"
+#include "nsAutoPtr.h"
 
 static
 void ProcessBValue(const nsAString * aInputString, nsAString & aOutputString,
@@ -309,7 +311,7 @@ nsresult
 nsHTMLCSSUtils::Init(nsHTMLEditor *aEditor)
 {
   nsresult result = NS_OK;
-  mHTMLEditor = NS_STATIC_CAST(nsHTMLEditor*, aEditor);
+  mHTMLEditor = static_cast<nsHTMLEditor*>(aEditor);
 
   // let's retrieve the value of the "CSS editing" pref
   nsCOMPtr<nsIPrefBranch> prefBranch =
@@ -464,8 +466,9 @@ nsresult
 nsHTMLCSSUtils::SetCSSProperty(nsIDOMElement *aElement, nsIAtom * aProperty, const nsAString & aValue,
                                PRBool aSuppressTransaction)
 {
-  ChangeCSSInlineStyleTxn *txn;
-  nsresult result = CreateCSSPropertyTxn(aElement, aProperty, aValue, &txn, PR_FALSE);
+  nsRefPtr<ChangeCSSInlineStyleTxn> txn;
+  nsresult result = CreateCSSPropertyTxn(aElement, aProperty, aValue,
+                                         getter_AddRefs(txn), PR_FALSE);
   if (NS_SUCCEEDED(result))  {
     if (aSuppressTransaction) {
       result = txn->DoTransaction();
@@ -474,8 +477,6 @@ nsHTMLCSSUtils::SetCSSProperty(nsIDOMElement *aElement, nsIAtom * aProperty, con
       result = mHTMLEditor->DoTransaction(txn);
     }
   }
-  // The transaction system (if any) has taken ownership of txn
-  NS_IF_RELEASE(txn);
   return result;
 }
 
@@ -498,8 +499,9 @@ nsresult
 nsHTMLCSSUtils::RemoveCSSProperty(nsIDOMElement *aElement, nsIAtom * aProperty, const nsAString & aValue,
                                   PRBool aSuppressTransaction)
 {
-  ChangeCSSInlineStyleTxn *txn;
-  nsresult result = CreateCSSPropertyTxn(aElement, aProperty, aValue, &txn, PR_TRUE);
+  nsRefPtr<ChangeCSSInlineStyleTxn> txn;
+  nsresult result = CreateCSSPropertyTxn(aElement, aProperty, aValue,
+                                         getter_AddRefs(txn), PR_TRUE);
   if (NS_SUCCEEDED(result))  {
     if (aSuppressTransaction) {
       result = txn->DoTransaction();
@@ -508,8 +510,6 @@ nsHTMLCSSUtils::RemoveCSSProperty(nsIDOMElement *aElement, nsIAtom * aProperty, 
       result = mHTMLEditor->DoTransaction(txn);
     }
   }
-  // The transaction system (if any) has taken ownership of txn
-  NS_IF_RELEASE(txn);
   return result;
 }
 
@@ -565,11 +565,11 @@ nsHTMLCSSUtils::GetCSSInlinePropertyBase(nsIDOMNode *aNode, nsIAtom *aProperty,
   switch (aStyleType) {
     case COMPUTED_STYLE_TYPE:
       if (element && aViewCSS) {
-        nsAutoString empty, value, propString;
+        nsAutoString value, propString;
         nsCOMPtr<nsIDOMCSSStyleDeclaration> cssDecl;
         aProperty->ToString(propString);
         // Get the all the computed css styles attached to the element node
-        res = aViewCSS->GetComputedStyle(element, empty, getter_AddRefs(cssDecl));
+        res = aViewCSS->GetComputedStyle(element, EmptyString(), getter_AddRefs(cssDecl));
         if (NS_FAILED(res) || !cssDecl) return res;
         // from these declarations, get the one we want and that one only
         res = cssDecl->GetPropertyValue(propString, value);
@@ -660,14 +660,7 @@ nsHTMLCSSUtils::RemoveCSSInlineStyle(nsIDOMNode *aNode, nsIAtom *aProperty, cons
     }
     else if (1 == attrCount) {
       // incredible hack in case the only remaining attribute is a _moz_dirty...
-      PRInt32 nameSpaceID;
-      nsCOMPtr<nsIAtom> attrName, prefix;
-      res = content->GetAttrNameAt(0, &nameSpaceID, getter_AddRefs(attrName),
-                                   getter_AddRefs(prefix));
-      if (NS_FAILED(res)) return res;
-      nsAutoString attrString, tmp;
-      attrName->ToString(attrString);
-      if (attrString.EqualsLiteral("_moz_dirty")) {
+      if (content->GetAttrNameAt(0)->Equals(nsEditProperty::mozdirty)) {
         res = mHTMLEditor->RemoveContainer(aNode);
         if (NS_FAILED(res)) return res;
       }
@@ -849,6 +842,9 @@ nsHTMLCSSUtils::GetCSSPropertyAtom(nsCSSEditableProperty aProperty, nsIAtom ** a
         break;
       case eCSSEditableProperty_width:
         *aAtom = nsEditProperty::cssWidth;
+        break;
+      case eCSSEditableProperty_NONE:
+        // intentionally empty
         break;
     }
   }
@@ -1415,6 +1411,11 @@ nsHTMLCSSUtils::GetElementContainerOrSelf(nsIDOMNode * aNode, nsIDOMElement ** a
   nsresult res;
   res = node->GetNodeType(&type);
   if (NS_FAILED(res)) return res;
+
+  if (nsIDOMNode::DOCUMENT_NODE == type) {
+    return NS_ERROR_NULL_POINTER;
+  }
+
   // loop until we find an element
   while (node && nsIDOMNode::ELEMENT_NODE != type) {
     parentNode = node;

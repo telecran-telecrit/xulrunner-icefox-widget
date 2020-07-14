@@ -1,4 +1,5 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=2 sw=2 et tw=79: */
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -49,10 +50,10 @@
 
 
 nsMimeTypeArray::nsMimeTypeArray(nsIDOMNavigator* navigator)
+  : mNavigator(navigator),
+    mPluginMimeTypeCount(0),
+    mInited(PR_FALSE)
 {
-  mNavigator = navigator;
-  mMimeTypeCount = 0;
-  mMimeTypeArray = nsnull;
 }
 
 nsMimeTypeArray::~nsMimeTypeArray()
@@ -76,56 +77,78 @@ NS_IMPL_RELEASE(nsMimeTypeArray)
 NS_IMETHODIMP
 nsMimeTypeArray::GetLength(PRUint32* aLength)
 {
-  if (mMimeTypeArray == nsnull) {
+  if (!mInited) {
     nsresult rv = GetMimeTypes();
     if (rv != NS_OK)
       return rv;
   }
-  *aLength = mMimeTypeCount;
+
+  NS_ASSERTION(mPluginMimeTypeCount <= (PRUint32)mMimeTypeArray.Count(),
+               "The number of total mimetypes should be equal to or higher "
+               "than the number of plugin mimetypes.");
+ 
+  *aLength = mPluginMimeTypeCount;
   return NS_OK;
+}
+
+nsIDOMMimeType*
+nsMimeTypeArray::GetItemAt(PRUint32 aIndex, nsresult *aResult)
+{
+  if (!mInited) {
+    *aResult = GetMimeTypes();
+    if (*aResult != NS_OK)
+      return nsnull;
+  }
+
+  NS_ASSERTION(mPluginMimeTypeCount <= (PRUint32)mMimeTypeArray.Count(),
+               "The number of total mimetypes should be equal to or higher "
+               "than the number of plugin mimetypes.");
+
+  if (aIndex >= mPluginMimeTypeCount) {
+    *aResult = NS_ERROR_FAILURE;
+
+    return nsnull;
+  }
+
+  *aResult = NS_OK;
+
+  return mMimeTypeArray[aIndex];
 }
 
 NS_IMETHODIMP
 nsMimeTypeArray::Item(PRUint32 aIndex, nsIDOMMimeType** aReturn)
 {
-  if (mMimeTypeArray == nsnull) {
-    nsresult rv = GetMimeTypes();
-    if (rv != NS_OK)
-      return rv;
-  }
-  if (aIndex < mMimeTypeCount) {
-    *aReturn = mMimeTypeArray[aIndex];
-    NS_IF_ADDREF(*aReturn);
-    return NS_OK;
-  }
-  return NS_ERROR_FAILURE;
+  nsresult rv;
+
+  NS_IF_ADDREF(*aReturn = GetItemAt(aIndex, &rv));
+
+  return rv;
 }
 
-NS_IMETHODIMP
-nsMimeTypeArray::NamedItem(const nsAString& aName, nsIDOMMimeType** aReturn)
+nsIDOMMimeType*
+nsMimeTypeArray::GetNamedItem(const nsAString& aName, nsresult* aResult)
 {
-  NS_ENSURE_ARG_POINTER(aReturn);
-  *aReturn = nsnull;
-
-  if (mMimeTypeArray == nsnull) {
-    nsresult rv = GetMimeTypes();
-    if (rv != NS_OK)
-      return rv;
+  if (!mInited) {
+    *aResult = GetMimeTypes();
+    if (*aResult != NS_OK)
+      return nsnull;
   }
+
+  NS_ASSERTION(mPluginMimeTypeCount <= (PRUint32)mMimeTypeArray.Count(),
+               "The number of total mimetypes should be equal to or higher "
+               "than the number of plugin mimetypes.");
+
+  *aResult = NS_OK;
 
   nsAutoString type;
 
-  for (PRUint32 i = 0; i < mMimeTypeCount; i++) {
+  for (PRInt32 i = 0; i < mMimeTypeArray.Count(); i++) {
     nsIDOMMimeType *mtype = mMimeTypeArray[i];
 
     mtype->GetType(type);
 
     if (type.Equals(aName)) {
-      *aReturn = mtype;
-
-      NS_ADDREF(*aReturn);
-
-      return NS_OK;
+      return mtype;
     }
   }
 
@@ -133,17 +156,17 @@ nsMimeTypeArray::NamedItem(const nsAString& aName, nsIDOMMimeType** aReturn)
   nsCOMPtr<nsIMIMEService> mimeSrv = do_GetService("@mozilla.org/mime;1");
   if (mimeSrv) {
     nsCOMPtr<nsIMIMEInfo> mimeInfo;
-    mimeSrv->GetFromTypeAndExtension(NS_ConvertUCS2toUTF8(aName), EmptyCString(),
+    mimeSrv->GetFromTypeAndExtension(NS_ConvertUTF16toUTF8(aName), EmptyCString(),
                                      getter_AddRefs(mimeInfo));
     if (mimeInfo) {
       // Now we check whether we can really claim to support this type
-      nsMIMEInfoHandleAction action = nsIMIMEInfo::saveToDisk;
+      nsHandlerInfoAction action = nsIHandlerInfo::saveToDisk;
       mimeInfo->GetPreferredAction(&action);
       if (action != nsIMIMEInfo::handleInternally) {
         PRBool hasHelper = PR_FALSE;
         mimeInfo->GetHasDefaultHandler(&hasHelper);
         if (!hasHelper) {
-          nsCOMPtr<nsIFile> helper;
+          nsCOMPtr<nsIHandlerApp> helper;
           mimeInfo->GetPreferredApplicationHandler(getter_AddRefs(helper));
           if (!helper) {
             // mime info from the OS may not have a PreferredApplicationHandler
@@ -152,39 +175,44 @@ nsMimeTypeArray::NamedItem(const nsAString& aName, nsIDOMMimeType** aReturn)
             mimeInfo->GetDefaultDescription(defaultDescription);
             if (defaultDescription.IsEmpty()) {
               // no support; just leave
-              return NS_OK;
+              return nsnull;
             }
           }
         }
       }
 
       // If we got here, we support this type!  Say so.
-      nsCOMPtr<nsIDOMMimeType> helper = new nsHelperMimeType(aName);
-      if (!helper) {
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
-      nsCOMPtr<nsIDOMMimeType> entry = new nsMimeType(nsnull, helper);
-      if (!entry) {
-        return NS_ERROR_OUT_OF_MEMORY;
+      nsCOMPtr<nsIDOMMimeType> helper, entry;
+      if (!(helper = new nsHelperMimeType(aName)) ||
+          !(entry = new nsMimeType(nsnull, helper)) ||
+          !mMimeTypeArray.AppendObject(entry)) {
+        *aResult = NS_ERROR_OUT_OF_MEMORY;
+
+        return nsnull;
       }
 
-      entry.swap(*aReturn);
+      return entry;
     }
   }
 
-  return NS_OK;
+  return nsnull;
+}
+
+NS_IMETHODIMP
+nsMimeTypeArray::NamedItem(const nsAString& aName, nsIDOMMimeType** aReturn)
+{
+  nsresult rv;
+
+  NS_IF_ADDREF(*aReturn = GetNamedItem(aName, &rv));
+
+  return rv;
 }
 
 void  nsMimeTypeArray::Clear()
 {
-  if (mMimeTypeArray != nsnull) {
-    for (PRUint32 i = 0; i < mMimeTypeCount; i++) {
-      NS_IF_RELEASE(mMimeTypeArray[i]);
-    }
-    delete[] mMimeTypeArray;
-    mMimeTypeArray = nsnull;
-  }
-  mMimeTypeCount = 0;
+  mInited = PR_FALSE;
+  mMimeTypeArray.Clear();
+  mPluginMimeTypeCount = 0;
 }
 
 nsresult nsMimeTypeArray::Refresh()
@@ -195,44 +223,52 @@ nsresult nsMimeTypeArray::Refresh()
 
 nsresult nsMimeTypeArray::GetMimeTypes()
 {
-  NS_PRECONDITION(!mMimeTypeArray && mMimeTypeCount==0,
+  NS_PRECONDITION(!mInited && mPluginMimeTypeCount==0,
                       "already initialized");
+
+  if (!mNavigator) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
 
   nsIDOMPluginArray* pluginArray = nsnull;
   nsresult rv = mNavigator->GetPlugins(&pluginArray);
   if (rv == NS_OK) {
     // count up all possible MimeTypes, and collect them here. Later,
     // we'll remove duplicates.
-    mMimeTypeCount = 0;
+    PRUint32 pluginMimeTypeCount = 0;
     PRUint32 pluginCount = 0;
     rv = pluginArray->GetLength(&pluginCount);
     if (rv == NS_OK) {
       PRUint32 i;
       for (i = 0; i < pluginCount; i++) {
-        nsIDOMPlugin* plugin = nsnull;
-        if (NS_SUCCEEDED(pluginArray->Item(i, &plugin)) &&
+        nsCOMPtr<nsIDOMPlugin> plugin;
+        if (NS_SUCCEEDED(pluginArray->Item(i, getter_AddRefs(plugin))) &&
             plugin) {
           PRUint32 mimeTypeCount = 0;
           if (plugin->GetLength(&mimeTypeCount) == NS_OK)
-            mMimeTypeCount += mimeTypeCount;
-          NS_RELEASE(plugin);
+            pluginMimeTypeCount += mimeTypeCount;
         }
       }
       // now we know how many there are, start gathering them.
-      mMimeTypeArray = new nsIDOMMimeType*[mMimeTypeCount];
-      if (mMimeTypeArray == nsnull)
+      if (!mMimeTypeArray.SetCapacity(pluginMimeTypeCount))
         return NS_ERROR_OUT_OF_MEMORY;
-      PRUint32 mimeTypeIndex = 0;
+
+      mPluginMimeTypeCount = pluginMimeTypeCount;
+      mInited = PR_TRUE;
+
       PRUint32 k;
       for (k = 0; k < pluginCount; k++) {
-        nsIDOMPlugin* plugin = nsnull;
-        if (pluginArray->Item(k, &plugin) == NS_OK) {
+        nsCOMPtr<nsIDOMPlugin> plugin;
+        if (NS_SUCCEEDED(pluginArray->Item(k, getter_AddRefs(plugin))) &&
+            plugin) {
           PRUint32 mimeTypeCount = 0;
           if (plugin->GetLength(&mimeTypeCount) == NS_OK) {
-            for (PRUint32 j = 0; j < mimeTypeCount; j++)
-              plugin->Item(j, &mMimeTypeArray[mimeTypeIndex++]);
+            nsCOMPtr<nsIDOMMimeType> item;
+            for (PRUint32 j = 0; j < mimeTypeCount; j++) {
+              plugin->Item(j, getter_AddRefs(item));
+              mMimeTypeArray.AppendObject(item);
+            }
           }
-          NS_RELEASE(plugin);
         }
       }
     }

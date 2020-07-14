@@ -22,6 +22,7 @@
  * Contributor(s):
  *   David Hyatt <hyatt@netscape.com>
  *   Daniel Glazman <glazman@netscape.com>
+ *   L. David Baron <dbaron@dbaron.org>, Mozilla Corporation
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -36,6 +37,13 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/*
+ * representation of CSS style rules (selectors+declaration), CSS
+ * selectors, and DOM objects for style rules, selectors, and
+ * declarations
+ */
+
 #include "nsCOMPtr.h"
 #include "nsCSSRule.h"
 #include "nsICSSStyleRule.h"
@@ -53,8 +61,6 @@
 #include "nsString.h"
 #include "nsStyleConsts.h"
 #include "nsStyleUtil.h"
-#include "nsHTMLAtoms.h"
-#include "nsUnitConversion.h"
 #include "nsIFontMetrics.h"
 #include "nsIDOMCSSStyleSheet.h"
 #include "nsICSSStyleRuleDOMWrapper.h"
@@ -66,9 +72,13 @@
 #include "nsRuleNode.h"
 #include "nsUnicharUtils.h"
 #include "nsCSSPseudoElements.h"
+#include "nsIPrincipal.h"
+#include "nsComponentManagerUtils.h"
+#include "nsCSSPseudoClasses.h"
 
 #include "nsContentUtils.h"
 #include "nsContentErrors.h"
+#include "mozAutoDocUpdate.h"
 
 #define NS_IF_CLONE(member_)                                                  \
   PR_BEGIN_MACRO                                                              \
@@ -81,49 +91,13 @@
     }                                                                         \
   PR_END_MACRO
 
-#define NS_IF_DEEP_CLONE(type_, member_, args_)                               \
-  PR_BEGIN_MACRO                                                              \
-    type_ *dest = result;                                                     \
-    for (type_ *src = member_; src; src = src->member_) {                     \
-      type_ *clone = src->Clone args_;                                        \
-      if (!clone) {                                                           \
-        delete result;                                                        \
-        return nsnull;                                                        \
-      }                                                                       \
-      dest->member_ = clone;                                                  \
-      dest = clone;                                                           \
-    }                                                                         \
-  PR_END_MACRO
-
 #define NS_IF_DELETE(ptr)                                                     \
   PR_BEGIN_MACRO                                                              \
-    if (ptr) {                                                                \
-      delete ptr;                                                             \
-      ptr = nsnull;                                                           \
-    }                                                                         \
+    delete ptr;                                                               \
+    ptr = nsnull;                                                             \
   PR_END_MACRO
-
-#define NS_IF_DEEP_DELETE(type_, member_)                                     \
-  PR_BEGIN_MACRO                                                              \
-    type_ *cur = member_;                                                     \
-    member_ = nsnull;                                                         \
-    while (cur) {                                                             \
-      type_ *next = cur->member_;                                             \
-      cur->member_ = nsnull;                                                  \
-      delete cur;                                                             \
-      cur = next;                                                             \
-    }                                                                         \
-  PR_END_MACRO
-
-#define NS_IF_NEGATED_START(bool,str)  \
-  if (bool) { str.AppendLiteral(":not("); }
-
-#define NS_IF_NEGATED_END(bool,str)  \
-  if (bool) { str.Append(PRUnichar(')')); }
 
 /* ************************************************************************** */
-
-MOZ_DECL_CTOR_COUNTER(nsAtomList)
 
 nsAtomList::nsAtomList(nsIAtom* aAtom)
   : mAtom(aAtom),
@@ -148,60 +122,78 @@ nsAtomList::Clone(PRBool aDeep) const
     return nsnull;
 
   if (aDeep)
-    NS_IF_DEEP_CLONE(nsAtomList, mNext, (PR_FALSE));
+    NS_CSS_CLONE_LIST_MEMBER(nsAtomList, this, mNext, result, (PR_FALSE));
   return result;
 }
 
 nsAtomList::~nsAtomList(void)
 {
   MOZ_COUNT_DTOR(nsAtomList);
-  NS_IF_DEEP_DELETE(nsAtomList, mNext);
+  NS_CSS_DELETE_LIST_MEMBER(nsAtomList, this, mNext);
 }
 
-MOZ_DECL_CTOR_COUNTER(nsAtomStringList)
-
-nsAtomStringList::nsAtomStringList(nsIAtom* aAtom, const PRUnichar* aString)
+nsPseudoClassList::nsPseudoClassList(nsIAtom* aAtom)
   : mAtom(aAtom),
-    mString(nsnull),
     mNext(nsnull)
 {
-  MOZ_COUNT_CTOR(nsAtomStringList);
-  if (aString)
-    mString = nsCRT::strdup(aString);
+  NS_ASSERTION(!nsCSSPseudoClasses::HasStringArg(aAtom) &&
+               !nsCSSPseudoClasses::HasNthPairArg(aAtom),
+               "unexpected pseudo-class");
+  MOZ_COUNT_CTOR(nsPseudoClassList);
+  u.mMemory = nsnull;
 }
 
-nsAtomStringList::nsAtomStringList(const nsString& aAtomValue,
-                                   const PRUnichar* aString)
-  : mAtom(nsnull),
-    mString(nsnull),
+nsPseudoClassList::nsPseudoClassList(nsIAtom* aAtom, const PRUnichar* aString)
+  : mAtom(aAtom),
     mNext(nsnull)
 {
-  MOZ_COUNT_CTOR(nsAtomStringList);
-  mAtom = do_GetAtom(aAtomValue);
-  if (aString)
-    mString = nsCRT::strdup(aString);
+  NS_ASSERTION(nsCSSPseudoClasses::HasStringArg(aAtom),
+               "unexpected pseudo-class");
+  NS_ASSERTION(aString, "string expected");
+  MOZ_COUNT_CTOR(nsPseudoClassList);
+  u.mString = NS_strdup(aString);
 }
 
-nsAtomStringList*
-nsAtomStringList::Clone(PRBool aDeep) const
+nsPseudoClassList::nsPseudoClassList(nsIAtom* aAtom, const PRInt32* aIntPair)
+  : mAtom(aAtom),
+    mNext(nsnull)
 {
-  nsAtomStringList *result = new nsAtomStringList(mAtom, mString);
+  NS_ASSERTION(nsCSSPseudoClasses::HasNthPairArg(aAtom),
+               "unexpected pseudo-class");
+  NS_ASSERTION(aIntPair, "integer pair expected");
+  MOZ_COUNT_CTOR(nsPseudoClassList);
+  u.mNumbers =
+    static_cast<PRInt32*>(nsMemory::Clone(aIntPair, sizeof(PRInt32) * 2));
+}
+
+nsPseudoClassList*
+nsPseudoClassList::Clone(PRBool aDeep) const
+{
+  nsPseudoClassList *result;
+  if (!u.mMemory) {
+    result = new nsPseudoClassList(mAtom);
+  } else if (nsCSSPseudoClasses::HasStringArg(mAtom)) {
+    result = new nsPseudoClassList(mAtom, u.mString);
+  } else {
+    NS_ASSERTION(nsCSSPseudoClasses::HasNthPairArg(mAtom),
+                 "unexpected pseudo-class");
+    result = new nsPseudoClassList(mAtom, u.mNumbers);
+  }
 
   if (aDeep)
-    NS_IF_DEEP_CLONE(nsAtomStringList, mNext, (PR_FALSE));
+    NS_CSS_CLONE_LIST_MEMBER(nsPseudoClassList, this, mNext, result,
+                             (PR_FALSE));
 
   return result;
 }
 
-nsAtomStringList::~nsAtomStringList(void)
+nsPseudoClassList::~nsPseudoClassList(void)
 {
-  MOZ_COUNT_DTOR(nsAtomStringList);
-  if (mString)
-    nsCRT::free(mString);
-  NS_IF_DEEP_DELETE(nsAtomStringList, mNext);
+  MOZ_COUNT_DTOR(nsPseudoClassList);
+  if (u.mMemory)
+    NS_Free(u.mMemory);
+  NS_CSS_DELETE_LIST_MEMBER(nsPseudoClassList, this, mNext);
 }
-
-MOZ_DECL_CTOR_COUNTER(nsAttrSelector)
 
 nsAttrSelector::nsAttrSelector(PRInt32 aNameSpace, const nsString& aAttr)
   : mNameSpace(aNameSpace),
@@ -250,7 +242,7 @@ nsAttrSelector::Clone(PRBool aDeep) const
     new nsAttrSelector(mNameSpace, mAttr, mFunction, mValue, mCaseSensitive);
 
   if (aDeep)
-    NS_IF_DEEP_CLONE(nsAttrSelector, mNext, (PR_FALSE));
+    NS_CSS_CLONE_LIST_MEMBER(nsAttrSelector, this, mNext, result, (PR_FALSE));
 
   return result;
 }
@@ -259,12 +251,10 @@ nsAttrSelector::~nsAttrSelector(void)
 {
   MOZ_COUNT_DTOR(nsAttrSelector);
 
-  NS_IF_DEEP_DELETE(nsAttrSelector, mNext);
+  NS_CSS_DELETE_LIST_MEMBER(nsAttrSelector, this, mNext);
 }
 
 // -- nsCSSSelector -------------------------------
-
-MOZ_DECL_CTOR_COUNTER(nsCSSSelector)
 
 nsCSSSelector::nsCSSSelector(void)
   : mNameSpace(kNameSpaceID_Unknown), mTag(nsnull), 
@@ -288,6 +278,7 @@ nsCSSSelector::Clone(PRBool aDeepNext, PRBool aDeepNegations) const
 
   result->mNameSpace = mNameSpace;
   result->mTag = mTag;
+  result->mOperator = mOperator;
   
   NS_IF_CLONE(mIDList);
   NS_IF_CLONE(mClassList);
@@ -296,12 +287,16 @@ nsCSSSelector::Clone(PRBool aDeepNext, PRBool aDeepNegations) const
 
   // No need to worry about multiple levels of recursion since an
   // mNegations can't have an mNext.
+  NS_ASSERTION(!mNegations || !mNegations->mNext,
+               "mNegations can't have non-null mNext");
   if (aDeepNegations) {
-    NS_IF_DEEP_CLONE(nsCSSSelector, mNegations, (PR_TRUE, PR_FALSE));
+    NS_CSS_CLONE_LIST_MEMBER(nsCSSSelector, this, mNegations, result,
+                             (PR_TRUE, PR_FALSE));
   }
 
   if (aDeepNext) {
-    NS_IF_DEEP_CLONE(nsCSSSelector, mNext, (PR_FALSE, PR_TRUE));
+    NS_CSS_CLONE_LIST_MEMBER(nsCSSSelector, this, mNext, result,
+                             (PR_FALSE, PR_TRUE));
   }
 
   return result;
@@ -313,7 +308,7 @@ nsCSSSelector::~nsCSSSelector(void)
   Reset();
   // No need to worry about multiple levels of recursion since an
   // mNegations can't have an mNext.
-  NS_IF_DEEP_DELETE(nsCSSSelector, mNext);
+  NS_CSS_DELETE_LIST_MEMBER(nsCSSSelector, this, mNext);
 }
 
 void nsCSSSelector::Reset(void)
@@ -326,7 +321,9 @@ void nsCSSSelector::Reset(void)
   NS_IF_DELETE(mAttrList);
   // No need to worry about multiple levels of recursion since an
   // mNegations can't have an mNext.
-  NS_IF_DEEP_DELETE(nsCSSSelector, mNegations);
+  NS_ASSERTION(!mNegations || !mNegations->mNext,
+               "mNegations can't have non-null mNext");
+  NS_CSS_DELETE_LIST_MEMBER(nsCSSSelector, this, mNegations);
   mOperator = PRUnichar(0);
 }
 
@@ -365,28 +362,30 @@ void nsCSSSelector::AddClass(const nsString& aClass)
   }
 }
 
-void nsCSSSelector::AddPseudoClass(const nsString& aPseudoClass,
-                                   const PRUnichar* aString)
+void nsCSSSelector::AddPseudoClass(nsIAtom* aPseudoClass)
 {
-  if (!aPseudoClass.IsEmpty()) {
-    nsAtomStringList** list = &mPseudoClassList;
-    while (nsnull != *list) {
-      list = &((*list)->mNext);
-    }
-    *list = new nsAtomStringList(aPseudoClass, aString);
-  }
+  AddPseudoClassInternal(new nsPseudoClassList(aPseudoClass));
 }
 
 void nsCSSSelector::AddPseudoClass(nsIAtom* aPseudoClass,
                                    const PRUnichar* aString)
 {
-  if (nsnull != aPseudoClass) {
-    nsAtomStringList** list = &mPseudoClassList;
-    while (nsnull != *list) {
-      list = &((*list)->mNext);
-    }
-    *list = new nsAtomStringList(aPseudoClass, aString);
+  AddPseudoClassInternal(new nsPseudoClassList(aPseudoClass, aString));
+}
+
+void nsCSSSelector::AddPseudoClass(nsIAtom* aPseudoClass,
+                                   const PRInt32* aIntPair)
+{
+  AddPseudoClassInternal(new nsPseudoClassList(aPseudoClass, aIntPair));
+}
+
+void nsCSSSelector::AddPseudoClassInternal(nsPseudoClassList *aPseudoClass)
+{
+  nsPseudoClassList** list = &mPseudoClassList;
+  while (nsnull != *list) {
+    list = &((*list)->mNext);
   }
+  *list = aPseudoClass;
 }
 
 void nsCSSSelector::AddAttribute(PRInt32 aNameSpace, const nsString& aAttr)
@@ -434,7 +433,7 @@ PRInt32 nsCSSSelector::CalcWeight(void) const
     weight += 0x000100;
     list = list->mNext;
   }
-  nsAtomStringList *plist = mPseudoClassList;
+  nsPseudoClassList *plist = mPseudoClassList;
   while (nsnull != plist) {
     weight += 0x000100;
     plist = plist->mNext;
@@ -479,16 +478,15 @@ nsCSSSelector::ToString(nsAString& aString, nsICSSStyleSheet* aSheet,
   if (!aAppend)
    aString.Truncate();
    
-  ToStringInternal(aString, aSheet, IsPseudoElement(mTag), 0);
+  ToStringInternal(aString, aSheet, IsPseudoElement(mTag), PR_FALSE);
 }
 
 void nsCSSSelector::ToStringInternal(nsAString& aString,
                                      nsICSSStyleSheet* aSheet,
                                      PRBool aIsPseudoElem,
-                                     PRIntn aNegatedIndex) const
+                                     PRBool aIsNegated) const
 {
   nsAutoString temp;
-  PRBool aIsNegated = PRBool(0 < aNegatedIndex);
   PRBool isPseudoElement = IsPseudoElement(mTag);
   
   // selectors are linked from right-to-left, so the next selector in the linked list
@@ -501,100 +499,106 @@ void nsCSSSelector::ToStringInternal(nsAString& aString,
       aString.Append(PRUnichar(' '));
     }
   }
-  if (1 < aNegatedIndex) {
-    // the first mNegations does not contain a negated type element selector
-    // or a negated universal selector
-    NS_IF_NEGATED_START(aIsNegated, aString)
-  }
 
   // For non-pseudo-element selectors or for lone pseudo-elements, deal with
   // namespace prefixes.
+  PRBool wroteNamespace = PR_FALSE;
   if (!isPseudoElement || !mNext) {
     // append the namespace prefix if needed
-    if (mNameSpace == kNameSpaceID_None) {
-      // The only way to do this in CSS is to have an explicit namespace
-      // of "none" specified in the sheet by having a '|' with nothing
-      // before it.
+    nsXMLNameSpaceMap *sheetNS = aSheet ? aSheet->GetNameSpaceMap() : nsnull;
+
+    // sheetNS is non-null if and only if we had an @namespace rule.  If it's
+    // null, that means that the only namespaces we could have are the
+    // wildcard namespace (which can be implicit in this case) and the "none"
+    // namespace, which then needs to be explicitly specified.
+    if (!sheetNS) {
+      NS_ASSERTION(mNameSpace == kNameSpaceID_Unknown ||
+                   mNameSpace == kNameSpaceID_None,
+                   "How did we get this namespace?");
+      if (mNameSpace == kNameSpaceID_None) {
+        aString.Append(PRUnichar('|'));
+        wroteNamespace = PR_TRUE;
+      }
+    } else if (sheetNS->FindNameSpaceID(nsnull) == mNameSpace) {
+      // We have the default namespace (possibly including the wildcard
+      // namespace).  Do nothing.
+      NS_ASSERTION(mNameSpace == kNameSpaceID_Unknown ||
+                   CanBeNamespaced(aIsNegated),
+                   "How did we end up with this namespace?");
+    } else if (mNameSpace == kNameSpaceID_None) {
+      NS_ASSERTION(CanBeNamespaced(aIsNegated),
+                   "How did we end up with this namespace?");
       aString.Append(PRUnichar('|'));
+      wroteNamespace = PR_TRUE;
+    } else if (mNameSpace != kNameSpaceID_Unknown) {
+      NS_ASSERTION(CanBeNamespaced(aIsNegated),
+                   "How did we end up with this namespace?");
+      nsIAtom *prefixAtom = sheetNS->FindPrefix(mNameSpace);
+      NS_ASSERTION(prefixAtom, "how'd we get a non-default namespace "
+                   "without a prefix?");
+      nsAutoString prefix;
+      prefixAtom->ToString(prefix);
+      aString.Append(prefix);
+      aString.Append(PRUnichar('|'));
+      wroteNamespace = PR_TRUE;
     } else {
-      nsXMLNameSpaceMap *sheetNS = aSheet->GetNameSpaceMap();
-    
-      // sheetNS is non-null if and only if we had an @namespace rule.  If it's
-      // null, that means that the only namespaces we could have are the
-      // wildcard namespace (which can be implicit in this case) and the "none"
-      // namespace, which we handled above.  So no need to output anything when
-      // sheetNS is null.
-      if (sheetNS) {
-        nsIAtom *prefixAtom = nsnull;
-        // prefixAtom is non-null if and only if we have a prefix other than
-        // '*'
-        if (mNameSpace != kNameSpaceID_Unknown) {
-          prefixAtom = sheetNS->FindPrefix(mNameSpace);
-        }
-        if (prefixAtom) {
-          nsAutoString prefix;
-          prefixAtom->ToString(prefix);
-          aString.Append(prefix);
-          aString.Append(PRUnichar('|'));
-        } else if (mNameSpace == kNameSpaceID_Unknown) {
-          // explicit *| or only non-default namespace rules and we're not
-          // using any of those namespaces
-          aString.AppendLiteral("*|");
-        }
-        // else we are in the default namespace and don't need to output
-        // anything
+      // A selector for an element in any namespace, while the default
+      // namespace is something else.  :not() is special in that the default
+      // namespace is not implied for non-type selectors, so if this is a
+      // negated non-type selector we don't need to output an explicit wildcard
+      // namespace here, since those default to a wildcard namespace.
+      if (CanBeNamespaced(aIsNegated)) {
+        aString.AppendLiteral("*|");
+        wroteNamespace = PR_TRUE;
       }
     }
   }
       
-  // smells like a universal selector
-  if (!mTag && !mIDList && !mClassList) {
-    if (1 != aNegatedIndex) {
+  if (!mTag) {
+    // Universal selector:  avoid writing the universal selector when we
+    // can avoid it, especially since we're required to avoid it for the
+    // inside of :not()
+    if (wroteNamespace ||
+        (!mIDList && !mClassList && !mPseudoClassList && !mAttrList &&
+         (aIsNegated || !mNegations))) {
       aString.Append(PRUnichar('*'));
     }
-    if (1 < aNegatedIndex) {
-      NS_IF_NEGATED_END(aIsNegated, aString)
-    }
   } else {
-    // Append the tag name, if there is one
-    if (mTag) {
-      if (isPseudoElement) {
-        if (!mNext) {
-          // Lone pseudo-element selector -- toss in a wildcard type selector
-          aString.Append(PRUnichar('*'));
-        }
-        if (!nsCSSPseudoElements::IsCSS2PseudoElement(mTag)) {
-          aString.Append(PRUnichar(':'));
-        }
+    // Append the tag name
+    if (isPseudoElement) {
+      if (!mNext) {
+        // Lone pseudo-element selector -- toss in a wildcard type selector
+        // XXXldb Why?
+        aString.Append(PRUnichar('*'));
       }
-      nsAutoString prefix;
-      mTag->ToString(prefix);
-      aString.Append(prefix);
-      NS_IF_NEGATED_END(aIsNegated, aString)
-    }
-    // Append the id, if there is one
-    if (mIDList) {
-      nsAtomList* list = mIDList;
-      while (list != nsnull) {
-        list->mAtom->ToString(temp);
-        NS_IF_NEGATED_START(aIsNegated, aString)
-        aString.Append(PRUnichar('#'));
-        aString.Append(temp);
-        NS_IF_NEGATED_END(aIsNegated, aString)
-        list = list->mNext;
+      if (!nsCSSPseudoElements::IsCSS2PseudoElement(mTag)) {
+        aString.Append(PRUnichar(':'));
       }
     }
-    // Append each class in the linked list
-    if (mClassList) {
-      nsAtomList* list = mClassList;
-      while (list != nsnull) {
-        list->mAtom->ToString(temp);
-        NS_IF_NEGATED_START(aIsNegated, aString)
-        aString.Append(PRUnichar('.'));
-        aString.Append(temp);
-        NS_IF_NEGATED_END(aIsNegated, aString)
-        list = list->mNext;
-      }
+    nsAutoString prefix;
+    mTag->ToString(prefix);
+    aString.Append(prefix);
+  }
+
+  // Append the id, if there is one
+  if (mIDList) {
+    nsAtomList* list = mIDList;
+    while (list != nsnull) {
+      list->mAtom->ToString(temp);
+      aString.Append(PRUnichar('#'));
+      aString.Append(temp);
+      list = list->mNext;
+    }
+  }
+
+  // Append each class in the linked list
+  if (mClassList) {
+    nsAtomList* list = mClassList;
+    while (list != nsnull) {
+      list->mAtom->ToString(temp);
+      aString.Append(PRUnichar('.'));
+      aString.Append(temp);
+      list = list->mNext;
     }
   }
 
@@ -602,18 +606,19 @@ void nsCSSSelector::ToStringInternal(nsAString& aString,
   if (mAttrList) {
     nsAttrSelector* list = mAttrList;
     while (list != nsnull) {
-      NS_IF_NEGATED_START(aIsNegated, aString)
       aString.Append(PRUnichar('['));
       // Append the namespace prefix
       if (list->mNameSpace > 0) {
-        nsXMLNameSpaceMap *sheetNS = aSheet->GetNameSpaceMap();
-        // will return null if namespace was the default
-        nsIAtom *prefixAtom = sheetNS->FindPrefix(list->mNameSpace);
-        if (prefixAtom) { 
-          nsAutoString prefix;
-          prefixAtom->ToString(prefix);
-          aString.Append(prefix);
-          aString.Append(PRUnichar('|'));
+        if (aSheet) {
+          nsXMLNameSpaceMap *sheetNS = aSheet->GetNameSpaceMap();
+          // will return null if namespace was the default
+          nsIAtom *prefixAtom = sheetNS->FindPrefix(list->mNameSpace);
+          if (prefixAtom) { 
+            nsAutoString prefix;
+            prefixAtom->ToString(prefix);
+            aString.Append(prefix);
+            aString.Append(PRUnichar('|'));
+          }
         }
       }
       // Append the attribute name
@@ -646,31 +651,54 @@ void nsCSSSelector::ToStringInternal(nsAString& aString,
 
       aString.Append(PRUnichar(']'));
       
-      NS_IF_NEGATED_END(aIsNegated, aString)
       list = list->mNext;
     }
   }
 
   // Append each pseudo-class in the linked list
   if (mPseudoClassList) {
-    nsAtomStringList* list = mPseudoClassList;
+    nsPseudoClassList* list = mPseudoClassList;
     while (list != nsnull) {
       list->mAtom->ToString(temp);
-      NS_IF_NEGATED_START(aIsNegated, aString)
       aString.Append(temp);
-      if (nsnull != list->mString) {
+      if (list->u.mMemory) {
         aString.Append(PRUnichar('('));
-        aString.Append(list->mString);
+        if (nsCSSPseudoClasses::HasStringArg(list->mAtom)) {
+          aString.Append(list->u.mString);
+        } else {
+          NS_ASSERTION(nsCSSPseudoClasses::HasNthPairArg(list->mAtom),
+                       "unexpected pseudo-class");
+          PRInt32 a = list->u.mNumbers[0],
+                  b = list->u.mNumbers[1];
+          temp.Truncate();
+          if (a != 0) {
+            if (a == -1) {
+              temp.Append(PRUnichar('-'));
+            } else if (a != 1) {
+              temp.AppendInt(a);
+            }
+            temp.Append(PRUnichar('n'));
+          }
+          if (b != 0 || a == 0) {
+            if (b >= 0 && a != 0) // check a != 0 for whether we printed above
+              temp.Append(PRUnichar('+'));
+            temp.AppendInt(b);
+          }
+          aString.Append(temp);
+        }
         aString.Append(PRUnichar(')'));
       }
-      NS_IF_NEGATED_END(aIsNegated, aString)
       list = list->mNext;
     }
   }
 
-  if (mNegations) {
-    // chain all the negated selectors
-    mNegations->ToStringInternal(aString, aSheet, PR_FALSE, aNegatedIndex + 1);
+  if (!aIsNegated) {
+    for (nsCSSSelector* negation = mNegations; negation;
+         negation = negation->mNegations) {
+      aString.AppendLiteral(":not(");
+      negation->ToStringInternal(aString, aSheet, PR_FALSE, PR_TRUE);
+      aString.Append(PRUnichar(')'));
+    }
   }
 
   // Append the operator only if the selector is not negated and is not
@@ -681,9 +709,14 @@ void nsCSSSelector::ToStringInternal(nsAString& aString,
   }
 }
 
-// -- nsCSSSelectorList -------------------------------
+PRBool
+nsCSSSelector::CanBeNamespaced(PRBool aIsNegated) const
+{
+  return !aIsNegated ||
+         (!mIDList && !mClassList && !mPseudoClassList && !mAttrList);
+}
 
-MOZ_DECL_CTOR_COUNTER(nsCSSSelectorList)
+// -- nsCSSSelectorList -------------------------------
 
 nsCSSSelectorList::nsCSSSelectorList(void)
   : mSelectors(nsnull),
@@ -696,13 +729,13 @@ nsCSSSelectorList::nsCSSSelectorList(void)
 nsCSSSelectorList::~nsCSSSelectorList()
 {
   MOZ_COUNT_DTOR(nsCSSSelectorList);
-  NS_IF_DELETE(mSelectors);
-  NS_IF_DEEP_DELETE(nsCSSSelectorList, mNext);
+  delete mSelectors;
+  NS_CSS_DELETE_LIST_MEMBER(nsCSSSelectorList, this, mNext);
 }
 
-void nsCSSSelectorList::AddSelector(const nsCSSSelector& aSelector)
+void nsCSSSelectorList::AddSelector(nsAutoPtr<nsCSSSelector>& aSelector)
 { // prepend to list
-  nsCSSSelector* newSel = aSelector.Clone();
+  nsCSSSelector* newSel = aSelector.forget();
   if (newSel) {
     newSel->mNext = mSelectors;
     mSelectors = newSel;
@@ -731,7 +764,8 @@ nsCSSSelectorList::Clone(PRBool aDeep) const
   NS_IF_CLONE(mSelectors);
 
   if (aDeep) {
-    NS_IF_DEEP_CLONE(nsCSSSelectorList, mNext, (PR_FALSE));
+    NS_CSS_CLONE_LIST_MEMBER(nsCSSSelectorList, this, mNext, result,
+                             (PR_FALSE));
   }
   return result;
 }
@@ -817,6 +851,7 @@ public:
                                      PRBool aAllocate);
   virtual nsresult GetCSSParsingEnvironment(nsIURI** aSheetURI,
                                             nsIURI** aBaseURI,
+                                            nsIPrincipal** aSheetPrincipal,
                                             nsICSSLoader** aCSSLoader,
                                             nsICSSParser** aCSSParser);
   virtual nsresult DeclarationChanged();
@@ -867,8 +902,6 @@ protected:
   }
 };
 
-MOZ_DECL_CTOR_COUNTER(DOMCSSDeclarationImpl)
-
 DOMCSSDeclarationImpl::DOMCSSDeclarationImpl(nsICSSStyleRule *aRule)
   : mRule(aRule)
 {
@@ -884,8 +917,8 @@ DOMCSSDeclarationImpl::~DOMCSSDeclarationImpl(void)
 
 inline DOMCSSStyleRuleImpl* DOMCSSDeclarationImpl::DomRule()
 {
-  return NS_REINTERPRET_CAST(DOMCSSStyleRuleImpl*,
-           NS_REINTERPRET_CAST(char*, this) -
+  return reinterpret_cast<DOMCSSStyleRuleImpl*>
+                         (reinterpret_cast<char*>(this) -
            offsetof(DOMCSSStyleRuleImpl, mDOMDeclaration));
 }
 
@@ -920,12 +953,14 @@ DOMCSSDeclarationImpl::GetCSSDeclaration(nsCSSDeclaration **aDecl,
 nsresult
 DOMCSSDeclarationImpl::GetCSSParsingEnvironment(nsIURI** aSheetURI, 
                                                 nsIURI** aBaseURI,
+                                                nsIPrincipal** aSheetPrincipal,
                                                 nsICSSLoader** aCSSLoader,
                                                 nsICSSParser** aCSSParser)
 {
   // null out the out params since some of them may not get initialized below
   *aSheetURI = nsnull;
   *aBaseURI = nsnull;
+  *aSheetPrincipal = nsnull;
   *aCSSLoader = nsnull;
   *aCSSParser = nsnull;
   nsresult result;
@@ -935,6 +970,12 @@ DOMCSSDeclarationImpl::GetCSSParsingEnvironment(nsIURI** aSheetURI,
     if (sheet) {
       sheet->GetSheetURI(aSheetURI);
       sheet->GetBaseURI(aBaseURI);
+
+      nsCOMPtr<nsICSSStyleSheet> cssSheet(do_QueryInterface(sheet));
+      if (cssSheet) {
+        NS_ADDREF(*aSheetPrincipal = cssSheet->Principal());
+      }
+
       nsCOMPtr<nsIDocument> document;
       sheet->GetOwningDocument(*getter_AddRefs(document));
       if (document) {
@@ -947,6 +988,11 @@ DOMCSSDeclarationImpl::GetCSSParsingEnvironment(nsIURI** aSheetURI,
     result = (*aCSSLoader)->GetParserFor(nsnull, aCSSParser);
   } else {
     result = NS_NewCSSParser(aCSSParser);
+  }
+
+  if (NS_SUCCEEDED(result) && !*aSheetPrincipal) {
+    result = CallCreateInstance("@mozilla.org/nullprincipal;1",
+                                aSheetPrincipal);
   }
 
   return result;
@@ -1153,7 +1199,7 @@ public:
   NS_IMETHOD GetType(PRInt32& aType) const;
   NS_IMETHOD Clone(nsICSSRule*& aClone) const;
 
-  NS_IMETHOD GetDOMRule(nsIDOMCSSRule** aDOMRule);
+  nsIDOMCSSRule* GetDOMRuleWeak(nsresult* aResult);
 
   virtual already_AddRefed<nsICSSStyleRule>
     DeclarationChanged(PRBool aHandleContainer);
@@ -1342,26 +1388,24 @@ CSSStyleRuleImpl::Clone(nsICSSRule*& aClone) const
   return CallQueryInterface(clone, &aClone);
 }
 
-NS_IMETHODIMP
-CSSStyleRuleImpl::GetDOMRule(nsIDOMCSSRule** aDOMRule)
+nsIDOMCSSRule*
+CSSStyleRuleImpl::GetDOMRuleWeak(nsresult *aResult)
 {
+  *aResult = NS_OK;
   if (!mSheet) {
     // inline style rules aren't supposed to have a DOM rule object, only
     // a declaration.
-    *aDOMRule = nsnull;
-    return NS_OK;
+    return nsnull;
   }
   if (!mDOMRule) {
     mDOMRule = new DOMCSSStyleRuleImpl(this);
     if (!mDOMRule) {
-      *aDOMRule = nsnull;
-      return NS_ERROR_OUT_OF_MEMORY;
+      *aResult = NS_ERROR_OUT_OF_MEMORY;
+      return nsnull;
     }
     NS_ADDREF(mDOMRule);
   }
-  *aDOMRule = mDOMRule;
-  NS_ADDREF(*aDOMRule);
-  return NS_OK;
+  return mDOMRule;
 }
 
 /* virtual */ already_AddRefed<nsICSSStyleRule>
@@ -1404,7 +1448,7 @@ CSSStyleRuleImpl::List(FILE* out, PRInt32 aIndent) const
     mSelector->ToString(buffer, mSheet);
 
   buffer.AppendLiteral(" ");
-  fputs(NS_LossyConvertUCS2toASCII(buffer).get(), out);
+  fputs(NS_LossyConvertUTF16toASCII(buffer).get(), out);
   if (nsnull != mDeclaration) {
     mDeclaration->List(out);
   }

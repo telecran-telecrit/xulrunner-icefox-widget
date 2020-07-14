@@ -1,4 +1,4 @@
-#! /bin/sh
+#! /bin/bash
 #
 # ***** BEGIN LICENSE BLOCK *****
 # Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -17,7 +17,7 @@
 #
 # The Initial Developer of the Original Code is
 # Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1994-2000
+# Portions created by the Initial Developer are Copyright (C) 1994-2009
 # the Initial Developer. All Rights Reserved.
 #
 # Contributor(s):
@@ -201,7 +201,7 @@ ssl_ds_rem_stress()
   do
       echo "strsclnt -D -p ${PORT} -d ${P_R_CLIENTDIR} -w nss -c 1 $verbose  "
       echo "         -n TestUser$CONTINUE ${HOSTADDR} #`uname -n`"
-      strsclnt -D -p ${PORT} -d . -w nss -c 1 $verbose  \
+      ${BINDIR}/strsclnt -D -p ${PORT} -d . -w nss -c 1 $verbose  \
                -n "TestUser$CONTINUE" ${HOSTADDR} &
                #${HOSTADDR} &
       CONTINUE=`expr $CONTINUE - 1 `
@@ -292,7 +292,7 @@ ssl_ds_dist_stress()
   echo "GET /stop HTTP/1.0\n\n" > stdin.txt #check to make sure it has /r/n
   echo "tstclnt -h $HOSTADDR -p  8443 -d ${P_R_CLIENTDIR} -n TestUser0 "
   echo "        -w nss -f < stdin.txt"
-  tstclnt -h $HOSTADDR -p  8443 -d ${P_R_CLIENTDIR} -n TestUser0 \
+  ${BINDIR}/tstclnt -h $HOSTADDR -p  8443 -d ${P_R_CLIENTDIR} -n TestUser0 \
 	  -w nss -f < stdin.txt
   
   html_msg 0 0 "${testname}"

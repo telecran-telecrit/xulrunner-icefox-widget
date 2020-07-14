@@ -48,13 +48,16 @@
 #include "secdig.h"
 #include "prtime.h"
 #include "ec.h"
+#include "keyi.h"
+
+SEC_ASN1_MKSUB(SECOID_AlgorithmIDTemplate)
 
 const SEC_ASN1Template CERT_SubjectPublicKeyInfoTemplate[] = {
     { SEC_ASN1_SEQUENCE,
 	  0, NULL, sizeof(CERTSubjectPublicKeyInfo) },
-    { SEC_ASN1_INLINE,
+    { SEC_ASN1_INLINE | SEC_ASN1_XTRN,
 	  offsetof(CERTSubjectPublicKeyInfo,algorithm),
-	  SECOID_AlgorithmIDTemplate },
+	  SEC_ASN1_SUB(SECOID_AlgorithmIDTemplate) },
     { SEC_ASN1_BIT_STRING,
 	  offsetof(CERTSubjectPublicKeyInfo,subjectPublicKey), },
     { 0, }
@@ -224,7 +227,17 @@ SECKEYPrivateKey *
 SECKEY_CreateDHPrivateKey(SECKEYDHParams *param, SECKEYPublicKey **pubk, void *cx)
 {
     SECKEYPrivateKey *privk;
-    PK11SlotInfo *slot = PK11_GetBestSlot(CKM_DH_PKCS_KEY_PAIR_GEN,cx);
+    PK11SlotInfo *slot;
+
+    if (!param || !param->base.data || !param->prime.data ||
+        param->prime.len < 512/8 || param->base.len == 0 || 
+        param->base.len > param->prime.len + 1 || 
+	(param->base.len == 1 && param->base.data[0] == 0)) {
+	PORT_SetError(SEC_ERROR_INVALID_ARGS);
+	return NULL;
+    }
+
+    slot = PK11_GetBestSlot(CKM_DH_PKCS_KEY_PAIR_GEN,cx);
     if (!slot) {
 	return NULL;
     }
@@ -255,11 +268,17 @@ SECKEY_CreateECPrivateKey(SECKEYECParams *param, SECKEYPublicKey **pubk, void *c
 	return NULL;
     }
 
-    privk = PK11_GenerateKeyPair(slot, CKM_EC_KEY_PAIR_GEN, param, 
-                                 pubk, PR_FALSE, PR_FALSE, cx);
+    privk = PK11_GenerateKeyPairWithOpFlags(slot, CKM_EC_KEY_PAIR_GEN, 
+                        param, pubk,
+                        PK11_ATTR_SESSION | PK11_ATTR_INSENSITIVE | 
+                        PK11_ATTR_PUBLIC,
+                        CKF_DERIVE, CKF_DERIVE|CKF_SIGN,cx);
     if (!privk) 
-	privk = PK11_GenerateKeyPair(slot, CKM_EC_KEY_PAIR_GEN, param, 
-	                             pubk, PR_FALSE, PR_TRUE, cx);
+        privk = PK11_GenerateKeyPairWithOpFlags(slot, CKM_EC_KEY_PAIR_GEN, 
+                        param, pubk,
+                        PK11_ATTR_SESSION | PK11_ATTR_SENSITIVE | 
+                        PK11_ATTR_PRIVATE,
+                        CKF_DERIVE, CKF_DERIVE|CKF_SIGN,cx);
 
     PK11_FreeSlot(slot);
     return(privk);
@@ -450,7 +469,7 @@ done:
 static SECStatus
 seckey_UpdateCertPQGChain(CERTCertificate * subjectCert, int count)
 {
-    SECStatus rv, rvCompare;
+    SECStatus rv;
     SECOidData *oid=NULL;
     int tag;
     CERTSubjectPublicKeyInfo * subjectSpki=NULL;
@@ -499,9 +518,7 @@ seckey_UpdateCertPQGChain(CERTCertificate * subjectCert, int count)
     }
 
     /* check if the cert is self-signed */
-    rvCompare = (SECStatus)SECITEM_CompareItem(&subjectCert->derSubject,
-				    &subjectCert->derIssuer);
-    if (rvCompare == SECEqual) {
+    if (subjectCert->isRoot) {
       /* fail since cert is self-signed and has no pqg params. */
 	return SECFailure;     
     }
@@ -867,14 +884,14 @@ SECKEY_FortezzaDecodeCertKey(PRArenaPool *arena, SECKEYPublicKey *pubk,
 	clearptr = rawptr;
 	while ((rawptr < end) && (*rawptr++ & 0x80));
 	if (rawptr >= end) { return SECFailure; }
-	pubk->u.fortezza.KEApriviledge.len = rawptr - clearptr;
-	pubk->u.fortezza.KEApriviledge.data = 
-		(unsigned char*)PORT_ArenaZAlloc(arena,pubk->u.fortezza.KEApriviledge.len);
-	if (pubk->u.fortezza.KEApriviledge.data == NULL) {
+	pubk->u.fortezza.KEAprivilege.len = rawptr - clearptr;
+	pubk->u.fortezza.KEAprivilege.data = 
+		(unsigned char*)PORT_ArenaZAlloc(arena,pubk->u.fortezza.KEAprivilege.len);
+	if (pubk->u.fortezza.KEAprivilege.data == NULL) {
 		return SECFailure;
 	}
-	PORT_Memcpy(pubk->u.fortezza.KEApriviledge.data,clearptr,
-				pubk->u.fortezza.KEApriviledge.len);
+	PORT_Memcpy(pubk->u.fortezza.KEAprivilege.data,clearptr,
+				pubk->u.fortezza.KEAprivilege.len);
 
 
 	/* now copy the key. The next to bytes are the key length, and the
@@ -899,10 +916,10 @@ SECKEY_FortezzaDecodeCertKey(PRArenaPool *arena, SECKEYPublicKey *pubk,
 	     * ArenaFree call. We cannot free DSSKey and KEAKey separately */
 	    pubk->u.fortezza.DSSKey.data=
 					pubk->u.fortezza.KEAKey.data;
-	    pubk->u.fortezza.DSSpriviledge.len = 
-				pubk->u.fortezza.KEApriviledge.len;
-	    pubk->u.fortezza.DSSpriviledge.data =
-			pubk->u.fortezza.DSSpriviledge.data;
+	    pubk->u.fortezza.DSSprivilege.len = 
+				pubk->u.fortezza.KEAprivilege.len;
+	    pubk->u.fortezza.DSSprivilege.data =
+			pubk->u.fortezza.DSSprivilege.data;
 	    goto done;
 	}
 		
@@ -918,14 +935,14 @@ SECKEY_FortezzaDecodeCertKey(PRArenaPool *arena, SECKEYPublicKey *pubk,
 	clearptr = rawptr;
 	while ((rawptr < end) && (*rawptr++ & 0x80));
 	if (rawptr >= end) { return SECFailure; }
-	pubk->u.fortezza.DSSpriviledge.len = rawptr - clearptr;
-	pubk->u.fortezza.DSSpriviledge.data = 
-		(unsigned char*)PORT_ArenaZAlloc(arena,pubk->u.fortezza.DSSpriviledge.len);
-	if (pubk->u.fortezza.DSSpriviledge.data == NULL) {
+	pubk->u.fortezza.DSSprivilege.len = rawptr - clearptr;
+	pubk->u.fortezza.DSSprivilege.data = 
+		(unsigned char*)PORT_ArenaZAlloc(arena,pubk->u.fortezza.DSSprivilege.len);
+	if (pubk->u.fortezza.DSSprivilege.data == NULL) {
 		return SECFailure;
 	}
-	PORT_Memcpy(pubk->u.fortezza.DSSpriviledge.data,clearptr,
-				pubk->u.fortezza.DSSpriviledge.len);
+	PORT_Memcpy(pubk->u.fortezza.DSSprivilege.data,clearptr,
+				pubk->u.fortezza.DSSprivilege.len);
 
 	/* finally copy the DSS key. The next to bytes are the key length,
 	 *  and the key follows */
@@ -948,17 +965,21 @@ done:
 }
 
 
-/* Function used to determine what kind of cert we are dealing with. */
+/* Function used to make an oid tag to a key type */
 KeyType 
-CERT_GetCertKeyType (CERTSubjectPublicKeyInfo *spki) {
-    int tag;
+seckey_GetKeyType (SECOidTag tag) {
     KeyType keyType;
 
-    tag = SECOID_GetAlgorithmTag(&spki->algorithm);
     switch (tag) {
       case SEC_OID_X500_RSA_ENCRYPTION:
       case SEC_OID_PKCS1_RSA_ENCRYPTION:
 	keyType = rsaKey;
+	break;
+      case SEC_OID_PKCS1_RSA_PSS_SIGNATURE:
+	keyType = rsaPssKey;
+	break;
+      case SEC_OID_PKCS1_RSA_OAEP_ENCRYPTION:
+	keyType = rsaOaepKey;
 	break;
       case SEC_OID_ANSIX9_DSA_SIGNATURE:
 	keyType = dsaKey;
@@ -983,6 +1004,13 @@ CERT_GetCertKeyType (CERTSubjectPublicKeyInfo *spki) {
 	keyType = nullKey;
     }
     return keyType;
+}
+
+/* Function used to determine what kind of cert we are dealing with. */
+KeyType 
+CERT_GetCertKeyType (CERTSubjectPublicKeyInfo *spki) 
+{
+    return seckey_GetKeyType(SECOID_GetAlgorithmTag(&spki->algorithm));
 }
 
 static SECKEYPublicKey *
@@ -1447,22 +1475,27 @@ SECKEY_ECParamsToBasePointOrderLen(const SECItem *encodedParams)
 
 /* returns key strength in bytes (not bits) */
 unsigned
-SECKEY_PublicKeyStrength(SECKEYPublicKey *pubk)
+SECKEY_PublicKeyStrength(const SECKEYPublicKey *pubk)
 {
     unsigned char b0;
+    unsigned size;
 
     /* interpret modulus length as key strength... in
      * fortezza that's the public key length */
-
+    if (!pubk)
+    	goto loser;
     switch (pubk->keyType) {
     case rsaKey:
+	if (!pubk->u.rsa.modulus.data) break;
     	b0 = pubk->u.rsa.modulus.data[0];
     	return b0 ? pubk->u.rsa.modulus.len : pubk->u.rsa.modulus.len - 1;
     case dsaKey:
+	if (!pubk->u.dsa.publicValue.data) break;
     	b0 = pubk->u.dsa.publicValue.data[0];
     	return b0 ? pubk->u.dsa.publicValue.len :
 	    pubk->u.dsa.publicValue.len - 1;
     case dhKey:
+	if (!pubk->u.dh.publicValue.data) break;
     	b0 = pubk->u.dh.publicValue.data[0];
     	return b0 ? pubk->u.dh.publicValue.len :
 	    pubk->u.dh.publicValue.len - 1;
@@ -1470,22 +1503,21 @@ SECKEY_PublicKeyStrength(SECKEYPublicKey *pubk)
 	return PR_MAX(pubk->u.fortezza.KEAKey.len, pubk->u.fortezza.DSSKey.len);
     case ecKey:
 	/* Get the key size in bits and adjust */
-	if (pubk->u.ec.size == 0) {
-	    pubk->u.ec.size = 
-		SECKEY_ECParamsToKeySize(&pubk->u.ec.DEREncodedParams);
-	} 
-	return (pubk->u.ec.size + 7)/8;
+	size =	SECKEY_ECParamsToKeySize(&pubk->u.ec.DEREncodedParams);
+	return (size + 7)/8;
     default:
 	break;
     }
+loser:
     PORT_SetError(SEC_ERROR_INVALID_KEY);
     return 0;
 }
 
 /* returns key strength in bits */
 unsigned
-SECKEY_PublicKeyStrengthInBits(SECKEYPublicKey *pubk)
+SECKEY_PublicKeyStrengthInBits(const SECKEYPublicKey *pubk)
 {
+    unsigned size;
     switch (pubk->keyType) {
     case rsaKey:
     case dsaKey:
@@ -1493,11 +1525,8 @@ SECKEY_PublicKeyStrengthInBits(SECKEYPublicKey *pubk)
     case fortezzaKey:
 	return SECKEY_PublicKeyStrength(pubk) * 8; /* 1 byte = 8 bits */
     case ecKey:
-	if (pubk->u.ec.size == 0) {
-	    pubk->u.ec.size = 
-		SECKEY_ECParamsToKeySize(&pubk->u.ec.DEREncodedParams);
-	} 
-	return pubk->u.ec.size;
+	size = SECKEY_ECParamsToKeySize(&pubk->u.ec.DEREncodedParams);
+	return size;
     default:
 	break;
     }
@@ -1532,7 +1561,7 @@ SECKEY_SignatureLen(const SECKEYPublicKey *pubk)
 }
 
 SECKEYPrivateKey *
-SECKEY_CopyPrivateKey(SECKEYPrivateKey *privk)
+SECKEY_CopyPrivateKey(const SECKEYPrivateKey *privk)
 {
     SECKEYPrivateKey *copyk;
     PRArenaPool *arena;
@@ -1578,7 +1607,7 @@ fail:
 }
 
 SECKEYPublicKey *
-SECKEY_CopyPublicKey(SECKEYPublicKey *pubk)
+SECKEY_CopyPublicKey(const SECKEYPublicKey *pubk)
 {
     SECKEYPublicKey *copyk;
     PRArenaPool *arena;
@@ -1592,8 +1621,8 @@ SECKEY_CopyPublicKey(SECKEYPublicKey *pubk)
 
     copyk = (SECKEYPublicKey *) PORT_ArenaZAlloc (arena, sizeof (SECKEYPublicKey));
     if (!copyk) {
-        PORT_SetError (SEC_ERROR_NO_MEMORY);
         PORT_FreeArena (arena, PR_FALSE);
+        PORT_SetError (SEC_ERROR_NO_MEMORY);
         return NULL;
     }
 
@@ -1646,11 +1675,11 @@ SECKEY_CopyPublicKey(SECKEYPublicKey *pubk)
           rv = SECITEM_CopyItem(arena, &copyk->u.fortezza.clearance, 
                                 &pubk->u.fortezza.clearance);
           if (rv != SECSuccess) break;
-          rv = SECITEM_CopyItem(arena, &copyk->u.fortezza.KEApriviledge, 
-                                &pubk->u.fortezza.KEApriviledge);
+          rv = SECITEM_CopyItem(arena, &copyk->u.fortezza.KEAprivilege, 
+                                &pubk->u.fortezza.KEAprivilege);
           if (rv != SECSuccess) break;
-          rv = SECITEM_CopyItem(arena, &copyk->u.fortezza.DSSpriviledge, 
-                                &pubk->u.fortezza.DSSpriviledge);
+          rv = SECITEM_CopyItem(arena, &copyk->u.fortezza.DSSprivilege, 
+                                &pubk->u.fortezza.DSSprivilege);
           if (rv != SECSuccess) break;
           rv = SECITEM_CopyItem(arena, &copyk->u.fortezza.KEAKey, 
                                 &pubk->u.fortezza.KEAKey);
@@ -1776,6 +1805,11 @@ SECKEY_CreateSubjectPublicKeyInfo(SECKEYPublicKey *pubk)
     CERTSubjectPublicKeyInfo *spki;
     PRArenaPool *arena;
     SECItem params = { siBuffer, NULL, 0 };
+
+    if (!pubk) {
+        PORT_SetError(SEC_ERROR_INVALID_ARGS);
+        return NULL;
+    }
 
     arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
     if (arena == NULL) {
@@ -2001,10 +2035,10 @@ SECKEY_EncodeDERSubjectPublicKeyInfo(SECKEYPublicKey *pubk)
     /* DER-encode the subjectpublickeyinfo */
     spkiDER = SEC_ASN1EncodeItem(NULL /*arena*/, NULL/*dest*/, spki,
 					CERT_SubjectPublicKeyInfoTemplate);
+
+    SECKEY_DestroySubjectPublicKeyInfo(spki);
+
 finish:
-    if (spki!=NULL) {
-	SECKEY_DestroySubjectPublicKeyInfo(spki);
-    }
     return spkiDER;
 }
 
@@ -2128,7 +2162,7 @@ SECKEY_ConvertAndDecodePublicKeyAndChallenge(char *pkacstr, char *challenge,
     sig = sd.signature;
     DER_ConvertBitString(&sig);
     rv = VFY_VerifyDataWithAlgorithmID(sd.data.data, sd.data.len, pubKey, &sig,
-     			&sd.signatureAlgorithm, NULL, wincx);
+			&(sd.signatureAlgorithm), NULL, wincx);
     if ( rv != SECSuccess ) {
 	goto loser;
     }

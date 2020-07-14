@@ -44,6 +44,7 @@
 #include "nsPKIParamBlock.h"
 #include "nsASN1Tree.h"
 #include "nsFormSigningDialog.h"
+#include "nsISSLCertErrorDialog.h"
 
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNSSDialogs, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPKIParamBlock, Init)
@@ -57,14 +58,14 @@ static const nsModuleComponentInfo components[] =
   {
     NSS_DIALOGS_DESCRIPTION,
     NS_NSSDIALOGS_CID,
-    NS_TOKENPASSWORDSDIALOG_CONTRACTID,
+    NS_SSLCERTERRORDIALOG_CONTRACTID,
     nsNSSDialogsConstructor
   },
 
   {
     NSS_DIALOGS_DESCRIPTION,
     NS_NSSDIALOGS_CID,
-    NS_BADCERTLISTENER_CONTRACTID,
+    NS_TOKENPASSWORDSDIALOG_CONTRACTID,
     nsNSSDialogsConstructor
   },
 

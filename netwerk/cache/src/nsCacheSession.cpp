@@ -42,7 +42,7 @@
 
 #include "nsCacheSession.h"
 #include "nsCacheService.h"
-
+#include "nsCRT.h"
 
 NS_IMPL_ISUPPORTS1(nsCacheSession, nsICacheSession)
 
@@ -127,4 +127,3 @@ NS_IMETHODIMP nsCacheSession::IsStorageEnabled(PRBool *result)
 
     return nsCacheService::IsStorageEnabledForPolicy(StoragePolicy(), result);
 }
-

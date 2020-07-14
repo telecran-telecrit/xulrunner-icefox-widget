@@ -47,7 +47,6 @@
 #include "nsIAccessible.h"
 #include "nsIDOMNodeList.h"
 #include "nsIAccessibilityService.h"
-#include "nsIBindingManager.h"
 #include "nsIWeakReference.h"
 
 enum { eSiblingsUninitialized = -1, eSiblingsWalkFrames = -2 };
@@ -74,27 +73,66 @@ public:
     PRBool mWalkAnonymousContent);
   virtual ~nsAccessibleTreeWalker();
 
+  /**
+   * Moves current state to point to the next child accessible.
+   */
   NS_IMETHOD GetNextSibling();
-  NS_IMETHOD GetParent();
+
+  /**
+   * Moves current state to point to the first child accessible.
+   */
   NS_IMETHOD GetFirstChild();
 
+  /**
+   * Current state. Used to initialize a11y tree walker and to get an accessible
+   * current state points to.
+   */
   WalkState mState;
 
 protected:
+
+  /**
+   * Return true if currently navigated node/frame is accessible.
+   */
   PRBool GetAccessible();
-  NS_IMETHOD GetFullTreeParentNode(nsIDOMNode *aChildNode, nsIDOMNode **aParentNodeOut);
+
+  /**
+   * Prepares current state to navigate through children of node/frame.
+   */
   void GetKids(nsIDOMNode *aParent);
 
+  /**
+   * Clears the current state.
+   */
   void ClearState();
+
+  /**
+   * Push current state on top of stack. State stack is used to navigate down to
+   * DOM/frame subtree duiring searching of accessible children.
+   */
   NS_IMETHOD PushState();
+
+  /**
+   * Pop state from stack and makes it current.
+   */
   NS_IMETHOD PopState();
 
+  /**
+   * Change current state so that its frame is changed to next frame.
+   *
+   * @param  aTryFirstChild  [in] points whether we should move to child or
+   *                         sibling frame
+   */
   void UpdateFrame(PRBool aTryFirstChild);
+
+  /**
+   * Change current state so that its node is changed to next node.
+   */
   void GetNextDOMNode();
 
   nsCOMPtr<nsIWeakReference> mWeakShell;
   nsCOMPtr<nsIAccessibilityService> mAccService;
-  nsCOMPtr<nsIBindingManager> mBindingManager;
+  PRBool mWalkAnonContent;
 };
 
 #endif 

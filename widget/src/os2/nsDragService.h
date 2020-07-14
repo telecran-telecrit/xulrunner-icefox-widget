@@ -63,7 +63,7 @@ public:
                                 nsIScriptableRegion* aRegion,
                                 PRUint32 aActionType);
   NS_IMETHOD StartDragSession();
-  NS_IMETHOD EndDragSession();
+  NS_IMETHOD EndDragSession(PRBool aDoneDrag);
 
     // nsIDragSession
   NS_IMETHOD GetNumDropItems(PRUint32* aNumDropItems);
@@ -94,8 +94,8 @@ protected:
   nsresult GetUrlAndTitle(nsISupports* aGenericData, char** aTargetName);
   nsresult GetUniTextTitle(nsISupports* aGenericData, char** aTargetName);
 
-  HWND     mDragWnd;
-  char*    mMimeType;
+  HWND          mDragWnd;
+  const char*   mMimeType;
   nsCOMPtr<nsISupportsArray> mSourceDataItems;
   nsCOMPtr<nsISupports>      mSourceData;
 

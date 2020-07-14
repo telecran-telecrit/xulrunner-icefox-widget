@@ -53,7 +53,7 @@ XPIDLSRCS	= \
 		nsICacheService.idl           \
 		nsICacheSession.idl           \
 		nsICacheVisitor.idl           \
-	        $(NULL)
+		$(NULL)
 
 include $(topsrcdir)/config/rules.mk
 

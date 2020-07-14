@@ -20,6 +20,7 @@
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
+ *   Serge Gautherie <sgautherie.bz@free.fr>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either of the GNU General Public License Version 2 or later (the "GPL"),
@@ -35,11 +36,10 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-#include <stdlib.h>
-#include <stdio.h>
-#include "nsXPCOM.h"
+#include "TestHarness.h"
+
 #include "nsITransactionManager.h"
-#include "nsIComponentManager.h"
+#include "nsComponentManagerUtils.h"
 
 static PRInt32 sConstructorCount     = 0;
 static PRInt32 sDestructorCount      = 0;
@@ -449,7 +449,7 @@ NS_IMPL_ISUPPORTS1(TestTransaction, nsITransaction)
 
 class SimpleTransaction : public TestTransaction
 {
-public:
+protected:
 
 #define NONE_FLAG               0
 #define THROWS_DO_ERROR_FLAG    1
@@ -462,6 +462,8 @@ public:
 
   PRInt32 mVal;
   PRInt32 mFlags;
+
+public:
 
   SimpleTransaction(PRInt32 aFlags=NONE_FLAG)
                     : mVal(++sConstructorCount), mFlags(aFlags)
@@ -499,7 +501,7 @@ public:
     // of date.
     //
     if (sDoOrderArr && mVal != sDoOrderArr[sDoCount]) {
-      printf("ERROR: ~SimpleTransaction expected %d got %d.\n",
+      printf("ERROR: DoTransaction expected %d got %d.\n",
              mVal, sDoOrderArr[sDoCount]);
       exit(NS_ERROR_FAILURE);
     }
@@ -522,7 +524,7 @@ public:
     // of date.
     //
     if (sUndoOrderArr && mVal != sUndoOrderArr[sUndoCount]) {
-      printf("ERROR: ~SimpleTransaction expected %d got %d.\n",
+      printf("ERROR: UndoTransaction expected %d got %d.\n",
              mVal, sUndoOrderArr[sUndoCount]);
       exit(NS_ERROR_FAILURE);
     }
@@ -545,7 +547,7 @@ public:
     // of date.
     //
     if (sRedoOrderArr && mVal != sRedoOrderArr[sRedoCount]) {
-      printf("ERROR: ~SimpleTransaction expected %d got %d.\n",
+      printf("ERROR: RedoTransaction expected %d got %d.\n",
              mVal, sRedoOrderArr[sRedoCount]);
       exit(NS_ERROR_FAILURE);
     }
@@ -595,8 +597,6 @@ private:
     mNumChildrenPerNode = aNumChildrenPerNode;
   }
 
-
-public:
   nsITransactionManager *mTXMgr;
 
   PRInt32 mLevel;
@@ -605,6 +605,8 @@ public:
 
   PRInt32 mMaxLevel;
   PRInt32 mNumChildrenPerNode;
+
+public:
 
   AggregateTransaction(nsITransactionManager *aTXMgr,
                        PRInt32 aMaxLevel, PRInt32 aNumChildrenPerNode,
@@ -735,11 +737,13 @@ public:
 
 class AggregateTransactionFactory : public TestTransactionFactory
 {
-public:
+private:
 
   PRInt32 mMaxLevel;
   PRInt32 mNumChildrenPerNode;
   PRInt32 mFixedFlags;
+
+public:
 
   AggregateTransactionFactory(PRInt32 aMaxLevel, PRInt32 aNumChildrenPerNode,
                               PRInt32 aFixedFlags=NONE_FLAG)
@@ -774,6 +778,9 @@ reset_globals()
   sRedoOrderArr       = 0;
 }
 
+/**
+ * Test behaviors in non-batch mode.
+ **/
 nsresult
 quick_test(TestTransactionFactory *factory)
 {
@@ -810,8 +817,7 @@ quick_test(TestTransactionFactory *factory)
   printf("Call DoTransaction() with null transaction ... ");
   result = mgr->DoTransaction(0);
 
-  if (NS_FAILED(result)
-      && result != NS_ERROR_NULL_POINTER) {
+  if (result != NS_ERROR_NULL_POINTER) {
     printf("ERROR: DoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -905,8 +911,8 @@ quick_test(TestTransactionFactory *factory)
    *******************************************************************/
 
   printf("Call Clear() with empty undo and redo stack ... ");
-  result = mgr->Clear();
 
+  result = mgr->Clear();
   if (NS_FAILED(result)) {
     printf("ERROR: Clear on empty undo and redo stack failed. (%d)\n", result);
     return result;
@@ -1022,8 +1028,7 @@ quick_test(TestTransactionFactory *factory)
 
   result = mgr->AddListener(0);
 
-  if (NS_FAILED(result)
-      && result != NS_ERROR_NULL_POINTER) {
+  if (result != NS_ERROR_NULL_POINTER) {
     printf("ERROR: AddListener() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -1040,8 +1045,7 @@ quick_test(TestTransactionFactory *factory)
 
   result = mgr->RemoveListener(0);
 
-  if (NS_FAILED(result)
-      && result != NS_ERROR_NULL_POINTER) {
+  if (result != NS_ERROR_NULL_POINTER) {
     printf("ERROR: RemoveListener() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -1053,7 +1057,7 @@ quick_test(TestTransactionFactory *factory)
    * Test coalescing by executing a transaction that can merge any
    * command into itself. Then execute 20 transaction. Afterwards,
    * we should still have the first transaction sitting on the undo
-   * stack.
+   * stack. Then clear the undo and redo stacks.
    *
    *******************************************************************/
 
@@ -1200,7 +1204,6 @@ quick_test(TestTransactionFactory *factory)
   }
 
   result = mgr->Clear();
-
   if (NS_FAILED(result)) {
     printf("ERROR: Clear() failed. (%d)\n", result);
     return result;
@@ -1585,7 +1588,6 @@ quick_test(TestTransactionFactory *factory)
   }
 
   result = mgr->Clear();
-
   if (NS_FAILED(result)) {
     printf("ERROR: Clear() failed. (%d)\n",
            result);
@@ -1731,7 +1733,7 @@ quick_test(TestTransactionFactory *factory)
 
   result = mgr->DoTransaction(tx);
 
-  if (NS_FAILED(result) && result != NS_ERROR_FAILURE) {
+  if (result != NS_ERROR_FAILURE) {
     printf("ERROR: DoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -1851,7 +1853,7 @@ quick_test(TestTransactionFactory *factory)
 
   result = mgr->UndoTransaction();
 
-  if (NS_FAILED(result) && result != NS_ERROR_FAILURE) {
+  if (result != NS_ERROR_FAILURE) {
     printf("ERROR: UndoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -2015,7 +2017,7 @@ quick_test(TestTransactionFactory *factory)
 
   result = mgr->RedoTransaction();
 
-  if (NS_FAILED(result) && result != NS_ERROR_FAILURE) {
+  if (result != NS_ERROR_FAILURE) {
     printf("ERROR: RedoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -2512,7 +2514,7 @@ quick_test(TestTransactionFactory *factory)
     return result;
   }
 
-  if (u1 == u2 || u2) {
+  if (u2) {
     printf("ERROR: Unexpected item at top of undo stack. (%d)\n", result);
     return NS_ERROR_FAILURE;
   }
@@ -2668,6 +2670,12 @@ quick_test(TestTransactionFactory *factory)
     return NS_ERROR_FAILURE;
   }
 
+  result = mgr->Clear();
+  if (NS_FAILED(result)) {
+    printf("ERROR: Clear() failed. (%d)\n", result);
+    return result;
+  }
+
   printf("passed\n");
 
   /*******************************************************************
@@ -2683,11 +2691,6 @@ quick_test(TestTransactionFactory *factory)
     printf("ERROR: Transaction constructor count (%d) != destructor count (%d).\n",
            sConstructorCount, sDestructorCount);
     return NS_ERROR_FAILURE;
-  }
-
-  if (NS_FAILED(result)) {
-    printf("ERROR: nsITransactionManager Release() failed. (%d)\n", result);
-    return result;
   }
 
   printf("passed\n");
@@ -2755,6 +2758,9 @@ aggregation_test()
   return quick_test(&factory);
 }
 
+/**
+ * Test behaviors in batch mode.
+ **/
 nsresult
 quick_batch_test(TestTransactionFactory *factory)
 {
@@ -3753,7 +3759,7 @@ quick_batch_test(TestTransactionFactory *factory)
 
   result = mgr->DoTransaction(tx);
 
-  if (NS_FAILED(result) && result != NS_ERROR_FAILURE) {
+  if (result != NS_ERROR_FAILURE) {
     printf("ERROR: DoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -3894,7 +3900,7 @@ quick_batch_test(TestTransactionFactory *factory)
 
   result = mgr->UndoTransaction();
 
-  if (NS_FAILED(result) && result != NS_ERROR_FAILURE) {
+  if (result != NS_ERROR_FAILURE) {
     printf("ERROR: UndoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -4072,7 +4078,7 @@ quick_batch_test(TestTransactionFactory *factory)
 
   result = mgr->RedoTransaction();
 
-  if (NS_FAILED(result) && result != NS_ERROR_FAILURE) {
+  if (result != NS_ERROR_FAILURE) {
     printf("ERROR: RedoTransaction() returned unexpected error. (%d)\n", result);
     return result;
   }
@@ -4370,6 +4376,12 @@ quick_batch_test(TestTransactionFactory *factory)
     return NS_ERROR_FAILURE;
   }
 
+  result = mgr->Clear();
+  if (NS_FAILED(result)) {
+    printf("ERROR: Clear() failed. (%d)\n", result);
+    return result;
+  }
+
   printf("passed\n");
 
   /*******************************************************************
@@ -4385,11 +4397,6 @@ quick_batch_test(TestTransactionFactory *factory)
     printf("ERROR: Transaction constructor count (%d) != destructor count (%d).\n",
            sConstructorCount, sDestructorCount);
     return NS_ERROR_FAILURE;
-  }
-
-  if (NS_FAILED(result)) {
-    printf("ERROR: nsITransactionManager Release() failed. (%d)\n", result);
-    return result;
   }
 
   printf("passed\n");
@@ -4458,6 +4465,10 @@ aggregation_batch_test()
   return quick_batch_test(&factory);
 }
 
+/**
+ * Create 'iterations * (iterations + 1) / 2' transactions;
+ * do/undo/redo/undo them.
+ **/
 nsresult
 stress_test(TestTransactionFactory *factory, PRInt32 iterations)
 {
@@ -4484,7 +4495,7 @@ stress_test(TestTransactionFactory *factory, PRInt32 iterations)
   for (i = 1; i <= iterations; i++) {
     /*******************************************************************
      *
-     * Execute a bunch of transactions:
+     * Create and execute a bunch of transactions:
      *
      *******************************************************************/
 
@@ -4558,7 +4569,11 @@ stress_test(TestTransactionFactory *factory, PRInt32 iterations)
     }
   }
 
-  // printf("%d  %d -  ", sConstructorCount, sDestructorCount);
+  result = mgr->Clear();
+  if (NS_FAILED(result)) {
+    printf("ERROR: Clear() failed. (%d)\n", result);
+    return result;
+  }
 
   if (sConstructorCount != sDestructorCount) {
     printf("ERROR: Transaction constructor count (%d) != destructor count (%d).\n",
@@ -4663,44 +4678,45 @@ aggregation_batch_stress_test()
 int
 main (int argc, char *argv[])
 {
-  nsresult result = NS_InitXPCOM2(nsnull, nsnull, nsnull);
-  if (NS_FAILED(result))
-    return result;
+  ScopedXPCOM xpcom("nsITransactionManager");
+  if (xpcom.failed())
+    return 1;
+
+  nsresult result;
+
+  //
+  // quick_test() part:
+  //
 
   result = simple_test();
-
-  if (NS_FAILED(result))
-    return result;
-
-  result = simple_batch_test();
-
-  if (NS_FAILED(result))
-    return result;
+  NS_ENSURE_SUCCESS(result, result);
 
   result = aggregation_test();
+  NS_ENSURE_SUCCESS(result, result);
 
-  if (NS_FAILED(result))
-    return result;
+  //
+  // quick_batch_test() part:
+  //
+
+  result = simple_batch_test();
+  NS_ENSURE_SUCCESS(result, result);
 
   result = aggregation_batch_test();
+  NS_ENSURE_SUCCESS(result, result);
 
-  if (NS_FAILED(result))
-    return result;
+  //
+  // stress_test() part:
+  //
 
   result = simple_stress_test();
-
-  if (NS_FAILED(result))
-    return result;
+  NS_ENSURE_SUCCESS(result, result);
 
   result = aggregation_stress_test();
-
-  if (NS_FAILED(result))
-    return result;
+  NS_ENSURE_SUCCESS(result, result);
 
   result = aggregation_batch_stress_test();
+  NS_ENSURE_SUCCESS(result, result);
 
-  if (NS_FAILED(result))
-    return result;
 
   return NS_OK;
 }

@@ -43,7 +43,6 @@
 #undef NOISY_FIRST_LETTER         // enables debug output for first-letter specific layout
 #undef NOISY_MAX_ELEMENT_SIZE     // enables debug output for max element size computation
 #undef NOISY_MAXIMUM_WIDTH        // enables debug output for max width computation
-#undef NOISY_KIDXMOST             // enables debug output for aState.mKidXMost computation
 #undef NOISY_FLOAT                // enables debug output for float reflow (the in/out metrics for the floated block)
 #undef NOISY_FLOAT_CLEARING
 #undef NOISY_FINAL_SIZE           // enables debug output for desired width/height computation, once all children have been reflowed
@@ -52,7 +51,7 @@
 #undef NOISY_VERTICAL_MARGINS
 #undef NOISY_REFLOW_REASON        // gives a little info about why each reflow was requested
 #undef REFLOW_STATUS_COVERAGE     // I think this is most useful for printing, to see which frames return "incomplete"
-#undef NOISY_SPACEMANAGER         // enables debug output for space manager use, useful for analysing reflow of floats and positioned elements
+#undef NOISY_FLOATMANAGER         // enables debug output for float manager use, useful for analysing reflow of floats
 #undef NOISY_BLOCK_INVALIDATE     // enables debug output for all calls to invalidate
 #undef REALLY_NOISY_REFLOW        // some extra debug info
 

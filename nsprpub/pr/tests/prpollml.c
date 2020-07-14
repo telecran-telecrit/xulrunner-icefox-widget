@@ -47,10 +47,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef SYMBIAN
+#define POLL_DESC_COUNT 128
+#else
 #define POLL_DESC_COUNT 256  /* This should be greater than the
                               * STACK_POLL_DESC_COUNT macro in
                               * ptio.c to cause syspoll_list to
                               * be created. */
+#endif
 
 static PRPollDesc pd[POLL_DESC_COUNT];
 
@@ -67,7 +71,7 @@ static void Test(void)
         if (rv != 0) {
             fprintf(stderr,
                 "PR_Poll should time out but returns %d (%d, %d)\n",
-                rv, PR_GetError(), PR_GetOSError());
+                (int) rv, (int) PR_GetError(), (int) PR_GetOSError());
             exit(1);
         }
     }
@@ -75,7 +79,8 @@ static void Test(void)
     for (i = POLL_DESC_COUNT; i >= 1; i--) {
         rv = PR_Poll(pd, i, timeout);
         if (rv != 0) {
-            fprintf(stderr, "PR_Poll should time out but returns %d\n", rv);
+            fprintf(stderr, "PR_Poll should time out but returns %d\n", 
+                             (int) rv);
             exit(1);
         }
     }
@@ -100,15 +105,20 @@ int main(int argc, char **argv)
     for (i = 0; i < POLL_DESC_COUNT; i++) {
         sock = PR_NewTCPSocket();
         if (sock == NULL) {
-            fprintf(stderr, "PR_NewTCPSocket failed\n");
+            fprintf(stderr, "PR_NewTCPSocket failed (%d, %d)\n",
+                            (int) PR_GetError(), (int) PR_GetOSError());
+            fprintf(stderr, "Ensure the per process file descriptor limit "
+                            "is greater than %d.", POLL_DESC_COUNT);
             exit(1);
         }
         if (PR_Bind(sock, &addr) == PR_FAILURE) {
-            fprintf(stderr, "PR_Bind failed\n");
+            fprintf(stderr, "PR_Bind failed (%d, %d)\n",
+                            (int) PR_GetError(), (int) PR_GetOSError());
             exit(1);
         }
         if (PR_Listen(sock, 5) == PR_FAILURE) {
-            fprintf(stderr, "PR_Listen failed\n");
+            fprintf(stderr, "PR_Listen failed (%d, %d)\n",
+                            (int) PR_GetError(), (int) PR_GetOSError());
             exit(1);
         }
     

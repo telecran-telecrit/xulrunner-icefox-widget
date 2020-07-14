@@ -69,6 +69,8 @@ PK11DefaultArrayEntry PK11_DefaultArray[] = {
 	{ "RC4", SECMOD_RC4_FLAG, CKM_RC4 },
 	{ "DES", SECMOD_DES_FLAG, CKM_DES_CBC },
 	{ "AES", SECMOD_AES_FLAG, CKM_AES_CBC },
+	{ "Camellia", SECMOD_CAMELLIA_FLAG, CKM_CAMELLIA_CBC },
+	{ "SEED", SECMOD_SEED_FLAG, CKM_SEED_CBC },
 	{ "RC5", SECMOD_RC5_FLAG, CKM_RC5_CBC },
 	{ "SHA-1", SECMOD_SHA1_FLAG, CKM_SHA_1 },
 	{ "SHA256", SECMOD_SHA256_FLAG, CKM_SHA256 },
@@ -98,7 +100,10 @@ PK11_GetDefaultArray(int *size)
  * These  slotlists are lists of modules which provide default support for
  *  a given algorithm or mechanism.
  */
-static PK11SlotList pk11_aesSlotList,
+static PK11SlotList 
+    pk11_seedSlotList,
+    pk11_camelliaSlotList,
+    pk11_aesSlotList,
     pk11_desSlotList,
     pk11_rc4SlotList,
     pk11_rc2SlotList,
@@ -413,7 +418,7 @@ PK11_NewSlotInfo(SECMODModule *mod)
 PK11SlotInfo *
 PK11_ReferenceSlot(PK11SlotInfo *slot)
 {
-    PR_AtomicIncrement(&slot->refCount);
+    PR_ATOMIC_INCREMENT(&slot->refCount);
     return slot;
 }
 
@@ -455,7 +460,7 @@ PK11_DestroySlot(PK11SlotInfo *slot)
 void
 PK11_FreeSlot(PK11SlotInfo *slot)
 {
-    if (PR_AtomicDecrement(&slot->refCount) == 0) {
+    if (PR_ATOMIC_DECREMENT(&slot->refCount) == 0) {
 	PK11_DestroySlot(slot);
     }
 }
@@ -477,13 +482,19 @@ PRBool
 SECMOD_HasRootCerts(void)
 {
    SECMODModuleList *mlp;
-   SECMODModuleList *modules = SECMOD_GetDefaultModuleList();
+   SECMODModuleList *modules;
    SECMODListLock *moduleLock = SECMOD_GetDefaultModuleListLock();
    int i;
    PRBool found = PR_FALSE;
 
+    if (!moduleLock) {
+    	PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+	return found;
+    }
+
    /* work through all the slots */
    SECMOD_GetReadLock(moduleLock);
+   modules = SECMOD_GetDefaultModuleList();
    for(mlp = modules; mlp != NULL; mlp = mlp->next) {
 	for (i=0; i < mlp->module->slotCount; i++) {
 	    PK11SlotInfo *tmpSlot = mlp->module->slots[i];
@@ -509,17 +520,22 @@ PK11_FindSlotsByNames(const char *dllName, const char* slotName,
                         const char* tokenName, PRBool presentOnly)
 {
     SECMODModuleList *mlp;
-    SECMODModuleList *modules = SECMOD_GetDefaultModuleList();
+    SECMODModuleList *modules;
     SECMODListLock *moduleLock = SECMOD_GetDefaultModuleListLock();
     int i;
     PK11SlotList* slotList = NULL;
     PRUint32 slotcount = 0;
     SECStatus rv = SECSuccess;
 
+    if (!moduleLock) {
+    	PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+	return slotList;
+    }
+
     slotList = PK11_NewSlotList();
     if (!slotList) {
         PORT_SetError(SEC_ERROR_NO_MEMORY);
-        return NULL;
+        return slotList;
     }
 
     if ( ((NULL == dllName) || (0 == *dllName)) &&
@@ -532,6 +548,7 @@ PK11_FindSlotsByNames(const char *dllName, const char* slotName,
 
     /* work through all the slots */
     SECMOD_GetReadLock(moduleLock);
+    modules = SECMOD_GetDefaultModuleList();
     for (mlp = modules; mlp != NULL; mlp = mlp->next) {
         PORT_Assert(mlp->module);
         if (!mlp->module) {
@@ -552,9 +569,8 @@ PK11_FindSlotsByNames(const char *dllName, const char* slotName,
                     (0==PORT_Strcmp(tmpSlot->token_name, tokenName)))) &&
                     ( (!slotName) || (tmpSlot->slot_name &&
                     (0==PORT_Strcmp(tmpSlot->slot_name, slotName)))) ) {
-                    PK11SlotInfo* slot = PK11_ReferenceSlot(tmpSlot);
-                    if (slot) {
-                        PK11_AddSlotToList(slotList, slot);
+                    if (tmpSlot) {
+                        PK11_AddSlotToList(slotList, tmpSlot);
                         slotcount++;
                     }
                 }
@@ -580,17 +596,22 @@ PK11SlotInfo *
 PK11_FindSlotByName(const char *name)
 {
    SECMODModuleList *mlp;
-   SECMODModuleList *modules = SECMOD_GetDefaultModuleList();
+   SECMODModuleList *modules;
    SECMODListLock *moduleLock = SECMOD_GetDefaultModuleListLock();
    int i;
    PK11SlotInfo *slot = NULL;
 
+    if (!moduleLock) {
+    	PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+	return slot;
+    }
    if ((name == NULL) || (*name == 0)) {
 	return PK11_GetInternalKeySlot();
    }
 
    /* work through all the slots */
    SECMOD_GetReadLock(moduleLock);
+   modules = SECMOD_GetDefaultModuleList();
    for(mlp = modules; mlp != NULL; mlp = mlp->next) {
 	for (i=0; i < mlp->module->slotCount; i++) {
 	    PK11SlotInfo *tmpSlot = mlp->module->slots[i];
@@ -617,13 +638,18 @@ PK11SlotInfo *
 PK11_FindSlotBySerial(char *serial)
 {
    SECMODModuleList *mlp;
-   SECMODModuleList *modules = SECMOD_GetDefaultModuleList();
+   SECMODModuleList *modules;
    SECMODListLock *moduleLock = SECMOD_GetDefaultModuleListLock();
    int i;
    PK11SlotInfo *slot = NULL;
 
+    if (!moduleLock) {
+    	PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+	return slot;
+    }
    /* work through all the slots */
    SECMOD_GetReadLock(moduleLock);
+   modules = SECMOD_GetDefaultModuleList();
    for(mlp = modules; mlp != NULL; mlp = mlp->next) {
 	for (i=0; i < mlp->module->slotCount; i++) {
 	    PK11SlotInfo *tmpSlot = mlp->module->slots[i];
@@ -752,6 +778,8 @@ pk11_InitSlotListStatic(PK11SlotList *list)
 SECStatus
 PK11_InitSlotLists(void)
 {
+    pk11_InitSlotListStatic(&pk11_seedSlotList);
+    pk11_InitSlotListStatic(&pk11_camelliaSlotList);
     pk11_InitSlotListStatic(&pk11_aesSlotList);
     pk11_InitSlotListStatic(&pk11_desSlotList);
     pk11_InitSlotListStatic(&pk11_rc4SlotList);
@@ -776,6 +804,8 @@ PK11_InitSlotLists(void)
 void
 PK11_DestroySlotLists(void)
 {
+    pk11_FreeSlotListStatic(&pk11_seedSlotList);
+    pk11_FreeSlotListStatic(&pk11_camelliaSlotList);
     pk11_FreeSlotListStatic(&pk11_aesSlotList);
     pk11_FreeSlotListStatic(&pk11_desSlotList);
     pk11_FreeSlotListStatic(&pk11_rc4SlotList);
@@ -807,6 +837,12 @@ PK11_GetSlotList(CK_MECHANISM_TYPE type)
         return NULL;
 #endif
     switch (type) {
+    case CKM_SEED_CBC:
+    case CKM_SEED_ECB:
+	return &pk11_seedSlotList;
+    case CKM_CAMELLIA_CBC:
+    case CKM_CAMELLIA_ECB:
+	return &pk11_camelliaSlotList;
     case CKM_AES_CBC:
     case CKM_AES_ECB:
 	return &pk11_aesSlotList;
@@ -1011,187 +1047,6 @@ PK11_MakeString(PRArenaPool *arena,char *space,
 }
 
 /*
- * verify that slot implements Mechanism mech properly by checking against
- * our internal implementation
- */
-PRBool
-PK11_VerifyMechanism(PK11SlotInfo *slot,PK11SlotInfo *intern,
-  CK_MECHANISM_TYPE mech, SECItem *data, SECItem *iv)
-{
-    PK11Context *test = NULL, *reference = NULL;
-    PK11SymKey *symKey = NULL, *testKey = NULL;
-    SECItem *param = NULL;
-    unsigned char encTest[8];
-    unsigned char encRef[8];
-    int outLenTest,outLenRef;
-    int key_size = 0;
-    PRBool verify = PR_FALSE;
-    SECStatus rv;
-
-    if ((mech == CKM_RC2_CBC) || (mech == CKM_RC2_ECB) || (mech == CKM_RC4)) {
-	key_size = 16;
-    }
-
-    /* initialize the mechanism parameter */
-    param = PK11_ParamFromIV(mech,iv);
-    if (param == NULL) goto loser;
-
-    /* load the keys and contexts */
-    symKey = PK11_KeyGen(intern,mech,NULL, key_size, NULL);
-    if (symKey == NULL) goto loser;
-
-    reference = PK11_CreateContextBySymKey(mech, CKA_ENCRYPT, symKey, param);
-    if (reference == NULL) goto loser;
-
-    testKey = pk11_CopyToSlot(slot, mech, CKA_ENCRYPT, symKey);
-    if (testKey == NULL) goto loser;
-
-    test = PK11_CreateContextBySymKey(mech, CKA_ENCRYPT, testKey, param);
-    if (test == NULL) goto loser;
-    SECITEM_FreeItem(param,PR_TRUE); param = NULL;
-
-    /* encrypt the test data */
-    rv = PK11_CipherOp(test,encTest,&outLenTest,sizeof(encTest),
-							data->data,data->len);
-    if (rv != SECSuccess) goto loser;
-    rv = PK11_CipherOp(reference,encRef,&outLenRef,sizeof(encRef),
-							data->data,data->len);
-    if (rv != SECSuccess) goto loser;
-
-    PK11_DestroyContext(reference,PR_TRUE); reference = NULL;
-    PK11_DestroyContext(test,PR_TRUE); test = NULL;
-
-    if (outLenTest != outLenRef) goto loser;
-    if (PORT_Memcmp(encTest, encRef, outLenTest) != 0) goto loser;
-
-    verify = PR_TRUE;
-
-loser:
-    if (test) PK11_DestroyContext(test,PR_TRUE);
-    if (symKey) PK11_FreeSymKey(symKey);
-    if (testKey) PK11_FreeSymKey(testKey);
-    if (reference) PK11_DestroyContext(reference,PR_TRUE);
-    if (param) SECITEM_FreeItem(param,PR_TRUE);
-
-    return verify;
-}
-
-/*
- * this code verifies that the advertised mechanisms are what they
- * seem to be.
- */
-#define MAX_MECH_LIST_SIZE 30	/* we only know of about 30 odd mechanisms */
-PRBool
-PK11_VerifySlotMechanisms(PK11SlotInfo *slot)
-{
-    CK_MECHANISM_TYPE mechListArray[MAX_MECH_LIST_SIZE];
-    CK_MECHANISM_TYPE *mechList = mechListArray;
-    static SECItem data;
-    static SECItem iv;
-    static unsigned char dataV[8];
-    static unsigned char ivV[8];
-    static PRBool generated = PR_FALSE;
-    CK_ULONG count;
-    int i;
-    CK_RV crv;
-
-    PRBool alloced = PR_FALSE;
-    PK11SlotInfo *intern = PK11_GetInternalSlot();
-
-    /* if we couldn't initialize an internal module, 
-     * we can't check external ones */
-    if (intern == NULL) return PR_FALSE;
-
-    /* first get the count of mechanisms */
-    if (!slot->isThreadSafe) PK11_EnterSlotMonitor(slot);
-    crv = PK11_GETTAB(slot)->C_GetMechanismList(slot->slotID,NULL,&count);
-    if (!slot->isThreadSafe) PK11_ExitSlotMonitor(slot);
-    if (crv != CKR_OK) {
-	PK11_FreeSlot(intern);
-	return PR_FALSE;
-    }
-
-
-    /* don't blow up just because the card supports more mechanisms than
-     * we know about, just alloc space for them */
-    if (count > MAX_MECH_LIST_SIZE) {
-    	mechList = (CK_MECHANISM_TYPE *)
-			    PORT_Alloc(count *sizeof(CK_MECHANISM_TYPE));
-	alloced = PR_TRUE;
-	if (mechList == NULL) {
-	    PK11_FreeSlot(intern);
-	    return PR_FALSE;
-	}
-    }
-    /* get the list */
-    if (!slot->isThreadSafe) PK11_EnterSlotMonitor(slot);
-    crv =PK11_GETTAB(slot)->C_GetMechanismList(slot->slotID, mechList, &count);
-    if (!slot->isThreadSafe) PK11_ExitSlotMonitor(slot);
-    if (crv != CKR_OK) {
-	if (alloced) PORT_Free(mechList);
-	PK11_FreeSlot(intern);
-	return PR_FALSE;
-    }
-
-    if (!generated) {
-	data.data = dataV;
-	data.len = sizeof(dataV);
-	iv.data = ivV;
-	iv.len = sizeof(ivV);
-	/* ok, this is a cheat, we know our internal random number generater
-	 * is thread safe */
-	PK11_GETTAB(intern)->C_GenerateRandom(intern->session,
-							data.data, data.len);
-	PK11_GETTAB(intern)->C_GenerateRandom(intern->session,
-							iv.data, iv.len);
-    }
-    for (i=0; i < (int) count; i++) {
-	switch (mechList[i]) {
-	case CKM_DES_CBC:
-	case CKM_DES_ECB:
-	case CKM_RC4:
-	case CKM_RC2_CBC:
-	case CKM_RC2_ECB:
-	    if (!PK11_VerifyMechanism(slot,intern,mechList[i],&data,&iv)){
-		if (alloced) PORT_Free(mechList);
-    		PK11_FreeSlot(intern);
-		return PR_FALSE;
-	    }
-	}
-    }
-    if (alloced) PORT_Free(mechList);
-    PK11_FreeSlot(intern);
-    return PR_TRUE;
-}
-
-/*
- * See if we need to run the verify test, do so if necessary. If we fail,
- * disable the slot.
- */    
-SECStatus
-pk11_CheckVerifyTest(PK11SlotInfo *slot)
-{
-    PK11_EnterSlotMonitor(slot);
-    if (slot->needTest) {
-	slot->needTest = PR_FALSE; 
-    	PK11_ExitSlotMonitor(slot);
-	if (!PK11_VerifySlotMechanisms(slot)) {
-	    (void)PK11_GETTAB(slot)->C_CloseSession(slot->session);
-	    slot->session = CK_INVALID_SESSION;
-	    PK11_ClearSlotList(slot);
-	    slot->disabled = PR_TRUE;
-	    slot->reason = PK11_DIS_TOKEN_VERIFY_FAILED;
-	    slot->needTest = PR_TRUE;
-	    PORT_SetError(SEC_ERROR_IO);
-	    return SECFailure;
-	}
-    } else {
-    	PK11_ExitSlotMonitor(slot);
-    }
-    return SECSuccess;
-}
-
-/*
  * Reads in the slots mechanism list for later use
  */
 SECStatus
@@ -1255,6 +1110,7 @@ PK11_InitToken(PK11SlotInfo *slot, PRBool loadCerts)
     CK_RV crv;
     char *tmp;
     SECStatus rv;
+    PRStatus status;
 
     /* set the slot flags to the current token values */
     if (!slot->isThreadSafe) PK11_EnterSlotMonitor(slot);
@@ -1273,6 +1129,8 @@ PK11_InitToken(PK11SlotInfo *slot, PRBool loadCerts)
 							PR_TRUE : PR_FALSE);
     slot->readOnly = ((tokenInfo.flags & CKF_WRITE_PROTECTED) ? 
 							PR_TRUE : PR_FALSE);
+	
+	 
     slot->hasRandom = ((tokenInfo.flags & CKF_RNG) ? PR_TRUE : PR_FALSE);
     slot->protectedAuthPath =
     		((tokenInfo.flags & CKF_PROTECTED_AUTHENTICATION_PATH) 
@@ -1351,12 +1209,9 @@ PK11_InitToken(PK11SlotInfo *slot, PRBool loadCerts)
 	if (!slot->isThreadSafe) PK11_ExitSlotMonitor(slot);
     }
 
-    nssToken_Refresh(slot->nssToken);
-
-    if (!(slot->needLogin)) {
-	return pk11_CheckVerifyTest(slot);
-    }
-
+    status = nssToken_Refresh(slot->nssToken);
+    if (status != PR_SUCCESS)
+    	return SECFailure;
 
     if (!(slot->isInternal) && (slot->hasRandom)) {
 	/* if this slot has a random number generater, use it to add entropy
@@ -1388,14 +1243,40 @@ PK11_InitToken(PK11SlotInfo *slot, PRBool loadCerts)
 	    PK11_ExitSlotMonitor(int_slot);
 	    if (crv == CKR_OK) {
 	        PK11_EnterSlotMonitor(slot);
-		PK11_GETTAB(slot)->C_SeedRandom(slot->session,
+		crv = PK11_GETTAB(slot)->C_SeedRandom(slot->session,
 					random_bytes, sizeof(random_bytes));
 	        PK11_ExitSlotMonitor(slot);
 	    }
 	    PK11_FreeSlot(int_slot);
 	}
     }
+    /* work around a problem in softoken where it incorrectly
+     * reports databases opened read only as read/write. */
+    if (slot->isInternal && !slot->readOnly) {
+	CK_SESSION_HANDLE session = CK_INVALID_SESSION;
 
+	/* try to open a R/W session */
+	crv =PK11_GETTAB(slot)->C_OpenSession(slot->slotID,
+	      CKF_RW_SESSION|CKF_SERIAL_SESSION, slot, pk11_notify ,&session);
+	/* what a well behaved token should return if you open 
+	 * a RW session on a read only token */
+	if (crv == CKR_TOKEN_WRITE_PROTECTED) {
+	    slot->readOnly = PR_TRUE;
+	} else if (crv == CKR_OK) {
+	    CK_SESSION_INFO sessionInfo;
+
+	    /* Because of a second bug in softoken, which silently returns
+	     * a RO session, we need to check what type of session we got. */
+	    crv = PK11_GETTAB(slot)->C_GetSessionInfo(session, &sessionInfo);
+	    if (crv == CKR_OK) {
+		if ((sessionInfo.flags & CKF_RW_SESSION) == 0) {
+		    /* session was readonly, so this softoken slot must be 			     * readonly */
+		    slot->readOnly = PR_TRUE;
+		}
+	    }
+	    PK11_GETTAB(slot)->C_CloseSession(session);
+	}
+    }
 	
     return SECSuccess;
 }
@@ -1518,12 +1399,12 @@ PK11_InitSlot(SECMODModule *mod,CK_SLOT_ID slotID,PK11SlotInfo *slot)
 	    slot->disabled = PR_TRUE;
 	    slot->reason = PK11_DIS_COULD_NOT_INIT_TOKEN;
 	}
-    }
-    if (pk11_isRootSlot(slot)) {
-	if (!slot->hasRootCerts) {
-	    slot->module->trustOrder = 100;
+	if (rv == SECSuccess && pk11_isRootSlot(slot)) {
+	    if (!slot->hasRootCerts) {
+		slot->module->trustOrder = 100;
+	    }
+	    slot->hasRootCerts= PR_TRUE;
 	}
-	slot->hasRootCerts= PR_TRUE;
     }
 }
 
@@ -1674,9 +1555,31 @@ PK11_IsHW(PK11SlotInfo *slot)
 }
 
 PRBool
+PK11_IsRemovable(PK11SlotInfo *slot)
+{
+    return !slot->isPerm;
+}
+
+PRBool
 PK11_IsInternal(PK11SlotInfo *slot)
 {
     return slot->isInternal;
+}
+
+PRBool
+PK11_IsInternalKeySlot(PK11SlotInfo *slot)
+{
+    PK11SlotInfo *int_slot;
+    PRBool result;
+
+    if (!slot->isInternal) {
+	return PR_FALSE;
+    }
+
+    int_slot = PK11_GetInternalKeySlot();
+    result = (int_slot == slot) ? PR_TRUE : PR_FALSE;
+    PK11_FreeSlot(int_slot);
+    return result;
 }
 
 PRBool
@@ -1822,12 +1725,29 @@ PK11_NeedUserInit(PK11SlotInfo *slot)
     return (PRBool)((slot->flags & CKF_USER_PIN_INITIALIZED) == 0);
 }
 
+static PK11SlotInfo *pk11InternalKeySlot = NULL;
+void
+pk11_SetInternalKeySlot(PK11SlotInfo *slot)
+{
+   if (pk11InternalKeySlot) {
+	PK11_FreeSlot(pk11InternalKeySlot);
+   }
+   pk11InternalKeySlot = slot ? PK11_ReferenceSlot(slot) : NULL;
+}
+
+
 /* get the internal key slot. FIPS has only one slot for both key slots and
  * default slots */
 PK11SlotInfo *
 PK11_GetInternalKeySlot(void)
 {
-    SECMODModule *mod = SECMOD_GetInternalModule();
+    SECMODModule *mod;
+
+    if (pk11InternalKeySlot) {
+	return PK11_ReferenceSlot(pk11InternalKeySlot);
+    }
+
+    mod = SECMOD_GetInternalModule();
     PORT_Assert(mod != NULL);
     if (!mod) {
 	PORT_SetError( SEC_ERROR_NO_MODULE );
@@ -1845,6 +1765,9 @@ PK11_GetInternalSlot(void)
     if (!mod) {
 	PORT_SetError( SEC_ERROR_NO_MODULE );
 	return NULL;
+    }
+    if (mod->isFIPS) {
+	return PK11_GetInternalKeySlot();
     }
     return PK11_ReferenceSlot(mod->slots[0]);
 }
@@ -1885,12 +1808,16 @@ PRBool
 PK11_TokenExists(CK_MECHANISM_TYPE type)
 {
     SECMODModuleList *mlp;
-    SECMODModuleList *modules = SECMOD_GetDefaultModuleList();
+    SECMODModuleList *modules;
     SECMODListLock *moduleLock = SECMOD_GetDefaultModuleListLock();
     PK11SlotInfo *slot;
     PRBool found = PR_FALSE;
     int i;
 
+    if (!moduleLock) {
+    	PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+	return found;
+    }
     /* we only need to know if there is a token that does this mechanism.
      * check the internal module first because it's fast, and supports 
      * almost everything. */
@@ -1902,6 +1829,7 @@ PK11_TokenExists(CK_MECHANISM_TYPE type)
     if (found) return PR_TRUE; /* bypass getting module locks */
 
     SECMOD_GetReadLock(moduleLock);
+    modules = SECMOD_GetDefaultModuleList();
     for(mlp = modules; mlp != NULL && (!found); mlp = mlp->next) {
 	for (i=0; i < mlp->module->slotCount; i++) {
 	    slot = mlp->module->slots[i];
@@ -1927,18 +1855,27 @@ PK11SlotList *
 PK11_GetAllTokens(CK_MECHANISM_TYPE type, PRBool needRW, PRBool loadCerts, 
                   void *wincx)
 {
-    PK11SlotList *     list         = PK11_NewSlotList();
-    PK11SlotList *     loginList    = PK11_NewSlotList();
-    PK11SlotList *     friendlyList = PK11_NewSlotList();
+    PK11SlotList *     list;
+    PK11SlotList *     loginList;
+    PK11SlotList *     friendlyList;
     SECMODModuleList * mlp;
-    SECMODModuleList * modules      = SECMOD_GetDefaultModuleList();
-    SECMODListLock *   moduleLock   = SECMOD_GetDefaultModuleListLock();
+    SECMODModuleList * modules;
+    SECMODListLock *   moduleLock;
     int                i;
 #if defined( XP_WIN32 ) 
     int                j            = 0;
     PRInt32            waste[16];
 #endif
 
+    moduleLock   = SECMOD_GetDefaultModuleListLock();
+    if (!moduleLock) {
+    	PORT_SetError(SEC_ERROR_NOT_INITIALIZED);
+	return NULL;
+    }
+
+    list         = PK11_NewSlotList();
+    loginList    = PK11_NewSlotList();
+    friendlyList = PK11_NewSlotList();
     if ((list == NULL)  || (loginList == NULL) || (friendlyList == NULL)) {
 	if (list) PK11_FreeSlotList(list);
 	if (loginList) PK11_FreeSlotList(loginList);
@@ -1947,6 +1884,8 @@ PK11_GetAllTokens(CK_MECHANISM_TYPE type, PRBool needRW, PRBool loadCerts,
     }
 
     SECMOD_GetReadLock(moduleLock);
+
+    modules      = SECMOD_GetDefaultModuleList();
     for(mlp = modules; mlp != NULL; mlp = mlp->next) {
 
 #if defined( XP_WIN32 ) 
@@ -2115,6 +2054,64 @@ PK11_GetBestKeyLength(PK11SlotInfo *slot,CK_MECHANISM_TYPE mechanism)
     if (mechanism_info.ulMinKeySize == mechanism_info.ulMaxKeySize) 
 		return 0;
     return mechanism_info.ulMaxKeySize;
+}
+
+
+/*
+ * This function uses the existing PKCS #11 module to find the
+ * longest supported key length in the preferred token for a mechanism.
+ * This varies from the above function in that 1) it returns the key length
+ * even for fixed key algorithms, and 2) it looks through the tokens
+ * generally rather than for a specific token. This is used in liu of
+ * a PK11_GetKeyLength function in pk11mech.c since we can actually read
+ * supported key lengths from PKCS #11.
+ *
+ * For symmetric key operations the length is returned in bytes.
+ */
+int
+PK11_GetMaxKeyLength(CK_MECHANISM_TYPE mechanism)
+{
+    CK_MECHANISM_INFO mechanism_info;
+    PK11SlotList *list = NULL;
+    PK11SlotListElement *le ;
+    PRBool freeit = PR_FALSE;
+    int keyLength = 0;
+
+    list = PK11_GetSlotList(mechanism);
+
+    if ((list == NULL) || (list->head == NULL)) {
+	/* We need to look up all the tokens for the mechanism */
+	list = PK11_GetAllTokens(mechanism,PR_FALSE,PR_FALSE,NULL);
+	freeit = PR_TRUE;
+    }
+
+    /* no tokens recognize this mechanism */
+    if (list == NULL) {
+	PORT_SetError(SEC_ERROR_INVALID_ALGORITHM);
+	return 0;
+    }
+
+    for (le = PK11_GetFirstSafe(list); le;
+			 	le = PK11_GetNextSafe(list,le,PR_TRUE)) {
+	PK11SlotInfo *slot = le->slot;
+	CK_RV crv;
+	if (PK11_IsPresent(slot)) {
+	    if (!slot->isThreadSafe) PK11_EnterSlotMonitor(slot);
+	    crv = PK11_GETTAB(slot)->C_GetMechanismInfo(slot->slotID,
+                               mechanism,&mechanism_info);
+ 	    if (!slot->isThreadSafe) PK11_ExitSlotMonitor(slot);
+	    if ((crv == CKR_OK)  && (mechanism_info.ulMaxKeySize != 0)
+		&& (mechanism_info.ulMaxKeySize != 0xffffffff)) {
+		keyLength = mechanism_info.ulMaxKeySize;
+		break;
+	    }
+	}
+    }
+    if (le) 
+	PK11_FreeSlotListElement(list, le);
+    if (freeit) 
+	PK11_FreeSlotList(list);
+    return keyLength;
 }
 
 SECStatus

@@ -10,12 +10,10 @@ function MultiplexHandler(event)
         var charset = node.getAttribute('id');
         charset = charset.substring('charset.'.length, charset.length)
         SetForcedCharset(charset);
-        SetDefaultCharacterSet(charset);
     } else if (name == 'charsetCustomize') {
         //do nothing - please remove this else statement, once the charset prefs moves to the pref window
     } else {
         SetForcedCharset(node.getAttribute('id'));
-        SetDefaultCharacterSet(node.getAttribute('id'));
     }
 }
 
@@ -53,12 +51,6 @@ function ComposerMultiplexHandler(event)
     } else {
         SetForcedEditorCharset(node.getAttribute('id'));
     }
-}
-
-function SetDefaultCharacterSet(charset)
-{
-    dump("Charset Overlay menu item pressed: " + charset + "\n");
-    BrowserSetDefaultCharacterSet(charset);
 }
 
 function SelectDetector(event, doReload)
@@ -126,21 +118,19 @@ function SetForcedCharset(charset)
 var gPrevCharset = null;
 function UpdateCurrentCharset()
 {
-    var menuitem = null;
-
-    // exctract the charset from DOM
+    // extract the charset from DOM
     var wnd = document.commandDispatcher.focusedWindow;
     if ((window == wnd) || (wnd == null)) wnd = window.content;
-    menuitem = document.getElementById('charset.' + wnd.document.characterSet);
 
+    // Uncheck previous item
+    if (gPrevCharset) {
+        var pref_item = document.getElementById('charset.' + gPrevCharset);
+        if (pref_item)
+          pref_item.setAttribute('checked', 'false');
+    }
+
+    var menuitem = document.getElementById('charset.' + wnd.document.characterSet);
     if (menuitem) {
-        // uncheck previously checked item to workaround Mac checkmark problem
-        // bug 98625
-        if (gPrevCharset) {
-            var pref_item = document.getElementById('charset.' + gPrevCharset);
-            if (pref_item)
-              pref_item.setAttribute('checked', 'false');
-        }
         menuitem.setAttribute('checked', 'true');
     }
 }
@@ -255,7 +245,7 @@ function mailCharsetLoadListener (event)
     }
 }
 
-var wintype = document.firstChild.getAttribute('windowtype');
+var wintype = document.documentElement.getAttribute('windowtype');
 if (window && (wintype == "navigator:browser"))
 {
     var contentArea = window.document.getElementById("appcontent");

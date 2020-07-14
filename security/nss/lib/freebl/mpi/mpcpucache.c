@@ -53,17 +53,20 @@
  * 
  */
 
-#if defined(i386) || defined(__i386) || defined(__X86__) || defined (_M_IX86) || defined(__x86_64__) || defined(__x86_64)
+#if defined(i386) || defined(__i386) || defined(__X86__) || defined (_M_IX86) || defined(__x86_64__) || defined(__x86_64) || defined(_M_AMD64)
 /* X86 processors have special instructions that tell us about the cache */
 #include "string.h"
 
-#if defined(__x86_64__) || defined(__x86_64)
+#if defined(__x86_64__) || defined(__x86_64) || defined(_M_AMD64)
 #define AMD_64 1
 #endif
 
 /* Generic CPUID function */
 #if defined(AMD_64)
-static void cpuid(unsigned long op, unsigned long *eax, 
+
+#if defined(__GNUC__)
+
+void freebl_cpuid(unsigned long op, unsigned long *eax, 
 	                 unsigned long *ebx, unsigned long *ecx, 
                          unsigned long *edx)
 {
@@ -74,8 +77,32 @@ static void cpuid(unsigned long op, unsigned long *eax,
 		  "=d" (*edx)
 		: "0" (op));
 }
-#elif !defined(_MSC_VER)
-static void cpuid(unsigned long op, unsigned long *eax, 
+
+#elif defined(_MSC_VER)
+
+#include <intrin.h>
+
+void freebl_cpuid(unsigned long op, unsigned long *eax, 
+           unsigned long *ebx, unsigned long *ecx, 
+           unsigned long *edx)
+{
+    int intrinsic_out[4];
+
+    __cpuid(intrinsic_out, op);
+    *eax = intrinsic_out[0];
+    *ebx = intrinsic_out[1];
+    *ecx = intrinsic_out[2];
+    *edx = intrinsic_out[3];
+}
+
+#endif
+
+#else /* !defined(AMD_64) */
+
+/* x86 */
+
+#if defined(__GNUC__)
+void freebl_cpuid(unsigned long op, unsigned long *eax, 
 	                 unsigned long *ebx, unsigned long *ecx, 
                          unsigned long *edx)
 {
@@ -115,13 +142,13 @@ static unsigned long changeFlag(unsigned long flag)
 	return changedFlags ^ originalFlags;
 }
 
-#else
+#elif defined(_MSC_VER)
 
 /*
  * windows versions of the above assembler
  */
 #define wcpuid __asm __emit 0fh __asm __emit 0a2h
-static void cpuid(unsigned long op,    unsigned long *Reax, 
+void freebl_cpuid(unsigned long op,    unsigned long *Reax, 
     unsigned long *Rebx, unsigned long *Recx, unsigned long *Redx)
 {
         unsigned long  Leax, Lebx, Lecx, Ledx;
@@ -164,6 +191,8 @@ static unsigned long changeFlag(unsigned long flag)
 	}
 	return changedFlags ^ originalFlags;
 }
+#endif
+
 #endif
 
 #if !defined(AMD_64)
@@ -543,7 +572,7 @@ getIntelCacheLineSize(int cpuidLevel)
      * to the getIntelRegisterCacheLineSize code, which breaks the registers
      * down into their component descriptors. In the end the lineSize of the
      * lowest level cache data cache is returned. */
-    cpuid(2, &eax, &ebx, &ecx, &edx);
+    freebl_cpuid(2, &eax, &ebx, &ecx, &edx);
     repeat = eax & 0xf;
     for (count = 0; count < repeat; count++) {
 	if ((eax & 0x80000000) == 0) {
@@ -559,7 +588,7 @@ getIntelCacheLineSize(int cpuidLevel)
 	    getIntelRegisterCacheLineSize(edx, &level, &lineSize);
 	}
 	if (count+1 != repeat) {
-	    cpuid(2, &eax, &ebx, &ecx, &edx);
+	    freebl_cpuid(2, &eax, &ebx, &ecx, &edx);
 	}
     }
     return lineSize;
@@ -579,11 +608,11 @@ getOtherCacheLineSize(unsigned long cpuidLevel)
     unsigned long eax, ebx, ecx, edx;
 
     /* get the Extended CPUID level */
-    cpuid(0x80000000, &eax, &ebx, &ecx, &edx);
+    freebl_cpuid(0x80000000, &eax, &ebx, &ecx, &edx);
     cpuidLevel = eax;
 
     if (cpuidLevel >= 0x80000005) {
-	cpuid(0x80000005, &eax, &ebx, &ecx, &edx);
+	freebl_cpuid(0x80000005, &eax, &ebx, &ecx, &edx);
 	lineSize = ecx & 0xff; /* line Size, L1 Data Cache */
     }
     return lineSize;
@@ -614,8 +643,44 @@ static const char * const manMap[] = {
 
 static const int n_manufacturers = sizeof(manMap)/sizeof(manMap[0]);
 
+
 #define MAN_UNKNOWN 9
 
+#if !defined(AMD_64)
+#define SSE2_FLAG (1<<26)
+unsigned long
+s_mpi_is_sse2()
+{
+    unsigned long eax, ebx, ecx, edx;
+    int manufacturer = MAN_UNKNOWN;
+    int i;
+    char string[13];
+
+    if (is386() || is486()) {
+	return 0;
+    }
+    freebl_cpuid(0, &eax, &ebx, &ecx, &edx);
+    *(int *)string = ebx;
+    *(int *)&string[4] = edx;
+    *(int *)&string[8] = ecx;
+    string[12] = 0;
+
+    /* has no SSE2 extensions */
+    if (eax == 0) {
+	return 0;
+    }
+
+    for (i=0; i < n_manufacturers; i++) {
+	if ( strcmp(manMap[i],string) == 0) {
+	    manufacturer = i;
+	    break;
+	}
+    }
+
+    freebl_cpuid(1,&eax,&ebx,&ecx,&edx);
+    return (edx & SSE2_FLAG) == SSE2_FLAG;
+}
+#endif
 
 unsigned long
 s_mpi_getProcessorLineSize()
@@ -636,7 +701,7 @@ s_mpi_getProcessorLineSize()
 #endif
 
     /* Pentium, cpuid command is available */
-    cpuid(0, &eax, &ebx, &ecx, &edx);
+    freebl_cpuid(0, &eax, &ebx, &ecx, &edx);
     cpuidLevel = eax;
     *(int *)string = ebx;
     *(int *)&string[4] = edx;

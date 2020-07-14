@@ -43,17 +43,45 @@
 #include "nsParserCIID.h"
 #include "nsStreamUtils.h"
 #include "nsStringStream.h"
+#include "nsIScriptError.h"
 #include "nsSAXAttributes.h"
+#include "nsSAXLocator.h"
 #include "nsSAXXMLReader.h"
 
 #define XMLNS_URI "http://www.w3.org/2000/xmlns/"
 
 static NS_DEFINE_CID(kParserCID, NS_PARSER_CID);
 
-NS_IMPL_ISUPPORTS6(nsSAXXMLReader, nsISAXXMLReader,
-                   nsIExpatSink, nsIExtendedExpatSink,
-                   nsIContentSink,  nsIRequestObserver,
-                   nsIStreamListener)
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsSAXXMLReader)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsSAXXMLReader)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mContentHandler)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mDTDHandler)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mErrorHandler)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mLexicalHandler)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mBaseURI)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mListener)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mParserObserver)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsSAXXMLReader)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mContentHandler)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mDTDHandler)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mErrorHandler)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mLexicalHandler)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mBaseURI)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mListener)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mParserObserver)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTING_ADDREF_AMBIGUOUS(nsSAXXMLReader, nsISAXXMLReader)
+NS_IMPL_CYCLE_COLLECTING_RELEASE_AMBIGUOUS(nsSAXXMLReader, nsISAXXMLReader)
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(nsSAXXMLReader)
+  NS_INTERFACE_MAP_ENTRY(nsISAXXMLReader)
+  NS_INTERFACE_MAP_ENTRY(nsIExpatSink)
+  NS_INTERFACE_MAP_ENTRY(nsIExtendedExpatSink)
+  NS_INTERFACE_MAP_ENTRY(nsIContentSink)
+  NS_INTERFACE_MAP_ENTRY(nsIRequestObserver)
+  NS_INTERFACE_MAP_ENTRY(nsIStreamListener)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsISAXXMLReader)
+NS_INTERFACE_MAP_END
 
 nsSAXXMLReader::nsSAXXMLReader() : mIsAsyncParse(PR_FALSE)
 {
@@ -173,6 +201,8 @@ nsSAXXMLReader::HandleStartDTD(const PRUnichar *aName,
   if (!aPublicId)
     aPublicId = &nullChar;
 
+  mSystemId = aSystemId;
+  mPublicId = aPublicId;
   if (mLexicalHandler) {
     return mLexicalHandler->StartDTD(nsDependentString(aName),
                                      nsDependentString(aSystemId),
@@ -303,12 +333,36 @@ nsSAXXMLReader::HandleXMLDeclaration(const PRUnichar *aVersion,
 
 NS_IMETHODIMP
 nsSAXXMLReader::ReportError(const PRUnichar* aErrorText,
-                            const PRUnichar* aSourceText)
+                            const PRUnichar* aSourceText,
+                            nsIScriptError *aError,
+                            PRBool *_retval)
 {
-  /// XXX need to settle what to do about the input setup, so I have
-  /// coherent values for the nsISAXLocator here. nsnull for now.
-  if (mErrorHandler)
-    return mErrorHandler->FatalError(nsnull, nsDependentString(aErrorText));
+  NS_PRECONDITION(aError && aSourceText && aErrorText, "Check arguments!!!");
+  // Normally, the expat driver should report the error.
+  *_retval = PR_TRUE;
+
+  if (mErrorHandler) {
+    PRUint32 lineNumber;
+    nsresult rv = aError->GetLineNumber(&lineNumber);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    PRUint32 columnNumber;
+    rv = aError->GetColumnNumber(&columnNumber);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    nsCOMPtr<nsISAXLocator> locator = new nsSAXLocator(mPublicId,
+                                                       mSystemId,
+                                                       lineNumber,
+                                                       columnNumber);
+    if (!locator)
+      return NS_ERROR_OUT_OF_MEMORY;
+
+    rv = mErrorHandler->FatalError(locator, nsDependentString(aErrorText));
+    if (NS_SUCCEEDED(rv)) {
+      // The error handler has handled the script error.  Don't log to console.
+      *_retval = PR_FALSE;
+    }
+  }
 
   return NS_OK;
 }
@@ -421,7 +475,8 @@ nsSAXXMLReader::ParseFromString(const nsAString &aStr,
   // The new stream holds a reference to the buffer
   nsCOMPtr<nsIInputStream> stream;
   nsresult rv = NS_NewByteInputStream(getter_AddRefs(stream),
-                                      data.get(), data.Length());
+                                      data.get(), data.Length(),
+                                      NS_ASSIGNMENT_DEPEND);
   NS_ENSURE_SUCCESS(rv, rv);
   return ParseFromStream(stream, "UTF-8", aContentType);
 }
@@ -465,6 +520,15 @@ nsSAXXMLReader::ParseFromStream(nsIInputStream *aStream,
   rv = mListener->OnStartRequest(parserChannel, nsnull);
   if (NS_FAILED(rv))
     parserChannel->Cancel(rv);
+
+  /* When parsing a new document, we need to clear the XML identifiers.
+     HandleStartDTD will set these values from the DTD declaration tag.
+     We won't have them, of course, if there's a well-formedness error
+     before the DTD tag (such as a space before an XML declaration).
+   */
+  mSystemId.Truncate();
+  mPublicId.Truncate();
+
   nsresult status;
   parserChannel->GetStatus(&status);
   
@@ -563,11 +627,7 @@ nsSAXXMLReader::InitParser(nsIRequestObserver *aObserver, nsIChannel *aChannel)
   TryChannelCharset(aChannel, charsetSource, charset);
   parser->SetDocumentCharset(charset, charsetSource);
 
-#ifdef MOZILLA_1_8_BRANCH
-  rv = parser->Parse(mBaseURI, aObserver, PR_FALSE);
-#else
   rv = parser->Parse(mBaseURI, aObserver);
-#endif
   NS_ENSURE_SUCCESS(rv, rv);
 
   mListener = do_QueryInterface(parser, &rv);

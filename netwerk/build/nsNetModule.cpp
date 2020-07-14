@@ -39,6 +39,7 @@
 
 #include "nsCOMPtr.h"
 #include "nsIModule.h"
+#include "nsIClassInfoImpl.h"
 #include "nsIGenericFactory.h"
 #include "nsIComponentManager.h"
 #include "nsIServiceManager.h"
@@ -46,26 +47,26 @@
 #include "nsSocketProviderService.h"
 #include "nscore.h"
 #include "nsSimpleURI.h"
+#include "nsSimpleNestedURI.h"
 #include "nsLoadGroup.h"
 #include "nsStreamLoader.h"
 #include "nsUnicharStreamLoader.h"
-#include "nsAsyncStreamListener.h"
 #include "nsFileStreams.h"
 #include "nsBufferedStreams.h"
 #include "nsMIMEInputStream.h"
 #include "nsSOCKSSocketProvider.h"
 #include "nsCacheService.h"
-#include "nsIOThreadPool.h"
+#include "nsDiskCacheDeviceSQL.h"
 #include "nsMimeTypes.h"
 #include "nsNetStrings.h"
+#include "nsDNSPrefetch.h"
+#include "nsAboutProtocolHandler.h"
 
 #include "nsNetCID.h"
 
-#if defined(XP_MAC) || defined(XP_MACOSX)
-// Mac OS
+#if defined(XP_MACOSX)
 #define BUILD_APPLEFILE_DECODER 1
 #else
-// other platforms
 #define BUILD_BINHEX_DECODER 1
 #endif
 
@@ -79,9 +80,10 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsDNSService, Init)
   
 #include "nsProtocolProxyService.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsProtocolProxyService, Init)
+NS_DECL_CLASSINFO(nsProtocolProxyService)
 
 #include "nsStreamTransportService.h"
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsStreamTransportService)
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsStreamTransportService, Init)
 
 #include "nsSocketTransportService2.h"
 #undef LOG
@@ -91,6 +93,9 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsSocketTransportService, Init)
 #include "nsServerSocket.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsServerSocket)
 
+#include "nsUDPSocketProvider.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsUDPSocketProvider)
+
 #include "nsAsyncStreamCopier.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsAsyncStreamCopier)
 
@@ -98,7 +103,7 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsAsyncStreamCopier)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsInputStreamPump)
 
 #include "nsInputStreamChannel.h"
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsInputStreamChannel)
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsInputStreamChannel, Init)
 
 #include "nsDownloader.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsDownloader)
@@ -107,6 +112,11 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsDownloader)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsSyncStreamListener, Init)
 
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsSafeFileOutputStream)
+
+NS_GENERIC_AGGREGATED_CONSTRUCTOR_INIT(nsLoadGroup, Init)
+
+#include "nsEffectiveTLDService.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsEffectiveTLDService, Init)
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -161,6 +171,15 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsStreamListenerTee)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsCookieService, nsCookieService::GetSingleton)
 #endif
 
+
+///////////////////////////////////////////////////////////////////////////////
+#ifdef NECKO_WIFI
+
+#include "nsWifiMonitor.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsWifiMonitor)
+
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////
 // protocols
 ///////////////////////////////////////////////////////////////////////////////
@@ -168,16 +187,25 @@ NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsCookieService, nsCookieService::GetSi
 // about:blank is mandatory
 #include "nsAboutProtocolHandler.h"
 #include "nsAboutBlank.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsAboutProtocolHandler)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsSafeAboutProtocolHandler)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsNestedAboutURI)
 
 #ifdef NECKO_PROTOCOL_about
 // about
+#ifdef NS_BUILD_REFCNT_LOGGING
 #include "nsAboutBloat.h"
+#endif
 #include "nsAboutCache.h"
-#include "nsAboutRedirector.h"
 #include "nsAboutCacheEntry.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsAboutCacheEntry)
 #endif
-  
+
+#ifdef NECKO_OFFLINE_CACHE
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsOfflineCacheDevice, nsOfflineCacheDevice::GetInstance)
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsApplicationCacheNamespace)
+#endif
+
 #ifdef NECKO_PROTOCOL_file
 // file
 #include "nsFileProtocolHandler.h"
@@ -214,6 +242,20 @@ NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsResProtocolHandler, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsResURL)
 #endif
 
+#ifdef NECKO_PROTOCOL_gopher
+#include "nsGopherHandler.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsGopherHandler)
+#endif
+
+#ifdef NECKO_PROTOCOL_viewsource
+#include "nsViewSourceHandler.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsViewSourceHandler)
+#endif
+
+#ifdef NECKO_PROTOCOL_data
+#include "nsDataHandler.h"
+#endif
+
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "nsURIChecker.h"
@@ -229,16 +271,22 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsStdURLParser)
 #include "nsStandardURL.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsStandardURL)
 
+NS_GENERIC_AGGREGATED_CONSTRUCTOR(nsSimpleURI)
+
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsSimpleNestedURI)
+
 ///////////////////////////////////////////////////////////////////////////////
 
 #include "nsIDNService.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsIDNService, Init)
 
 ///////////////////////////////////////////////////////////////////////////////
-
-#if defined(XP_WIN) && !defined(WINCE)
+#if defined(XP_WIN)
 #include "nsNotifyAddrListener.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNotifyAddrListener, Init)
+#elif defined(MOZ_WIDGET_COCOA)
+#include "nsNetworkLinkService.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsNetworkLinkService, Init)
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -250,7 +298,7 @@ nsresult NS_NewFTPDirListingConv(nsFTPDirListingConv** result);
 
 #ifdef NECKO_PROTOCOL_gopher
 #include "nsGopherDirListingConv.h"
-nsresult NS_NewGopherDirListingConv(nsGopherDirListingConv** result);
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsGopherDirListingConv)
 #endif
 
 #include "nsMultiMixedConv.h"
@@ -276,7 +324,6 @@ nsresult NS_NewStreamConv(nsStreamConverterService **aStreamConv);
 #define MULTI_MIXED                  "?from=multipart/mixed&to=*/*"
 #define MULTI_BYTERANGES             "?from=multipart/byteranges&to=*/*"
 #define UNKNOWN_CONTENT              "?from=" UNKNOWN_CONTENT_TYPE "&to=*/*"
-#define MAYBE_TEXT                   "?from=" APPLICATION_MAYBE_TEXT "&to=*/*"
 #define GZIP_TO_UNCOMPRESSED         "?from=gzip&to=uncompressed"
 #define XGZIP_TO_UNCOMPRESSED        "?from=x-gzip&to=uncompressed"
 #define COMPRESS_TO_UNCOMPRESSED     "?from=compress&to=uncompressed"
@@ -288,27 +335,27 @@ nsresult NS_NewStreamConv(nsStreamConverterService **aStreamConv);
 #define BINHEX_TO_WILD               "?from=application/mac-binhex40&to=*/*"
 #endif
 
-static const char *const g_StreamConverterArray[] = {
-        FTP_TO_INDEX,
-        GOPHER_TO_INDEX,
-        INDEX_TO_HTML,
-        MULTI_MIXED_X,
-        MULTI_MIXED,
-        MULTI_BYTERANGES,
-        UNKNOWN_CONTENT,
-        MAYBE_TEXT,
-        GZIP_TO_UNCOMPRESSED,
-        XGZIP_TO_UNCOMPRESSED,
-        COMPRESS_TO_UNCOMPRESSED,
-        XCOMPRESS_TO_UNCOMPRESSED,
-        DEFLATE_TO_UNCOMPRESSED,
+static const char *const sStreamConverterArray[] = {
+    FTP_TO_INDEX,
+    GOPHER_TO_INDEX,
+    INDEX_TO_HTML,
+    MULTI_MIXED_X,
+    MULTI_MIXED,
+    MULTI_BYTERANGES,
+    UNKNOWN_CONTENT,
+    GZIP_TO_UNCOMPRESSED,
+    XGZIP_TO_UNCOMPRESSED,
+    COMPRESS_TO_UNCOMPRESSED,
+    XCOMPRESS_TO_UNCOMPRESSED,
+    DEFLATE_TO_UNCOMPRESSED,
 #ifdef BUILD_BINHEX_DECODER
-        BINHEX_TO_WILD,
+    BINHEX_TO_WILD,
 #endif
-        PLAIN_TO_HTML
-    };
+    PLAIN_TO_HTML
+};
 
-static PRUint32 g_StreamConverterCount = sizeof(g_StreamConverterCount)/sizeof(const char*);
+static const PRUint32 sStreamConverterCount =
+    NS_ARRAY_LENGTH(sStreamConverterArray);
 
 // each stream converter must add its from/to key to the category manager
 // in RegisterStreamConverters(). This provides a string representation
@@ -321,21 +368,16 @@ RegisterStreamConverters(nsIComponentManager *aCompMgr, nsIFile *aPath,
                          const char *registryLocation,
                          const char *componentType,
                          const nsModuleComponentInfo *info) {
-    nsresult rv;
     nsCOMPtr<nsICategoryManager> catmgr =
-        do_GetService(NS_CATEGORYMANAGER_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) return rv;
-    nsXPIDLCString previous;
+        do_GetService(NS_CATEGORYMANAGER_CONTRACTID);
+    NS_ENSURE_STATE(catmgr);
 
-    PRUint32 count = 0;
-    while (count < g_StreamConverterCount) {
-        (void) catmgr->AddCategoryEntry(NS_ISTREAMCONVERTER_KEY, g_StreamConverterArray[count],
-                                      "", PR_TRUE, PR_TRUE, getter_Copies(previous));
-        if (NS_FAILED(rv)) NS_ASSERTION(0, "adding a cat entry failed");
-        count++;
+    for (PRUint32 count = 0; count < sStreamConverterCount; ++count) {
+        catmgr->AddCategoryEntry(NS_ISTREAMCONVERTER_KEY,
+                                 sStreamConverterArray[count], "",
+                                 PR_TRUE, PR_TRUE, nsnull);
     }
-    
-    return rv;
+    return NS_OK;
 }
 
 // same as RegisterStreamConverters except the reverse.
@@ -343,21 +385,16 @@ static NS_METHOD
 UnregisterStreamConverters(nsIComponentManager *aCompMgr, nsIFile *aPath,
                            const char *registryLocation,
                            const nsModuleComponentInfo *info) {
-    nsresult rv;
     nsCOMPtr<nsICategoryManager> catmgr =
-        do_GetService(NS_CATEGORYMANAGER_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) return rv;
+        do_GetService(NS_CATEGORYMANAGER_CONTRACTID);
+    NS_ENSURE_STATE(catmgr);
 
-
-    PRUint32 count = 0;
-    while (count < g_StreamConverterCount) {
-        rv = catmgr->DeleteCategoryEntry(NS_ISTREAMCONVERTER_KEY, 
-                                         g_StreamConverterArray[count], 
-                                         PR_TRUE);
-        if (NS_FAILED(rv)) return rv;
-        count++;
+    for (PRUint32 count = 0; count < sStreamConverterCount; ++count) {
+        catmgr->DeleteCategoryEntry(NS_ISTREAMCONVERTER_KEY, 
+                                    sStreamConverterArray[count], 
+                                    PR_TRUE);
     }
-    return rv;
+    return NS_OK;
 }
 
 #ifdef BUILD_BINHEX_DECODER
@@ -411,32 +448,6 @@ CreateNewFTPDirListingConv(nsISupports* aOuter, REFNSIID aIID, void **aResult)
     }                                                                
     NS_RELEASE(inst);             /* get rid of extra refcnt */      
     return rv;              
-}
-#endif
-
-#ifdef NECKO_PROTOCOL_gopher
-static NS_IMETHODIMP                 
-CreateNewGopherDirListingConv(nsISupports* aOuter, REFNSIID aIID, void **aResult) 
-{
-    if (!aResult) {
-        return NS_ERROR_INVALID_POINTER;
-    }
-    if (aOuter) {
-        *aResult = nsnull;
-        return NS_ERROR_NO_AGGREGATION;
-    }
-    nsGopherDirListingConv* inst = nsnull;
-    nsresult rv = NS_NewGopherDirListingConv(&inst);
-    if (NS_FAILED(rv)) {
-        *aResult = nsnull;
-        return rv;
-    }
-    rv = inst->QueryInterface(aIID, aResult);
-    if (NS_FAILED(rv)) {
-        *aResult = nsnull;
-    }
-    NS_RELEASE(inst);             /* get rid of extra refcnt */
-    return rv;
 }
 #endif
 
@@ -599,7 +610,7 @@ CreateNewNSTXTToHTMLConvFactory(nsISupports *aOuter, REFNSIID aIID, void **aResu
 // Module implementation for the net library
 
 // Net module startup hook
-PR_STATIC_CALLBACK(nsresult) nsNetStartup(nsIModule *neckoModule)
+static nsresult nsNetStartup(nsIModule *neckoModule)
 {
     gNetStrings = new nsNetStrings();
     return gNetStrings ? NS_OK : NS_ERROR_OUT_OF_MEMORY;
@@ -607,7 +618,7 @@ PR_STATIC_CALLBACK(nsresult) nsNetStartup(nsIModule *neckoModule)
 
 
 // Net module shutdown hook
-static void PR_CALLBACK nsNetShutdown(nsIModule *neckoModule)
+static void nsNetShutdown(nsIModule *neckoModule)
 {
     // Release the url parser that the stdurl is holding.
     nsStandardURL::ShutdownGlobalObjects();
@@ -617,10 +628,16 @@ static void PR_CALLBACK nsNetShutdown(nsIModule *neckoModule)
 
     // Release global state used by the URL helper module.
     net_ShutdownURLHelper();
-
+#ifdef XP_MACOSX
+    net_ShutdownURLHelperOSX();
+#endif
+    
     // Release necko strings
     delete gNetStrings;
     gNetStrings = nsnull;
+    
+    // Release DNS service reference.
+    nsDNSPrefetch::Shutdown();
 }
 
 static const nsModuleComponentInfo gNetModuleInfo[] = {
@@ -632,10 +649,6 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
       NS_IOSERVICE_CID,
       NS_NETUTIL_CONTRACTID,
       nsIOServiceConstructor },
-    { NS_IOTHREADPOOL_CLASSNAME,
-      NS_IOTHREADPOOL_CID,
-      NS_IOTHREADPOOL_CONTRACTID,
-      net_NewIOThreadPool },
     { NS_STREAMTRANSPORTSERVICE_CLASSNAME,
       NS_STREAMTRANSPORTSERVICE_CID,
       NS_STREAMTRANSPORTSERVICE_CONTRACTID,
@@ -660,10 +673,18 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
       NS_IDNSERVICE_CID,
       NS_IDNSERVICE_CONTRACTID,
       nsIDNServiceConstructor },
+    { NS_EFFECTIVETLDSERVICE_CLASSNAME,
+      NS_EFFECTIVETLDSERVICE_CID,
+      NS_EFFECTIVETLDSERVICE_CONTRACTID,
+      nsEffectiveTLDServiceConstructor },
     { NS_SIMPLEURI_CLASSNAME,
       NS_SIMPLEURI_CID,
       NS_SIMPLEURI_CONTRACTID,
-      nsSimpleURI::Create },
+      nsSimpleURIConstructor },
+    { "Simple Nested URI", 
+      NS_SIMPLENESTEDURI_CID,
+      nsnull,
+      nsSimpleNestedURIConstructor },
     { NS_ASYNCSTREAMCOPIER_CLASSNAME,
       NS_ASYNCSTREAMCOPIER_CID,
       NS_ASYNCSTREAMCOPIER_CONTRACTID,
@@ -700,10 +721,6 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
       NS_SIMPLESTREAMLISTENER_CID,
       NS_SIMPLESTREAMLISTENER_CONTRACTID,
       nsSimpleStreamListenerConstructor },
-    { NS_ASYNCSTREAMLISTENER_CLASSNAME,
-      NS_ASYNCSTREAMLISTENER_CID,
-      NS_ASYNCSTREAMLISTENER_CONTRACTID,
-      nsAsyncStreamListener::Create },
     { NS_STREAMLISTENERTEE_CLASSNAME,
       NS_STREAMLISTENERTEE_CID,
       NS_STREAMLISTENERTEE_CONTRACTID,
@@ -711,7 +728,7 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
     { NS_LOADGROUP_CLASSNAME,
       NS_LOADGROUP_CID,
       NS_LOADGROUP_CONTRACTID,
-      nsLoadGroup::Create },
+      nsLoadGroupConstructor },
     { NS_LOCALFILEINPUTSTREAM_CLASSNAME, 
       NS_LOCALFILEINPUTSTREAM_CID,
       NS_LOCALFILEINPUTSTREAM_CONTRACTID,
@@ -773,7 +790,12 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
     { NS_PROTOCOLPROXYSERVICE_CLASSNAME,
       NS_PROTOCOLPROXYSERVICE_CID,
       NS_PROTOCOLPROXYSERVICE_CONTRACTID,
-      nsProtocolProxyServiceConstructor },
+      nsProtocolProxyServiceConstructor,
+      nsnull, nsnull, nsnull,
+      NS_CI_INTERFACE_GETTER_NAME(nsProtocolProxyService),
+      nsnull,
+      &NS_CLASSINFO_NAME(nsProtocolProxyService),
+      nsIClassInfo::SINGLETON },
 
     // from netwerk/streamconv:
 
@@ -785,7 +807,7 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
     // the generic module macro.
     { "Stream Converter Service", 
       NS_STREAMCONVERTERSERVICE_CID,
-      "@mozilla.org/streamConverters;1", 
+      NS_STREAMCONVERTERSERVICE_CONTRACTID,
       CreateNewStreamConvServiceFactory,
       RegisterStreamConverters,   // registers *all* converters
       UnregisterStreamConverters  // unregisters *all* converters
@@ -812,7 +834,7 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
     { "GopherDirListingConverter",
       NS_GOPHERDIRLISTINGCONVERTER_CID,
       NS_ISTREAMCONVERTER_KEY GOPHER_TO_INDEX,
-      CreateNewGopherDirListingConv
+      nsGopherDirListingConvConstructor
     },
 #endif
 
@@ -860,8 +882,9 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
 
     { "Binary Detector",
       NS_BINARYDETECTOR_CID,
-      NS_ISTREAMCONVERTER_KEY MAYBE_TEXT,
-      CreateNewBinaryDetectorFactory
+      NS_BINARYDETECTOR_CONTRACTID,
+      CreateNewBinaryDetectorFactory,
+      nsBinaryDetector::Register
     },
 
     { "HttpCompressConverter", 
@@ -987,73 +1010,33 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
 #endif
 
     // from netwerk/protocol/about (about:blank is mandatory):
-    { "About Protocol Handler", 
+    { NS_ABOUTPROTOCOLHANDLER_CLASSNAME, 
       NS_ABOUTPROTOCOLHANDLER_CID,
       NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "about", 
-      nsAboutProtocolHandler::Create
+      nsAboutProtocolHandlerConstructor
+    },
+    { NS_SAFEABOUTPROTOCOLHANDLER_CLASSNAME,
+      NS_SAFEABOUTPROTOCOLHANDLER_CID,
+      NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "moz-safe-about", 
+      nsSafeAboutProtocolHandlerConstructor
     },
     { "about:blank", 
       NS_ABOUT_BLANK_MODULE_CID,
       NS_ABOUT_MODULE_CONTRACTID_PREFIX "blank", 
       nsAboutBlank::Create
     },
+    { "Nested about: URI",
+      NS_NESTEDABOUTURI_CID,
+      nsnull,
+      nsNestedAboutURIConstructor },
 #ifdef NECKO_PROTOCOL_about
+#ifdef NS_BUILD_REFCNT_LOGGING
     { "about:bloat", 
       NS_ABOUT_BLOAT_MODULE_CID,
       NS_ABOUT_MODULE_CONTRACTID_PREFIX "bloat", 
       nsAboutBloat::Create
     },
-    { "about:config",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "config",
-      nsAboutRedirector::Create
-    },
-    { "about:credits",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "credits",
-      nsAboutRedirector::Create
-    },
-    { "about:plugins",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "plugins",
-      nsAboutRedirector::Create
-    },
-    { "about:mozilla",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "mozilla",
-      nsAboutRedirector::Create
-    },
-    { "about:logo",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "logo",
-      nsAboutRedirector::Create
-    },
-    { "about:buildconfig",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "buildconfig",
-      nsAboutRedirector::Create
-    },
-    { "about:license",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "license",
-      nsAboutRedirector::Create
-    },
-    { "about:licence",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "licence",
-      nsAboutRedirector::Create
-    },
-    { "about:about",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "about",
-      nsAboutRedirector::Create
-    },
-    { "about:neterror",
-      NS_ABOUT_REDIRECTOR_MODULE_CID,
-      NS_ABOUT_MODULE_CONTRACTID_PREFIX "neterror",
-      nsAboutRedirector::Create
-    },
-
+#endif
     { "about:cache", 
       NS_ABOUT_CACHE_MODULE_CID,
       NS_ABOUT_MODULE_CONTRACTID_PREFIX "cache", 
@@ -1078,11 +1061,30 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
        nsSOCKSSocketProvider::CreateV4
     },
 
+    {  "nsUDPSocketProvider",
+       NS_UDPSOCKETPROVIDER_CID,
+       NS_NETWORK_SOCKET_CONTRACTID_PREFIX "udp",
+       nsUDPSocketProviderConstructor
+    },
+
     {  NS_CACHESERVICE_CLASSNAME,
        NS_CACHESERVICE_CID,
        NS_CACHESERVICE_CONTRACTID,
        nsCacheService::Create
     },
+
+#ifdef NECKO_OFFLINE_CACHE
+    {  NS_APPLICATIONCACHESERVICE_CLASSNAME,
+       NS_APPLICATIONCACHESERVICE_CID,
+       NS_APPLICATIONCACHESERVICE_CONTRACTID,
+       nsOfflineCacheDeviceConstructor
+    },
+    {  NS_APPLICATIONCACHENAMESPACE_CLASSNAME,
+       NS_APPLICATIONCACHENAMESPACE_CID,
+       NS_APPLICATIONCACHENAMESPACE_CONTRACTID,
+       nsApplicationCacheNamespaceConstructor
+    },
+#endif
 
 #ifdef NECKO_COOKIES
     { NS_COOKIEMANAGER_CLASSNAME,
@@ -1098,15 +1100,55 @@ static const nsModuleComponentInfo gNetModuleInfo[] = {
     },
 #endif
 
-#if defined(XP_WIN) && !defined(WINCE)
+#ifdef NECKO_WIFI
+    {
+      NS_WIFI_MONITOR_CLASSNAME,
+      NS_WIFI_MONITOR_COMPONENT_CID,
+      NS_WIFI_MONITOR_CONTRACTID,
+      nsWifiMonitorConstructor
+    },
+#endif
+
+#ifdef NECKO_PROTOCOL_gopher
+    //gopher:
+    { "The Gopher Protocol Handler", 
+      NS_GOPHERHANDLER_CID,
+      NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "gopher",
+      nsGopherHandlerConstructor
+    },
+#endif
+
+#ifdef NECKO_PROTOCOL_data
+    // from netwerk/protocol/data:
+    { "Data Protocol Handler", 
+      NS_DATAPROTOCOLHANDLER_CID,
+      NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "data", 
+      nsDataHandler::Create},
+#endif
+
+#ifdef NECKO_PROTOCOL_viewsource
+    // from netwerk/protocol/viewsource:
+    { "The ViewSource Protocol Handler", 
+      NS_VIEWSOURCEHANDLER_CID,
+      NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX "view-source",
+      nsViewSourceHandlerConstructor
+    },
+#endif
+
+#if defined(XP_WIN)
     { NS_NETWORK_LINK_SERVICE_CLASSNAME,
       NS_NETWORK_LINK_SERVICE_CID,
       NS_NETWORK_LINK_SERVICE_CONTRACTID,
       nsNotifyAddrListenerConstructor
     },
+#elif defined(MOZ_WIDGET_COCOA)
+    { NS_NETWORK_LINK_SERVICE_CLASSNAME,
+      NS_NETWORK_LINK_SERVICE_CID,
+      NS_NETWORK_LINK_SERVICE_CONTRACTID,
+      nsNetworkLinkServiceConstructor
+    },
 #endif
 };
 
-NS_IMPL_NSGETMODULE_WITH_CTOR_DTOR(necko_core_and_primary_protocols,
-                                   gNetModuleInfo,
+NS_IMPL_NSGETMODULE_WITH_CTOR_DTOR(necko, gNetModuleInfo,
                                    nsNetStartup, nsNetShutdown)

@@ -83,7 +83,7 @@ nsresult nsIconChannel::Init(nsIURI* uri)
 {
   NS_ASSERTION(uri, "no uri");
   mUrl = uri;
-
+  mOriginalURI = uri;
   nsresult rv;
   mPump = do_CreateInstance(NS_INPUTSTREAMPUMP_CONTRACTID, &rv);
   return rv;
@@ -149,13 +149,14 @@ NS_IMETHODIMP nsIconChannel::SetLoadFlags(PRUint32 aLoadAttributes)
 
 NS_IMETHODIMP nsIconChannel::GetOriginalURI(nsIURI* *aURI)
 {
-  *aURI = mOriginalURI ? mOriginalURI : mUrl;
+  *aURI = mOriginalURI;
   NS_ADDREF(*aURI);
   return NS_OK;
 }
 
 NS_IMETHODIMP nsIconChannel::SetOriginalURI(nsIURI* aURI)
 {
+  NS_ENSURE_ARG_POINTER(aURI);
   mOriginalURI = aURI;
   return NS_OK;
 }
@@ -314,7 +315,7 @@ nsresult nsIconChannel::MakeInputStream(nsIInputStream** _retval, PRBool nonBloc
     return NS_ERROR_NOT_AVAILABLE;
 
   // Got a bitmap and color space info - convert data to mozilla's icon format
-  PRUint32 iconLength = 3 + iconSize * (iconSize * 3 + alphaBytesPerRow);
+  PRUint32 iconLength = 2 + iconSize * iconSize * 4;
   uint8 *buffer = new uint8[iconLength];
   if (!buffer)
     return NS_ERROR_OUT_OF_MEMORY;
@@ -322,7 +323,6 @@ nsresult nsIconChannel::MakeInputStream(nsIInputStream** _retval, PRBool nonBloc
   uint8* destByte = buffer;
   *(destByte++) = iconSize;
   *(destByte++) = iconSize;
-  *(destByte++) = 1; // alpha bits per pixel
 
   // RGB data
   uint8* sourceByte = (uint8*)nativeIcon.Bits();
@@ -334,12 +334,21 @@ nsresult nsIconChannel::MakeInputStream(nsIInputStream** _retval, PRBool nonBloc
       if (*sourceByte != B_TRANSPARENT_MAGIC_CMAP8)
       {
         rgb_color colorVal = mainScreen.ColorForIndex(*sourceByte);
+#ifdef IS_LITTLE_ENDIAN
         *(destByte++) = colorVal.blue;
         *(destByte++) = colorVal.green;
         *(destByte++) = colorVal.red;
+        *(destByte++) = uint8(255);
+#else
+        *(destByte++) = uint8(255);
+        *(destByte++) = colorVal.red;
+        *(destByte++) = colorVal.green;
+        *(destByte++) = colorVal.blue;
+#endif
       }
       else
       {
+        *destByte++ = 0;
         *destByte++ = 0;
         *destByte++ = 0;
         *destByte++ = 0;
@@ -350,28 +359,8 @@ nsresult nsIconChannel::MakeInputStream(nsIInputStream** _retval, PRBool nonBloc
       sourceByte++;
     }
   }
-  // Alpha data - bitmask, with rows aligned on 32-bit boundaries
-  for(PRUint32 iconRow = 0; iconRow < iconSize; iconRow++)
-  {
-    destByte = buffer + 3 + iconSize * iconSize * 3 + iconRow * alphaBytesPerRow;
-    sourceByte = (uint8*)nativeIcon.Bits() + nativeIcon.BytesPerRow() * iconRow;
-    int bitNo = 0;
-    for(PRUint32 iconCol = 0; iconCol < iconSize; iconCol++)
-    {
-      if (*sourceByte == B_TRANSPARENT_MAGIC_CMAP8)
-        (*destByte) &= (~(128 >> (bitNo % 8)));
-      else
-        (*destByte) |= (128 >> (bitNo % 8));
-      
-      //original code had a conditional here:
-      //if (iconCol < iconSize - 1) 
-      //Leaving this comment in case complications arise later
-      bitNo++;
-      sourceByte++;
-      if ((bitNo%8) == 0)
-        destByte++;
-    }
-  }
+
+  NS_ASSERTION(buffer + iconLength == destByte, "size miscalculation");
   
   // Now, create a pipe and stuff our data into it
   nsCOMPtr<nsIInputStream> inStream;

@@ -63,7 +63,7 @@
  * This is a hash-table utility routine that computes the hash code of a Java
  * object by calling java.lang.System.identityHashCode()
  */
-JSJHashNumber JS_DLL_CALLBACK
+JSJHashNumber
 jsj_HashJavaObject(const void *key, void* env)
 {
     JSHashNumber hash_code;
@@ -93,7 +93,7 @@ jsj_HashJavaObject(const void *key, void* env)
  * or handles (though they may be in some JVM implementations).  Instead,
  * use the JNI routine for comparing the two objects.
  */
-intN JS_DLL_CALLBACK
+intN
 jsj_JavaObjectComparator(const void *v1, const void *v2, void *arg)
 {
     jobject java_obj1, java_obj2;
@@ -380,7 +380,7 @@ jsj_UnexpectedJavaError(JSContext *cx, JNIEnv *env, const char *format, ...)
     format2 = JS_smprintf("internal error: %s", format);
     if (format2) {
         vreport_java_error(cx, env, format2, ap);
-        free((void*)format2);
+        JS_smprintf_free((void*)format2);
     }
     va_end(ap);
 }
@@ -456,6 +456,7 @@ jsj_EnterJava(JSContext *cx, JNIEnv **envp)
     JSJavaThreadState *jsj_env;
     char *err_msg;
 
+    JS_ASSERT(envp);
     *envp = NULL;
     err_msg = NULL;
 
@@ -480,8 +481,7 @@ jsj_EnterJava(JSContext *cx, JNIEnv **envp)
     if (!jsj_env->cx)
         jsj_env->cx = cx;
 
-    if (envp)
-        *envp = jsj_env->jEnv;
+    *envp = jsj_env->jEnv;
     return jsj_env;
 }
 

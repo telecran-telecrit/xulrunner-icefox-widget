@@ -1,4 +1,4 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* -*- Mode: c++; tab-width: 2; indent-tabs-mode: nil; -*- */
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -15,12 +15,12 @@
  * The Original Code is mozilla.org code.
  *
  * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
+ *   Oleg Romashin <romaxa@gmail.com>
+ * Portions created by the Initial Developer are Copyright (C) 2003
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
- *   Denis Issoupov <denis@macadamian.com>
+ *   Oleg Romashin <romaxa@gmail.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -35,55 +35,34 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
 #ifndef nsDragService_h__
 #define nsDragService_h__
 
 #include "nsBaseDragService.h"
-#include "nsClipboard.h"
-#include "nsIDragSessionQt.h"
+#include <qdrag.h>
 
-#include <qwidget.h> 
-#include <qdragobject.h> 
-
-//----------------------------------------------------------
-/* Native Qt DragService wrapper */
-class nsDragService : public nsBaseDragService, public nsIDragSessionQt
+/* Header file */
+class nsDragService : public nsBaseDragService
 {
 public:
-  nsDragService();
-  virtual ~nsDragService();
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIDRAGSERVICE
 
-  //nsISupports
-  NS_DECL_ISUPPORTS_INHERITED
-  
-    //nsIDragService
-  NS_IMETHOD InvokeDragSession(nsIDOMNode *aDOMNode,
-                               nsISupportsArray *anArrayTransferables,
-                               nsIScriptableRegion *aRegion,
-                               PRUint32 aActionType);
-  NS_IMETHOD StartDragSession();
-  NS_IMETHOD EndDragSession();
-
-  // nsIDragSession
-  NS_IMETHOD SetCanDrop(PRBool aCanDrop);
-  NS_IMETHOD GetCanDrop(PRBool *aCanDrop);
-  NS_IMETHOD GetNumDropItems(PRUint32 *aNumItems);
-  NS_IMETHOD GetData(nsITransferable *aTransferable,PRUint32 aItemIndex);
-  NS_IMETHOD IsDataFlavorSupported(const char *aDataFlavor,PRBool *_retval);
-
-  // nsIDragSessionQt
-  NS_IMETHOD SetDragReference(QMimeSource* aDragRef); 
-
-protected:
-  QDragObject *RegisterDragFlavors(nsITransferable* transferable);
+    nsDragService();
 
 private:
-  // the source of our drags
-  QWidget     *mHiddenWidget;
-  QDragObject *mDragObject;
+    ~nsDragService();
 
-  // our source data items
-  nsCOMPtr<nsISupportsArray> mSourceDataItems;
+protected:
+    /* additional members */
+    NS_IMETHODIMP SetupDragSession(nsISupportsArray *aTransferables, PRUint32 aActionType);
+    NS_IMETHODIMP SetDropActionType(PRUint32 aActionType);
+    NS_IMETHODIMP ExecuteDrag();
+
+    QDrag *mDrag;
+    Qt::DropActions mDropAction;
+    QWidget *mHiddenWidget;
 };
 
 #endif // nsDragService_h__

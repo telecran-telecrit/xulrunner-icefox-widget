@@ -37,7 +37,7 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: sslt.h,v 1.9 2005/08/16 03:42:26 nelsonb%netscape.com Exp $ */
+/* $Id: sslt.h,v 1.16 2010/02/04 03:21:11 wtc%google.com Exp $ */
 
 #ifndef __sslt_h_
 #define __sslt_h_
@@ -59,6 +59,12 @@ typedef struct SSL3StatisticsStr {
     long hch_sid_cache_hits;
     long hch_sid_cache_misses;
     long hch_sid_cache_not_ok;
+
+    /* statistics related to stateless resume */
+    long sch_sid_stateless_resumes;
+    long hsh_sid_stateless_resumes;
+    long hch_sid_stateless_resumes;
+    long hch_sid_ticket_parse_failures;
 } SSL3Statistics;
 
 /* Key Exchange algorithm values */
@@ -106,7 +112,9 @@ typedef enum {
     ssl_calg_3des     = 4,
     ssl_calg_idea     = 5,
     ssl_calg_fortezza = 6,      /* deprecated, now unused */
-    ssl_calg_aes      = 7       /* coming soon */
+    ssl_calg_aes      = 7,      /* coming soon */
+    ssl_calg_camellia = 8,
+    ssl_calg_seed     = 9
 } SSLCipherAlgorithm;
 
 typedef enum { 
@@ -116,6 +124,11 @@ typedef enum {
     ssl_hmac_md5      = 3, 	/* TLS HMAC version of mac_md5 */
     ssl_hmac_sha      = 4 	/* TLS HMAC version of mac_sha */
 } SSLMACAlgorithm;
+
+typedef enum {
+    ssl_compression_null = 0,
+    ssl_compression_deflate = 1  /* RFC 3749 */
+} SSLCompressionMethod;
 
 typedef struct SSLChannelInfoStr {
     PRUint32             length;
@@ -134,6 +147,12 @@ typedef struct SSLChannelInfoStr {
     PRUint32             expirationTime;	/* seconds since Jan 1, 1970 */
     PRUint32             sessionIDLength;	/* up to 32 */
     PRUint8              sessionID    [32];
+
+    /* The following fields are added in NSS 3.12.5. */
+
+    /* compression method info */
+    const char *         compressionMethodName;
+    SSLCompressionMethod compressionMethod;
 } SSLChannelInfo;
 
 typedef struct SSLCipherSuiteInfoStr {
@@ -169,5 +188,24 @@ typedef struct SSLCipherSuiteInfoStr {
     PRUintn              reservedBits :29;
 
 } SSLCipherSuiteInfo;
+
+typedef enum {
+    SSL_sni_host_name                    = 0,
+    SSL_sni_type_total
+} SSLSniNameType;
+
+/* Supported extensions. */
+/* Update SSL_MAX_EXTENSIONS whenever a new extension type is added. */
+typedef enum {
+    ssl_server_name_xtn              = 0,
+#ifdef NSS_ENABLE_ECC
+    ssl_elliptic_curves_xtn          = 10,
+    ssl_ec_point_formats_xtn         = 11,
+#endif
+    ssl_session_ticket_xtn           = 35,
+    ssl_renegotiation_info_xtn       = 0xff01	/* experimental number */
+} SSLExtensionType;
+
+#define SSL_MAX_EXTENSIONS             5
 
 #endif /* __sslt_h_ */

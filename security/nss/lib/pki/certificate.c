@@ -35,7 +35,7 @@
  * ***** END LICENSE BLOCK ***** */
 
 #ifdef DEBUG
-static const char CVS_ID[] = "@(#) $RCSfile: certificate.c,v $ $Revision: 1.56.2.3 $ $Date: 2006/08/23 01:36:31 $";
+static const char CVS_ID[] = "@(#) $RCSfile: certificate.c,v $ $Revision: 1.67 $ $Date: 2010/04/03 18:27:32 $";
 #endif /* DEBUG */
 
 #ifndef NSSPKI_H
@@ -56,11 +56,9 @@ static const char CVS_ID[] = "@(#) $RCSfile: certificate.c,v $ $Revision: 1.56.2
 
 #include "pkistore.h"
 
-#ifdef NSS_3_4_CODE
 #include "pki3hack.h"
 #include "pk11func.h"
 #include "hasht.h"
-#endif
 
 #ifndef BASE_H
 #include "base.h"
@@ -76,10 +74,11 @@ nssCertificate_Create (
 {
     PRStatus status;
     NSSCertificate *rvCert;
-    /* mark? */
+    nssArenaMark * mark;
     NSSArena *arena = object->arena;
     PR_ASSERT(object->instances != NULL && object->numInstances > 0);
     PR_ASSERT(object->lockType == nssPKIMonitor);
+    mark = nssArena_Mark(arena);
     rvCert = nss_ZNEW(arena, NSSCertificate);
     if (!rvCert) {
 	return (NSSCertificate *)NULL;
@@ -95,13 +94,19 @@ nssCertificate_Create (
                                                   &rvCert->issuer,
                                                   &rvCert->serial,
                                                   &rvCert->subject);
-    if (status != PR_SUCCESS) {
+    if (status != PR_SUCCESS ||
+	!rvCert->encoding.data ||
+	!rvCert->encoding.size ||
+	!rvCert->issuer.data ||
+	!rvCert->issuer.size ||
+	!rvCert->serial.data ||
+	!rvCert->serial.size) {
+	if (mark)
+	    nssArena_Release(arena, mark);
 	return (NSSCertificate *)NULL;
     }
-    /* all certs need an encoding value */
-    if (rvCert->encoding.data == NULL) {
-	return (NSSCertificate *)NULL;
-    }
+    if (mark)
+	nssArena_Unmark(arena, mark);
     return rvCert;
 }
 
@@ -123,7 +128,6 @@ nssCertificate_Destroy (
 {
     nssCertificateStoreTrace lockTrace = {NULL, NULL, PR_FALSE, PR_FALSE};
     nssCertificateStoreTrace unlockTrace = {NULL, NULL, PR_FALSE, PR_FALSE};
-    PRBool locked = PR_FALSE;
 
     if (c) {
 	PRUint32 i;
@@ -136,18 +140,15 @@ nssCertificate_Destroy (
 	/* --- LOCK storage --- */
 	if (cc) {
 	    nssCertificateStore_Lock(cc->certStore, &lockTrace);
-            locked = PR_TRUE;
 	} else {
 	    nssTrustDomain_LockCertCache(td);
 	}
-	if (PR_AtomicDecrement(&c->object.refCount) == 0) {
+	if (PR_ATOMIC_DECREMENT(&c->object.refCount) == 0) {
 	    /* --- remove cert and UNLOCK storage --- */
 	    if (cc) {
 		nssCertificateStore_RemoveCertLOCKED(cc->certStore, c);
 		nssCertificateStore_Unlock(cc->certStore, &lockTrace,
                                            &unlockTrace);
-                nssCertificateStore_Check(&lockTrace, &unlockTrace);
-
 	    } else {
 		nssTrustDomain_RemoveCertFromCacheLOCKED(td, c);
 		nssTrustDomain_UnlockCertCache(td);
@@ -165,14 +166,10 @@ nssCertificate_Destroy (
 		nssCertificateStore_Unlock(cc->certStore,
 					   &lockTrace,
 					   &unlockTrace);
-		nssCertificateStore_Check(&lockTrace, &unlockTrace);
 	    } else {
 		nssTrustDomain_UnlockCertCache(td);
 	    }
 	}
-    }
-    if (locked) {
-        nssCertificateStore_Check(&lockTrace, &unlockTrace);
     }
     return PR_SUCCESS;
 }
@@ -320,6 +317,9 @@ nssCertificate_GetDecoding (
 )
 {
     nssDecodedCert* deco = NULL;
+    if (c->type == NSSCertificateType_PKIX) {
+        (void)STAN_GetCERTCertificate(c);
+    }
     nssPKIObject_Lock(&c->object);
     if (!c->decoding) {
 	deco = nssDecodedCert_Create(NULL, &c->encoding, c->type);
@@ -493,26 +493,19 @@ nssCertificate_BuildChain (
     PRStatus  st;
     PRStatus  ret = PR_SUCCESS;
 
-    if (!td)
-	td = NSSCertificate_GetTrustDomain(c);
-    if (!td || !c || !cc) 
+    if (!c || !cc ||
+        (!td && (td = NSSCertificate_GetTrustDomain(c)) == NULL)) {
 	goto loser;
-#ifdef NSS_3_4_CODE
+    }
     /* bump the usage up to CA level */
     issuerUsage.nss3lookingForCA = PR_TRUE;
-#endif
     collection = nssCertificateCollection_Create(td, NULL);
     if (!collection)
 	goto loser;
     st = nssPKIObjectCollection_AddObject(collection, (nssPKIObject *)c);
     if (st != PR_SUCCESS)
     	goto loser;
-    /* XXX This breaks code for which NSS_3_4_CODE is not defined (pure
-     *     4.0 builds).  That won't affect the tip.  But be careful
-     *     when merging 4.0!!!
-     */
     for (rvCount = 1; (!rvLimit || rvCount < rvLimit); ++rvCount) {
-#ifdef NSS_3_4_CODE
 	CERTCertificate *cCert = STAN_GetCERTCertificate(c);
 	if (cCert->isRoot) {
 	    /* not including the issuer of the self-signed cert, which is,
@@ -520,7 +513,6 @@ nssCertificate_BuildChain (
 	     */
 	    break;
 	}
-#endif
 	c = find_cert_issuer(c, timeOpt, &issuerUsage, policiesOpt, td, cc);
 	if (!c) {
 	    ret = PR_FAILURE;
@@ -940,6 +932,9 @@ nssCertificateList_DoCallback (
     NSSCertificate *cert;
     PRStatus nssrv;
     certs = nssList_CreateIterator(certList);
+    if (!certs) {
+        return PR_FAILURE;
+    }
     for (cert  = (NSSCertificate *)nssListIterator_Start(certs);
          cert != (NSSCertificate *)NULL;
          cert  = (NSSCertificate *)nssListIterator_Next(certs))
@@ -1154,7 +1149,7 @@ nssCRL_GetEncoding (
   NSSCRL *crl
 )
 {
-    if (crl->encoding.data != NULL && crl->encoding.size > 0) {
+    if (crl && crl->encoding.data != NULL && crl->encoding.size > 0) {
 	return &crl->encoding;
     } else {
 	return (NSSDER *)NULL;

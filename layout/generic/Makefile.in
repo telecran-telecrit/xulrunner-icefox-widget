@@ -41,6 +41,10 @@ VPATH		= @srcdir@
 
 include $(DEPTH)/config/autoconf.mk
 
+ifdef ENABLE_TESTS
+DIRS		+= test
+endif
+
 MODULE		= layout
 LIBRARY_NAME	= gkgeneric_s
 LIBXUL_LIBRARY	= 1
@@ -49,6 +53,7 @@ REQUIRES	= xpcom \
 		  string \
 		  dom \
 		  content \
+		  thebes \
 		  gfx \
 		  widget \
 		  locale \
@@ -61,24 +66,20 @@ REQUIRES	= xpcom \
 		  webshell \
 		  plugin \
 		  docshell \
-		  uriloader \
-		  mimetype \
 		  webbrwsr \
 		  oji \
 		  unicharutil \
 		  lwbrk \
 		  imglib2 \
-		  accessibility \
 		  xpconnect \
 		  java \
-		  exthandler \
 		  intl \
-		  uconv \
+		  thebes \
+		  cairo \
 		  $(NULL)
 
-# Sun's Complex Text Layout support
-ifdef SUNCTL
-REQUIRES	+= ctl
+ifdef ACCESSIBILITY
+REQUIRES	+= accessibility
 endif
 
 EXPORTS		= \
@@ -99,12 +100,11 @@ EXPORTS		= \
 		nsIScrollableFrame.h \
 		nsIScrollableViewProvider.h \
 		nsIStatefulFrame.h \
-		nsReflowType.h \
+		nsFrameSelection.h \
 		$(NULL)
 
 ifdef IBMBIDI
 EXPORTS		+= \
-		nsTextTransformer.h \
 		nsBidiFrames.h      \
 		$(NULL)
 endif
@@ -114,7 +114,6 @@ CPPSRCS		= \
 		nsAbsoluteContainingBlock.cpp \
 		nsAreaFrame.cpp \
 		nsBRFrame.cpp \
-		nsBlockBandData.cpp \
 		nsBlockFrame.cpp \
 		nsBlockReflowContext.cpp \
 		nsBlockReflowState.cpp \
@@ -122,6 +121,7 @@ CPPSRCS		= \
 		nsColumnSetFrame.cpp \
 		nsContainerFrame.cpp \
 		nsFirstLetterFrame.cpp \
+		nsFloatManager.cpp \
 		nsFrame.cpp \
 		nsFrameFrame.cpp \
 		nsFrameList.cpp \
@@ -131,7 +131,6 @@ CPPSRCS		= \
 		nsHTMLCanvasFrame.cpp \
 		nsHTMLContainerFrame.cpp \
 		nsHTMLFrame.cpp \
-		nsHTMLReflowCommand.cpp \
 		nsHTMLReflowState.cpp \
 		nsImageFrame.cpp \
 		nsImageMap.cpp \
@@ -144,16 +143,21 @@ CPPSRCS		= \
 		nsPageContentFrame.cpp \
 		nsPageFrame.cpp \
 		nsPlaceholderFrame.cpp \
-		nsReflowPath.cpp \
 		nsSelection.cpp \
 		nsSimplePageSequence.cpp \
-		nsSpaceManager.cpp \
 		nsSpacerFrame.cpp \
 		nsSplittableFrame.cpp \
-		nsTextFrame.cpp \
-		nsTextTransformer.cpp \
+		nsTextFrameThebes.cpp \
+		nsTextFrameUtils.cpp \
+		nsTextRunTransformations.cpp \
 		nsViewportFrame.cpp \
 		$(NULL)
+
+ifdef MOZ_MEDIA
+CPPSRCS		+= \
+		nsVideoFrame.cpp \
+		$(NULL)
+endif
 
 ifdef IBMBIDI
 CPPSRCS		+= \
@@ -162,16 +166,7 @@ CPPSRCS		+= \
 endif
 
 RESOURCES_HTML = \
-		$(srcdir)/gopher-audio.gif \
-		$(srcdir)/gopher-binary.gif \
-		$(srcdir)/gopher-find.gif \
-		$(srcdir)/gopher-image.gif \
-		$(srcdir)/gopher-menu.gif \
-		$(srcdir)/gopher-movie.gif \
-		$(srcdir)/gopher-sound.gif \
-		$(srcdir)/gopher-telnet.gif \
-		$(srcdir)/gopher-text.gif \
-		$(srcdir)/gopher-unknown.gif \
+		$(srcdir)/folder.png \
 		$(NULL)
 
 RESOURCES = \
@@ -186,12 +181,23 @@ include $(topsrcdir)/config/rules.mk
 LOCAL_INCLUDES += \
 		-I$(srcdir) \
 		-I$(srcdir)/../base \
+		-I$(srcdir)/../forms \
 		-I$(srcdir)/../tables \
 		-I$(srcdir)/../xul/base/src \
 		-I$(srcdir)/../../content/xul/content/src \
 		-I$(srcdir)/../../content/base/src \
 		-I$(srcdir)/../../content/html/content/src \
+		-I$(srcdir)/../../dom/src/base \
+		$(MOZ_CAIRO_CFLAGS) \
 		$(NULL)
+
+ifdef MOZ_ENABLE_GTK2
+CXXFLAGS += $(MOZ_GTK2_CFLAGS)
+endif
+
+ifdef MOZ_ENABLE_QT
+CXXFLAGS += $(MOZ_QT_CFLAGS)
+endif
 
 libs::
 	$(INSTALL) $(RESOURCES_HTML) $(DIST)/bin/res/html

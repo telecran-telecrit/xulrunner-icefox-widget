@@ -53,6 +53,7 @@ REQUIRES	= xpcom \
 		  js \
 		  widget \
 		  gfx \
+		  thebes \
 		  layout \
 		  content \
 		  caps \
@@ -61,10 +62,11 @@ REQUIRES	= xpcom \
 		  pref \
 		  oji \
 		  necko \
+		  nkcache \
 		  mimetype \
 		  java \
 		  locale \
-		  uriloader \
+		  prefetch \
 		  xuldoc \
 		  webshell \
 		  view \
@@ -81,6 +83,7 @@ REQUIRES	= xpcom \
 		  xultmpl \
 		  jar \
 		  storage \
+		  htmlparser \
 		  $(NULL)
 
 ifdef NS_TRACE_MALLOC
@@ -96,6 +99,7 @@ CPPSRCS =			\
 	nsDOMException.cpp 	\
 	nsDOMWindowUtils.cpp 	\
 	nsJSEnvironment.cpp	\
+	nsJSTimeoutHandler.cpp	\
 	nsFocusController.cpp	\
 	nsGlobalWindow.cpp      \
 	nsGlobalWindowCommands.cpp \
@@ -119,8 +123,16 @@ FORCE_STATIC_LIB = 1
 LOCAL_INCLUDES = \
 		-I$(srcdir)/../events \
 		-I$(srcdir)/../storage \
+		-I$(srcdir)/../offline \
+		-I$(srcdir)/../geolocation \
+		-I$(srcdir)/../threads \
 		-I$(topsrcdir)/content/xbl/src \
+		-I$(topsrcdir)/content/xul/document/src \
 		-I$(topsrcdir)/content/events/src \
+		-I$(topsrcdir)/content/base/src \
+		-I$(topsrcdir)/content/html/document/src \
+		-I$(topsrcdir)/layout/style \
+		-I$(topsrcdir)/layout/xul/base/src/tree/src \
 		$(NULL)
 
 DEFINES += -D_IMPL_NS_LAYOUT
@@ -130,3 +142,14 @@ DEFINES += -DMOZ_JSDEBUGGER
 endif
 
 include $(topsrcdir)/config/rules.mk
+
+LOCAL_INCLUDES += \
+	-I$(topsrcdir)/xpcom/io \
+	$(NULL)
+
+ifdef MOZ_X11
+ifdef MOZ_ENABLE_GTK2
+CXXFLAGS += $(TK_CFLAGS)
+LDFLAGS += $(TK_LIBS)
+endif
+endif

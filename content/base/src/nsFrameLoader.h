@@ -36,12 +36,18 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/*
+ * Class for managing loading of a subframe (creation of the docshell,
+ * handling of loads in it, recursion-checking).
+ */
+
 #ifndef nsFrameLoader_h_
 #define nsFrameLoader_h_
 
 #include "nsIDocShell.h"
 #include "nsStringFwd.h"
 #include "nsIFrameLoader.h"
+#include "nsIURI.h"
 
 class nsIContent;
 class nsIURI;
@@ -52,24 +58,45 @@ public:
   nsFrameLoader(nsIContent *aOwner) :
     mOwnerContent(aOwner),
     mDepthTooGreat(PR_FALSE),
-    mIsTopLevelContent(PR_FALSE)
+    mIsTopLevelContent(PR_FALSE),
+    mDestroyCalled(PR_FALSE),
+    mNeedsAsyncDestroy(PR_FALSE),
+    mInSwap(PR_FALSE)
   {}
 
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSIFRAMELOADER
+  ~nsFrameLoader() {
+    mNeedsAsyncDestroy = PR_TRUE;
+    nsFrameLoader::Destroy();
+  }
 
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS(nsFrameLoader)
+  NS_DECL_NSIFRAMELOADER
+  NS_HIDDEN_(nsresult) CheckForRecursiveLoad(nsIURI* aURI);
+  nsresult ReallyStartLoading();
+  void Finalize();
+  nsIDocShell* GetExistingDocShell() { return mDocShell; }
+
+  // The guts of an nsIFrameLoaderOwner::SwapFrameLoader implementation.  A
+  // frame loader owner needs to call this, and pass in the two references to
+  // nsRefPtrs for frame loaders that need to be swapped.
+  nsresult SwapWithOtherLoader(nsFrameLoader* aOther,
+                               nsRefPtr<nsFrameLoader>& aFirstToSwap,
+                               nsRefPtr<nsFrameLoader>& aSecondToSwap);
 private:
-  ~nsFrameLoader() { nsFrameLoader::Destroy(); }
 
   NS_HIDDEN_(nsresult) EnsureDocShell();
   NS_HIDDEN_(void) GetURL(nsString& aURL);
-  NS_HIDDEN_(nsresult) CheckForRecursiveLoad(nsIURI* aURI);
+  nsresult CheckURILoad(nsIURI* aURI);
 
   nsCOMPtr<nsIDocShell> mDocShell;
-
+  nsCOMPtr<nsIURI> mURIToLoad;
   nsIContent *mOwnerContent; // WEAK
-  PRPackedBool mDepthTooGreat;
-  PRPackedBool mIsTopLevelContent;
+  PRPackedBool mDepthTooGreat : 1;
+  PRPackedBool mIsTopLevelContent : 1;
+  PRPackedBool mDestroyCalled : 1;
+  PRPackedBool mNeedsAsyncDestroy : 1;
+  PRPackedBool mInSwap : 1;
 };
 
 #endif

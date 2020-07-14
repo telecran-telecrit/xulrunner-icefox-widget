@@ -68,11 +68,7 @@ template <class E> class nsTArray;
 class nsIFormHistoryPrivate : public nsISupports
 {
  public:
-#ifdef MOZILLA_1_8_BRANCH
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_IFORMHISTORYPRIVATE_IID)
-#else
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_IFORMHISTORYPRIVATE_IID)
-#endif
 
   mozIStorageConnection* GetStorageConnection() { return mDBConn; }
 
@@ -80,9 +76,7 @@ class nsIFormHistoryPrivate : public nsISupports
   nsCOMPtr<mozIStorageConnection> mDBConn;
 };
 
-#ifndef MOZILLA_1_8_BRANCH
 NS_DEFINE_STATIC_IID_ACCESSOR(nsIFormHistoryPrivate, NS_IFORMHISTORYPRIVATE_IID)
-#endif
 
 class nsFormHistory : public nsIFormHistory2,
                       public nsIFormHistoryPrivate,
@@ -96,7 +90,7 @@ public:
   NS_DECL_NSIOBSERVER
   
   // nsIFormSubmitObserver
-  NS_IMETHOD Notify(nsIContent* formNode, nsIDOMWindowInternal* window, nsIURI* actionURL, PRBool* cancelSubmit);
+  NS_IMETHOD Notify(nsIDOMHTMLFormElement* formElt, nsIDOMWindowInternal* window, nsIURI* actionURL, PRBool* cancelSubmit);
 
   nsFormHistory();
   nsresult Init();
@@ -119,14 +113,27 @@ public:
 
  protected:
   // Database I/O
-  nsresult OpenDatabase();
+  nsresult OpenDatabase(PRBool *aDoImport);
   nsresult CloseDatabase();
   nsresult GetDatabaseFile(nsIFile** aFile);
+
+  nsresult dbMigrate();
+  nsresult dbCleanup();
+  nsresult MigrateToVersion1();
+  nsresult MigrateToVersion2();
+  PRBool   dbAreExpectedColumnsPresent();
+
+  nsresult CreateTable();
+  nsresult CreateStatements();
 
   static PRBool FormHistoryEnabled();
   static nsFormHistory *gFormHistory;
   static PRBool gFormHistoryEnabled;
   static PRBool gPrefsInitialized;
+
+  nsresult ExpireOldEntries();
+  PRInt32 CountAllEntries();
+  PRInt64 GetExistingEntryID(const nsAString &aName, const nsAString &aValue);
 
   nsCOMPtr<nsIPrefBranch> mPrefBranch;
   nsCOMPtr<mozIStorageService> mStorageService;
@@ -135,12 +142,7 @@ public:
   nsCOMPtr<mozIStorageStatement> mDBFindEntryByName;
   nsCOMPtr<mozIStorageStatement> mDBSelectEntries;
   nsCOMPtr<mozIStorageStatement> mDBInsertNameValue;
-
-  // dummy statement (see StartCache)
-  nsresult StartCache();
-  nsresult StopCache();
-  nsCOMPtr<mozIStorageConnection> mDummyConnection;
-  nsCOMPtr<mozIStorageStatement> mDummyStatement;
+  nsCOMPtr<mozIStorageStatement> mDBUpdateEntry;
 };
 
 #ifdef MOZ_MORKREADER
@@ -152,7 +154,7 @@ public:
 
 private:
   // Enumerator callback to add a single row to the FormHistory.
-  static PLDHashOperator PR_CALLBACK
+  static PLDHashOperator
   AddToFormHistoryCB(const nsCSubstring &aRowID,
                      const nsTArray<nsCString> *aValues,
                      void *aData);

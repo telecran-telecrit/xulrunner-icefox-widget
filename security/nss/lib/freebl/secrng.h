@@ -40,7 +40,7 @@
  * secrng.h - public data structures and prototypes for the secure random
  *	      number generator
  *
- * $Id: secrng.h,v 1.5.28.1 2006/10/12 02:18:38 wtchang%redhat.com Exp $
+ * $Id: secrng.h,v 1.6 2006/10/12 02:23:49 wtchang%redhat.com Exp $
  */
 
 /******************************************/

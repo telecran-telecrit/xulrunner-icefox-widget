@@ -82,14 +82,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 #if defined(XP_UNIX)
 #include <math.h>
-#endif
-
-#ifdef XP_MAC
-#include "prlog.h"
-#define printf PR_LogPrint
 #endif
 
 /*
@@ -130,7 +124,7 @@ typedef enum Verbosity
 } Verbosity;
 
 static enum {
-    thread_nspr, thread_pthread, thread_uithread, thread_sproc, thread_win32
+    thread_nspr, thread_pthread, thread_sproc, thread_win32
 } thread_provider;
 
 static PRInt32 domain = AF_INET;
@@ -216,10 +210,8 @@ PRLogModuleInfo *cltsrv_log_file = NULL;
 static void _MY_Assert(const char *s, const char *file, PRIntn ln)
 {
     PL_PrintError(NULL);
-#if DEBUG
     PR_Assert(s, file, ln);
-#endif
-}  /* _MW_Assert */
+}  /* _MY_Assert */
 
 static PRBool Aborted(PRStatus rv)
 {
@@ -232,7 +224,7 @@ static void TimeOfDayMessage(const char *msg, PRThread* me)
     char buffer[100];
     PRExplodedTime tod;
     PR_ExplodeTime(PR_Now(), PR_LocalTimeParameters, &tod);
-    (void)PR_FormatTime(buffer, sizeof(buffer), "%T", &tod);
+    (void)PR_FormatTime(buffer, sizeof(buffer), "%H:%M:%S", &tod);
 
     TEST_LOG(
         cltsrv_log_file, TEST_LOG_ALWAYS,
@@ -248,7 +240,7 @@ static void PR_CALLBACK Client(void *arg)
     PRFileDesc *fd = NULL;
     PRUintn clipping = DEFAULT_CLIPPING;
     CSClient_t *client = (CSClient_t*)arg;
-    PRThread *me = client->thread = PR_CurrentThread();
+    PRThread *me = client->thread = PR_GetCurrentThread();
     CSDescriptor_t *descriptor = PR_NEW(CSDescriptor_t);
     PRIntervalTime timeout = PR_MillisecondsToInterval(DEFAULT_CLIENT_TIMEOUT);
 
@@ -366,7 +358,7 @@ static void PR_CALLBACK Client(void *arg)
                 TEST_LOG(
                     cltsrv_log_file, TEST_LOG_ERROR,
                     ("\t\tClient(0x%p): unexpected end of stream\n",
-                    PR_CurrentThread()));
+                    PR_GetCurrentThread()));
                 break;
             }
             filebytes += bytes;
@@ -403,7 +395,7 @@ aborted:
     TEST_LOG(
         cltsrv_log_file, TEST_LOG_ALWAYS,
         ("\tClient(0x%p): stopped after %u operations and %u bytes\n",
-        PR_CurrentThread(), client->operations, client->bytesTransferred));
+        PR_GetCurrentThread(), client->operations, client->bytesTransferred));
 
 }  /* Client */
 
@@ -412,7 +404,7 @@ static PRStatus ProcessRequest(PRFileDesc *fd, CSServer_t *server)
     PRStatus drv, rv;
     char buffer[1024];
     PRFileDesc *file = NULL;
-    PRThread * me = PR_CurrentThread();
+    PRThread * me = PR_GetCurrentThread();
     PRInt32 bytes, descbytes, netbytes, filebytes = 0;
     CSDescriptor_t *descriptor = PR_NEW(CSDescriptor_t);
     PRIntervalTime timeout = PR_MillisecondsToInterval(DEFAULT_SERVER_TIMEOUT);
@@ -551,7 +543,7 @@ static PRStatus ProcessRequest(PRFileDesc *fd, CSServer_t *server)
             TEST_LOG(
                 cltsrv_log_file, TEST_LOG_ERROR,
                 ("\t\tProcessRequest(0x%p): open file timeout\n",
-                PR_CurrentThread()));
+                PR_GetCurrentThread()));
             goto aborted;
         }
         TEST_LOG(
@@ -661,20 +653,6 @@ static void *pthread_start(void *arg)
 }  /* pthread_start */
 #endif /* defined(_PR_PTHREADS) && !defined(_PR_DCETHREADS) */
 
-#if defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY)
-#include <thread.h>
-
-static void *uithread_start(void *arg)
-{
-    StartObject *so = (StartObject*)arg;
-    StartFn start = so->start;
-    void *data = so->arg;
-    PR_Free(so);
-    start(data);
-    return NULL;
-}  /* uithread_start */
-#endif /* defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY) */
-
 #if defined(IRIX) && !defined(_PR_PTHREADS)
 #include <sys/types.h>
 #include <sys/prctl.h>
@@ -715,11 +693,6 @@ static PRStatus JoinThread(PRThread *thread)
         rv = PR_SUCCESS;
         break;
 #endif /* defined(_PR_PTHREADS) && !defined(_PR_DCETHREADS) */
-    case thread_uithread:
-#if defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY)
-        rv = PR_SUCCESS;
-        break;
-#endif /* defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY) */
     case thread_win32:
 #if defined(WIN32)
         rv = PR_SUCCESS;
@@ -777,29 +750,6 @@ static PRStatus NewThread(
         PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
         rv = PR_FAILURE;
 #endif /* defined(_PR_PTHREADS) && !defined(_PR_DCETHREADS) */
-        break;
-
-    case thread_uithread:
-#if defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY)
-        {
-            int rv;
-            thread_t id;
-            long flags;
-            StartObject *start_object;
-            start_object = PR_NEW(StartObject);
-            PR_ASSERT(NULL != start_object);
-            start_object->start = start;
-            start_object->arg = arg;
-
-            flags = THR_DETACHED;
-
-            rv = thr_create(NULL, NULL, uithread_start, start_object, flags, &id);
-            return (0 == rv) ? PR_SUCCESS : PR_FAILURE;
-        }
-#else
-        PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
-        rv = PR_FAILURE;
-#endif /* defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY) */
         break;
 
     case thread_sproc:
@@ -864,7 +814,7 @@ static PRStatus CreateWorker(CSServer_t *server, CSPool_t *pool)
 
     TEST_LOG(cltsrv_log_file, TEST_LOG_STATUS, 
         ("\tCreateWorker(0x%p): create new worker (0x%p)\n",
-        PR_CurrentThread(), worker->thread));
+        PR_GetCurrentThread(), worker->thread));
 
     return rv;
 }  /* CreateWorker */
@@ -878,7 +828,7 @@ static void PR_CALLBACK Worker(void *arg)
     CSServer_t *server = worker->server;
     CSPool_t *pool = &server->pool;
 
-    PRThread *me = worker->thread = PR_CurrentThread();
+    PRThread *me = worker->thread = PR_GetCurrentThread();
 
     TEST_LOG(
         cltsrv_log_file, TEST_LOG_NOTICE,
@@ -972,7 +922,7 @@ exit:
 
     TEST_LOG(
         cltsrv_log_file, TEST_LOG_NOTICE,
-        ("\t\tWorker(0x%p): exiting [%u]\n", PR_CurrentThread(), pool->workers));
+        ("\t\tWorker(0x%p): exiting [%u]\n", PR_GetCurrentThread(), pool->workers));
 
     PR_Lock(server->ml);
     pool->workers -= 1;  /* undefine our existance */
@@ -989,7 +939,7 @@ static void PR_CALLBACK Server(void *arg)
     PRStatus rv;
     PRNetAddr serverAddress;
     CSServer_t *server = (CSServer_t*)arg;
-    PRThread *me = server->thread = PR_CurrentThread();
+    PRThread *me = server->thread = PR_GetCurrentThread();
     PRSocketOptionData sockOpt;
 
     server->listener = PR_Socket(domain, SOCK_STREAM, protocol);
@@ -1112,7 +1062,7 @@ static void Help(void)
     PR_fprintf(debug_out, "\t-e <seconds> duration of the test in seconds  (10)\n");
     PR_fprintf(debug_out, "\t-s <string>  dsn name of server               (localhost)\n");
     PR_fprintf(debug_out, "\t-G           use GLOBAL threads               (LOCAL)\n");
-    PR_fprintf(debug_out, "\t-T <string>  thread provider ('n' | 'p' | 'u' | 'w')(n)\n");
+    PR_fprintf(debug_out, "\t-T <string>  thread provider ('n' | 'p' | 'w')(n)\n");
     PR_fprintf(debug_out, "\t-X           use XTP as transport             (TCP)\n");
     PR_fprintf(debug_out, "\t-6           Use IPv6                         (IPv4)\n");
     PR_fprintf(debug_out, "\t-v           verbosity (accumulative)         (0)\n");
@@ -1127,7 +1077,7 @@ static Verbosity IncrementVerbosity(void)
     return (Verbosity)verboge;
 }  /* IncrementVerbosity */
 
-PRIntn main(PRIntn argc, char** argv)
+int main(int argc, char **argv)
 {
     PRUintn index;
     PRBool boolean;
@@ -1164,8 +1114,6 @@ PRIntn main(PRIntn argc, char** argv)
 	thread_provider = thread_win32;
 #elif defined(_PR_PTHREADS)
 	thread_provider = thread_pthread;
-#elif defined(SOLARIS) && defined(_PR_GLOBAL_THREADS_ONLY)
-	thread_provider = thread_uithread;
 #elif defined(IRIX)
 	thread_provider = thread_sproc;
 #else
@@ -1197,7 +1145,6 @@ PRIntn main(PRIntn argc, char** argv)
         case 'T':  /* the thread provider */
             if ('n' == *opt->value) thread_provider = thread_nspr;
             else if ('p' == *opt->value) thread_provider = thread_pthread;
-            else if ('u' == *opt->value) thread_provider = thread_uithread;
             else if ('w' == *opt->value) thread_provider = thread_win32;
             else {Help(); return 2; }
             break;
@@ -1243,23 +1190,19 @@ PRIntn main(PRIntn argc, char** argv)
     if (workersMin > accepting) accepting = workersMin;
 
     PR_STDIO_INIT();
-    TimeOfDayMessage("Client/Server started at", PR_CurrentThread());
+    TimeOfDayMessage("Client/Server started at", PR_GetCurrentThread());
 
     cltsrv_log_file = PR_NewLogModule("cltsrv_log");
     MY_ASSERT(NULL != cltsrv_log_file);
     boolean = PR_SetLogFile("cltsrv.log");
     MY_ASSERT(boolean);
 
-#ifdef XP_MAC
-    debug_mode = PR_TRUE;
-#endif
-
     if (serverIsLocal)
     {
         /* Establish the server */
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_INFO,
-            ("main(0x%p): starting server\n", PR_CurrentThread()));
+            ("main(0x%p): starting server\n", PR_GetCurrentThread()));
 
         server = PR_NEWZAP(CSServer_t);
         PR_INIT_CLIST(&server->list);
@@ -1276,7 +1219,7 @@ PRIntn main(PRIntn argc, char** argv)
 
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_NOTICE,
-            ("main(0x%p): creating server thread\n", PR_CurrentThread()));
+            ("main(0x%p): creating server thread\n", PR_GetCurrentThread()));
 
         rv = NewThread(
             Server, server, PR_PRIORITY_HIGH, PR_JOINABLE_THREAD);
@@ -1284,7 +1227,7 @@ PRIntn main(PRIntn argc, char** argv)
 
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_VERBOSE,
-            ("main(0x%p): waiting for server init\n", PR_CurrentThread()));
+            ("main(0x%p): waiting for server init\n", PR_GetCurrentThread()));
 
         PR_Lock(server->ml);
         while (server->state == cs_init)
@@ -1294,7 +1237,7 @@ PRIntn main(PRIntn argc, char** argv)
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_VERBOSE,
             ("main(0x%p): server init complete (port #%d)\n",
-            PR_CurrentThread(), server->port));
+            PR_GetCurrentThread(), server->port));
     }
 
     if (clients != 0)
@@ -1307,7 +1250,7 @@ PRIntn main(PRIntn argc, char** argv)
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_VERBOSE,
             ("main(0x%p): creating %d client threads\n",
-            PR_CurrentThread(), clients));
+            PR_GetCurrentThread(), clients));
         
         if (!serverIsLocal)
         {
@@ -1337,7 +1280,7 @@ PRIntn main(PRIntn argc, char** argv)
             client[index].stateChange = PR_NewCondVar(client[index].ml);
             TEST_LOG(
                 cltsrv_log_file, TEST_LOG_INFO,
-                ("main(0x%p): creating client threads\n", PR_CurrentThread()));
+                ("main(0x%p): creating client threads\n", PR_GetCurrentThread()));
             rv = NewThread(
                 Client, &client[index], PR_PRIORITY_NORMAL, PR_JOINABLE_THREAD);
             TEST_ASSERT(PR_SUCCESS == rv);
@@ -1352,11 +1295,11 @@ PRIntn main(PRIntn argc, char** argv)
     TEST_LOG(
         cltsrv_log_file, TEST_LOG_ALWAYS,
         ("main(0x%p): waiting for execution interval (%d seconds)\n",
-        PR_CurrentThread(), execution));
+        PR_GetCurrentThread(), execution));
 
     WaitForCompletion(execution);
 
-    TimeOfDayMessage("Shutting down", PR_CurrentThread());
+    TimeOfDayMessage("Shutting down", PR_GetCurrentThread());
 
     if (clients != 0)
     {
@@ -1364,7 +1307,7 @@ PRIntn main(PRIntn argc, char** argv)
         {
             TEST_LOG(cltsrv_log_file, TEST_LOG_STATUS, 
                 ("main(0x%p): notifying client(0x%p) to stop\n",
-                PR_CurrentThread(), client[index].thread));
+                PR_GetCurrentThread(), client[index].thread));
 
             PR_Lock(client[index].ml);
             if (cs_run == client[index].state)
@@ -1379,7 +1322,7 @@ PRIntn main(PRIntn argc, char** argv)
 
             TEST_LOG(cltsrv_log_file, TEST_LOG_VERBOSE, 
                 ("main(0x%p): joining client(0x%p)\n",
-                PR_CurrentThread(), client[index].thread));
+                PR_GetCurrentThread(), client[index].thread));
 
 		    joinStatus = JoinThread(client[index].thread);
 		    TEST_ASSERT(PR_SUCCESS == joinStatus);
@@ -1395,7 +1338,7 @@ PRIntn main(PRIntn argc, char** argv)
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_NOTICE, 
             ("main(0x%p): notifying server(0x%p) to stop\n",
-            PR_CurrentThread(), server->thread));
+            PR_GetCurrentThread(), server->thread));
 
         PR_Lock(server->ml);
         server->state = cs_stop;
@@ -1407,7 +1350,7 @@ PRIntn main(PRIntn argc, char** argv)
         TEST_LOG(
             cltsrv_log_file, TEST_LOG_NOTICE, 
             ("main(0x%p): joining server(0x%p)\n",
-            PR_CurrentThread(), server->thread));
+            PR_GetCurrentThread(), server->thread));
         joinStatus = JoinThread(server->thread);
         TEST_ASSERT(PR_SUCCESS == joinStatus);
 
@@ -1420,14 +1363,12 @@ PRIntn main(PRIntn argc, char** argv)
 
     TEST_LOG(
         cltsrv_log_file, TEST_LOG_ALWAYS, 
-        ("main(0x%p): test complete\n", PR_CurrentThread()));
+        ("main(0x%p): test complete\n", PR_GetCurrentThread()));
 
 	if (thread_provider == thread_win32)
 		thread_type = "\nWin32 Thread Statistics\n";
 	else if (thread_provider == thread_pthread)
 		thread_type = "\npthread Statistics\n";
-	else if (thread_provider == thread_uithread)
-		thread_type = "\nUnix International (UI) Thread Statistics\n";
 	else if (thread_provider == thread_sproc)
 		thread_type = "\nsproc Statistics\n";
     else {
@@ -1437,7 +1378,7 @@ PRIntn main(PRIntn argc, char** argv)
 
     PT_FPrintStats(debug_out, thread_type);
 
-    TimeOfDayMessage("Test exiting at", PR_CurrentThread());
+    TimeOfDayMessage("Test exiting at", PR_GetCurrentThread());
     PR_Cleanup();
     return 0;
 }  /* main */

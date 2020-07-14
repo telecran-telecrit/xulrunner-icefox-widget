@@ -54,16 +54,13 @@ GRE_MODULE	= 1
 LIBXUL_LIBRARY = 1
 
 REQUIRES	= xpcom \
-		  xpcom_obsolete \
 		  string \
 		  intl \
 		  necko \
 		  $(NULL)
 
-ifdef MOZ_PROFILESHARING
-REQUIRES	+= ipcd \
-		  profilesharingsetup \
-		  $(NULL)
+ifndef MOZ_NO_XPCOM_OBSOLETE
+REQUIRES	+= xpcom_obsolete
 endif
 
 include $(topsrcdir)/config/config.mk
@@ -76,24 +73,14 @@ CPPSRCS		= nsPref.cpp \
 			  prefread.cpp \
 			 $(NULL)
 
-ifdef MOZ_PROFILESHARING
-CPPSRCS	+= nsSharedPrefHandler.cpp
-SHARED_LIBRARY_LIBS	= $(DIST)/lib/$(LIB_PREFIX)ipcdutil_s.$(LIB_SUFFIX)
-endif
-
 DEFINES += -DOS_ARCH=$(OS_ARCH) \
            -DMOZ_WIDGET_TOOLKIT=$(MOZ_WIDGET_TOOLKIT) \
            $(NULL)
 
 PREF_JS_EXPORTS	= $(srcdir)/init/all.js
 
-ifdef MOZ_PROFILESHARING
-PREF_JS_EXPORTS	+= $(srcdir)/init/non-shared.txt
-endif
-
 EXTRA_DSO_LDOPTS = \
 		$(LIBS_DIR) \
-		$(MOZ_JS_LIBS) \
 		$(MOZ_COMPONENT_LIBS) \
 		$(NULL)
 
@@ -107,6 +94,6 @@ GARBAGE		+= $(addprefix $(DIST)/bin/defaults/pref/, \
 ifeq ($(OS_ARCH), OS2)
 nsPrefService.$(OBJ_SUFFIX): nsPrefService.cpp
 	$(REPORT_BUILD)
-	@$(MAKE_DEPS_AUTO)
+	@$(MAKE_DEPS_AUTO_CXX)
 	$(ELOG) $(CCC) $(OUTOPTION)$@ -c $(COMPILE_CXXFLAGS:-O2=-O1) $(_VPATH_SRCS)
 endif

@@ -49,6 +49,23 @@ JoinElementTxn::JoinElementTxn()
 {
 }
 
+NS_IMPL_CYCLE_COLLECTION_CLASS(JoinElementTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(JoinElementTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mLeftNode)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mRightNode)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mParent)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(JoinElementTxn, EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mLeftNode)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mRightNode)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mParent)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(JoinElementTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
+
 NS_IMETHODIMP JoinElementTxn::Init(nsEditor   *aEditor,
                                    nsIDOMNode *aLeftNode,
                                    nsIDOMNode *aRightNode)
@@ -57,13 +74,15 @@ NS_IMETHODIMP JoinElementTxn::Init(nsEditor   *aEditor,
   if (!aEditor || !aLeftNode || !aRightNode) { return NS_ERROR_NULL_POINTER; }
   mEditor = aEditor;
   mLeftNode = do_QueryInterface(aLeftNode);
+  nsCOMPtr<nsIDOMNode>leftParent;
+  nsresult result = mLeftNode->GetParentNode(getter_AddRefs(leftParent));
+  if (NS_FAILED(result)) return result;
+  if (!mEditor->IsModifiableNode(leftParent)) {
+    return NS_ERROR_FAILURE;
+  }
   mRightNode = do_QueryInterface(aRightNode);
   mOffset=0;
   return NS_OK;
-}
-
-JoinElementTxn::~JoinElementTxn()
-{
 }
 
 // After DoTransaction() and RedoTransaction(), the left node is removed from the content tree and right node remains.
@@ -160,20 +179,6 @@ NS_IMETHODIMP JoinElementTxn::UndoTransaction(void)
   result = mParent->InsertBefore(mLeftNode, mRightNode, getter_AddRefs(resultNode));
   return result;
 
-}
-
-NS_IMETHODIMP JoinElementTxn::GetIsTransient(PRBool *aIsTransient)
-{
-  if (aIsTransient)
-    *aIsTransient = PR_FALSE;
-  return NS_OK;
-}
-
-nsresult JoinElementTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge = PR_FALSE;
-  return NS_OK;
 }
 
 NS_IMETHODIMP JoinElementTxn::GetTxnDescription(nsAString& aString)

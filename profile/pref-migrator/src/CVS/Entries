@@ -1,9 +1,0 @@
-/.cvsignore/1.1/Sat Sep 11 16:10:24 1999//TFIREFOX_2_0_0_3_RELEASE
-/nsPrefMigration.cpp/1.198.8.1/Tue Sep 12 18:26:48 2006//TFIREFOX_2_0_0_3_RELEASE
-/Makefile.in/1.38/Tue Apr  5 14:13:02 2005//TFIREFOX_2_0_0_3_RELEASE
-/nsPrefMigration.h/1.53/Sat Apr 17 18:29:44 2004//TFIREFOX_2_0_0_3_RELEASE
-/nsPrefMigrationFactory.cpp/1.18/Sat Apr 17 18:29:44 2004//TFIREFOX_2_0_0_3_RELEASE
-/nsPrefMigrationFactory.h/1.7/Sat Apr 17 18:29:44 2004//TFIREFOX_2_0_0_3_RELEASE
-/prefmigr.pkg/1.2/Wed Jan  7 01:22:12 2004//TFIREFOX_2_0_0_3_RELEASE
-/win32.order/1.1/Tue Feb 13 02:45:06 2001//TFIREFOX_2_0_0_3_RELEASE
-D

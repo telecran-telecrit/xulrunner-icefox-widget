@@ -54,17 +54,8 @@
 
 #include "vr_stubs.h"
 
-#if defined(XP_MAC)
-#include <Folders.h>
-#include <Script.h>
-#include <stdlib.h>
-#include <Errors.h>
-#include "MoreFiles.h"
-#include "FullPath.h"  /* For FSpLocationFromFullPath() */
-#endif
-
-#if defined(XP_MACOSX)
-#include <Folders.h>
+#ifdef XP_MACOSX
+#include <Carbon/Carbon.h>
 #include <stdlib.h>
 #endif
 
@@ -606,16 +597,9 @@ int strncasecmp(const char *str1, const char *str2, int length)
 
 #include "NSReg.h"
 #include "VerReg.h"
-#include "nsBuildID.h"
 
 char *TheRegistry = "registry"; 
 char *Flist;
-
-/* WARNING: build hackery */
-#if defined(STANDALONE_REGISTRY) && !defined(XP_MAC) && !defined(XP_MACOSX)
-long BUILDNUM = NS_BUILD_ID;
-#endif
-
 
 REGERR vr_ParseVersion(char *verstr, VERSION *result);
 

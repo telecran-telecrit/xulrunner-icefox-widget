@@ -92,12 +92,8 @@ EXTRA_DSO_LDOPTS += \
 	$(TK_LIBS) \
 	$(NULL)
 
-ifneq (,$(filter mac cocoa,$(MOZ_WIDGET_TOOLKIT)))
-OS_LIBS	+= -framework QuickTime
-endif
-
 ifeq ($(MOZ_WIDGET_TOOLKIT),cocoa)
-OS_LIBS	+= -framework Cocoa
+OS_LIBS	+= -framework QuickTime
 endif
 
 ifeq ($(OS_ARCH),Darwin)
@@ -165,7 +161,7 @@ else
 _TARGET = $@
 endif
 
-nsMetaModule_%.cpp: nsMetaModule.cpp.in Makefile Makefile.in $(topsrcdir)/config/config.mk
+nsMetaModule_%.cpp: nsMetaModule.cpp.in $(GLOBAL_DEPS) $(topsrcdir)/config/config.mk
 	rm -f $@
 	cat $< | \
 	sed -e "s|%DECLARE_SUBMODULE_INFOS%|$(foreach m, $($(_META_COMPONENT_NAMES)), extern nsModuleInfo NSMODULEINFO($(m));)|" | \

@@ -1,6 +1,5 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- *
- * ***** BEGIN LICENSE BLOCK *****
+/* -*- Mode: c++; tab-width: 2; indent-tabs-mode: nil; -*- */
+/* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
  * The contents of this file are subject to the Mozilla Public License Version
@@ -16,13 +15,12 @@
  * The Original Code is mozilla.org code.
  *
  * The Initial Developer of the Original Code is
- *  Zack Rusin <zack@kde.org>.
- * Portions created by the Initial Developer are Copyright (C) 2004
+ *   Oleg Romashin <romaxa@gmail.com>
+ * Portions created by the Initial Developer are Copyright (C) 2003
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
- *   Lars Knoll <knoll@kde.org>
- *   Zack Rusin <zack@kde.org>
+ *   Oleg Romashin <romaxa@gmail.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -37,42 +35,37 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-#ifndef NSAPPSHELL_H
-#define NSAPPSHELL_H
 
-#include "nsIAppShell.h"
-#include "nsIEventQueue.h"
+#ifndef nsAppShell_h__
+#define nsAppShell_h__
+
+#include "nsBaseAppShell.h"
 #include "nsCOMPtr.h"
-#include "prenv.h"
+#include <qsocketnotifier.h>
 
-#include <qintdict.h>
-
-class nsEventQueueWatcher;
 
 /**
- * Gecko Qt application.
- *
- * Please note that the Create method on it _has_ to be
- * called _after_ QApplication has been instantiated if
- * we want to embed it.
+ * Native QT Application shell wrapper
  */
-class nsAppShell : public nsIAppShell
+
+class nsAppShell : public QObject,
+                   public nsBaseAppShell
 {
+  Q_OBJECT
+
 public:
-    nsAppShell();
-    ~nsAppShell();
+  nsAppShell() { };
 
-    NS_DECL_ISUPPORTS
-    NS_DECL_NSIAPPSHELL
+  nsresult Init();
 
-private:
-    void AddEventQueue(nsIEventQueue *equeue);
-    void RemoveEventQueue(nsIEventQueue *equeue);
+  virtual bool event (QEvent *e);
 
-private:
-    nsCOMPtr<nsIEventQueue>       mEventQueue;
-    PRInt32                       mID;
-    QIntDict<nsEventQueueWatcher> mQueueDict;
+protected:
+  virtual void ScheduleNativeEventCallback();
+  virtual PRBool ProcessNextNativeEvent(PRBool mayWait);
+  virtual ~nsAppShell();
 };
 
-#endif
+
+#endif // nsAppShell_h__
+

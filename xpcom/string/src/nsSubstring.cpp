@@ -119,6 +119,11 @@ ReleaseData( void* data, PRUint32 flags )
       {
         nsMemory::Free(data);
         STRING_STAT_INCREMENT(AdoptFree);
+#ifdef NS_BUILD_REFCNT_LOGGING
+        // Treat this as destruction of a "StringAdopt" object for leak
+        // tracking purposes.
+        NS_LogDtor(data, "StringAdopt", 1);
+#endif // NS_BUILD_REFCNT_LOGGING
       }
     // otherwise, nothing to do.
   }
@@ -133,9 +138,6 @@ class nsAStringAccessor : public nsAString
       nsAStringAccessor(); // NOT IMPLEMENTED
 
     public:
-#ifdef MOZ_V1_STRING_ABI
-      const void *vtable() const { return mVTable; }
-#endif
       char_type  *data() const   { return mData; }
       size_type   length() const { return mLength; }
       PRUint32    flags() const  { return mFlags; }
@@ -155,9 +157,6 @@ class nsACStringAccessor : public nsACString
       nsACStringAccessor(); // NOT IMPLEMENTED
 
     public:
-#ifdef MOZ_V1_STRING_ABI
-      const void *vtable() const { return mVTable; }
-#endif
       char_type  *data() const   { return mData; }
       size_type   length() const { return mLength; }
       PRUint32    flags() const  { return mFlags; }
@@ -178,12 +177,15 @@ nsStringBuffer::AddRef()
   {
     PR_AtomicIncrement(&mRefCount);
     STRING_STAT_INCREMENT(Share);
+    NS_LOG_ADDREF(this, mRefCount, "nsStringBuffer", sizeof(*this));
   }
 
 void
 nsStringBuffer::Release()
   {
-    if (PR_AtomicDecrement(&mRefCount) == 0)
+    PRInt32 count = PR_AtomicDecrement(&mRefCount);
+    NS_LOG_RELEASE(this, count, "nsStringBuffer");
+    if (count == 0)
       {
         STRING_STAT_INCREMENT(Free);
         free(this); // we were allocated with |malloc|
@@ -196,16 +198,17 @@ nsStringBuffer::Release()
 nsStringBuffer*
 nsStringBuffer::Alloc(size_t size)
   {
-    STRING_STAT_INCREMENT(Alloc);
-
     NS_ASSERTION(size != 0, "zero capacity allocation not allowed");
 
     nsStringBuffer *hdr =
         (nsStringBuffer *) malloc(sizeof(nsStringBuffer) + size);
     if (hdr)
       {
+        STRING_STAT_INCREMENT(Alloc);
+
         hdr->mRefCount = 1;
         hdr->mStorageSize = size;
+        NS_LOG_ADDREF(hdr, 1, "nsStringBuffer", sizeof(*hdr));
       }
     return hdr;
   }
@@ -220,9 +223,16 @@ nsStringBuffer::Realloc(nsStringBuffer* hdr, size_t size)
     // no point in trying to save ourselves if we hit this assertion
     NS_ASSERTION(!hdr->IsReadonly(), "|Realloc| attempted on readonly string");
 
+    // Treat this as a release and addref for refcounting purposes, since we
+    // just asserted that the refcound is 1.  If we don't do that, refcount
+    // logging will claim we've leaked all sorts of stuff.
+    NS_LOG_RELEASE(hdr, 0, "nsStringBuffer");
+    
     hdr = (nsStringBuffer*) realloc(hdr, sizeof(nsStringBuffer) + size);
-    if (hdr)
+    if (hdr) {
+      NS_LOG_ADDREF(hdr, 1, "nsStringBuffer", sizeof(*hdr));
       hdr->mStorageSize = size;
+    }
 
     return hdr;
   }
@@ -231,12 +241,8 @@ nsStringBuffer*
 nsStringBuffer::FromString(const nsAString& str)
   {
     const nsAStringAccessor* accessor =
-        NS_STATIC_CAST(const nsAStringAccessor*, &str);
+        static_cast<const nsAStringAccessor*>(&str);
 
-#ifdef MOZ_V1_STRING_ABI
-    if (accessor->vtable() != nsObsoleteAString::sCanonicalVTable)
-      return nsnull;
-#endif
     if (!(accessor->flags() & nsSubstring::F_SHARED))
       return nsnull;
 
@@ -247,12 +253,8 @@ nsStringBuffer*
 nsStringBuffer::FromString(const nsACString& str)
   {
     const nsACStringAccessor* accessor =
-        NS_STATIC_CAST(const nsACStringAccessor*, &str);
+        static_cast<const nsACStringAccessor*>(&str);
 
-#ifdef MOZ_V1_STRING_ABI
-    if (accessor->vtable() != nsObsoleteACString::sCanonicalVTable)
-      return nsnull;
-#endif
     if (!(accessor->flags() & nsCSubstring::F_SHARED))
       return nsnull;
 
@@ -262,16 +264,9 @@ nsStringBuffer::FromString(const nsACString& str)
 void
 nsStringBuffer::ToString(PRUint32 len, nsAString &str)
   {
-    PRUnichar* data = NS_STATIC_CAST(PRUnichar*, Data());
+    PRUnichar* data = static_cast<PRUnichar*>(Data());
 
-    nsAStringAccessor* accessor = NS_STATIC_CAST(nsAStringAccessor*, &str);
-#ifdef MOZ_V1_STRING_ABI
-    if (accessor->vtable() != nsObsoleteAString::sCanonicalVTable)
-      {
-        str.Assign(data, len);
-        return;
-      }
-#endif
+    nsAStringAccessor* accessor = static_cast<nsAStringAccessor*>(&str);
     NS_ASSERTION(data[len] == PRUnichar(0), "data should be null terminated");
 
     // preserve class flags
@@ -285,16 +280,9 @@ nsStringBuffer::ToString(PRUint32 len, nsAString &str)
 void
 nsStringBuffer::ToString(PRUint32 len, nsACString &str)
   {
-    char* data = NS_STATIC_CAST(char*, Data());
+    char* data = static_cast<char*>(Data());
 
-    nsACStringAccessor* accessor = NS_STATIC_CAST(nsACStringAccessor*, &str);
-#ifdef MOZ_V1_STRING_ABI
-    if (accessor->vtable() != nsObsoleteACString::sCanonicalVTable)
-      {
-        str.Assign(data, len);
-        return;
-      }
-#endif
+    nsACStringAccessor* accessor = static_cast<nsACStringAccessor*>(&str);
     NS_ASSERTION(data[len] == char(0), "data should be null terminated");
 
     // preserve class flags
@@ -317,3 +305,11 @@ nsStringBuffer::ToString(PRUint32 len, nsACString &str)
 #include "string-template-def-char.h"
 #include "nsTSubstring.cpp"
 #include "string-template-undef.h"
+
+// Check that internal and external strings have the same size.
+// See https://bugzilla.mozilla.org/show_bug.cgi?id=430581
+
+#include "prlog.h"
+#include "nsXPCOMStrings.h"
+
+PR_STATIC_ASSERT(sizeof(nsStringContainer_base) == sizeof(nsSubstring));

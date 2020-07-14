@@ -15,7 +15,7 @@
 # The Original Code is mozilla.org code.
 #
 # The Initial Developer of the Original Code is
-# Netscape Communications Corporation.  Portions created by Netscape are Copyright (C) Netscape Communications Corporation.  All Rights Reserved.
+# Netscape Communications Corporation.
 # Portions created by the Initial Developer are Copyright (C) 2001
 # the Initial Developer. All Rights Reserved.
 #
@@ -37,6 +37,9 @@
 #
 # ***** END LICENSE BLOCK *****
 
+const Cc = Components.classes;
+const Ci = Components.interfaces;
+const Cr = Components.results;
 const pageLoaderIface = Components.interfaces.nsIWebPageDescriptor;
 const nsISelectionPrivate = Components.interfaces.nsISelectionPrivate;
 const nsISelectionController = Components.interfaces.nsISelectionController;
@@ -56,6 +59,7 @@ try {
 
 var gSelectionListener = {
   timeout: 0,
+  attached: false,
   notifySelectionChanged: function(doc, sel, reason)
   {
     // Coalesce notifications within 100ms intervals.
@@ -64,16 +68,62 @@ var gSelectionListener = {
   }
 }
 
+var gViewSourceProgressListener = {
+
+  QueryInterface: function (aIID) {
+    if (aIID.equals(Ci.nsIWebProgressListener) ||
+        aIID.equals(Ci.nsISupportsWeakReference))
+      return this;
+    throw Cr.NS_NOINTERFACE;
+  },
+
+  onStateChange: function (aWebProgress, aRequest, aStateFlags, aStatus) {
+  },
+
+  onProgressChange: function (aWebProgress, aRequest,
+                              aCurSelfProgress, aMaxSelfProgress,
+                              aCurTotalProgress, aMaxTotalProgress) {
+  },
+
+  onLocationChange: function (aWebProgress, aRequest, aLocationURI) {
+    UpdateBackForwardCommands(getBrowser().webNavigation);
+  },
+
+  onStatusChange: function (aWebProgress, aRequest, aStatus, aMessage) {
+  },
+
+  onSecurityChange: function (aWebProgress, aRequest, aState) {
+  }
+
+}
+
 function onLoadViewSource() 
 {
   viewSource(window.arguments[0]);
   document.commandDispatcher.focusedWindow = content;
-  gFindBar.initFindBar();
+      
+  if (isHistoryEnabled()) {
+    // Attach the progress listener.
+    getBrowser().addProgressListener(gViewSourceProgressListener, 
+        Components.interfaces.nsIWebProgress.NOTIFY_ALL);
+  } else {
+    // Disable the BACK and FORWARD commands and hide the related menu items.
+    var viewSourceNavigation = document.getElementById("viewSourceNavigation");
+    viewSourceNavigation.setAttribute("disabled", "true");
+    viewSourceNavigation.setAttribute("hidden", "true");
+  }
 }
 
-function onUnloadViewSource()
+function onUnloadViewSource() 
 {
-  gFindBar.uninitFindBar();
+  // Detach the progress listener.
+  if (isHistoryEnabled()) {
+    getBrowser().removeProgressListener(gViewSourceProgressListener);
+  }
+}
+
+function isHistoryEnabled() {
+  return !getBrowser().hasAttribute("disablehistory");
 }
 
 function getBrowser()
@@ -103,6 +153,8 @@ function viewSource(url)
 {
   if (!url)
     return false; // throw Components.results.NS_ERROR_FAILURE;
+    
+  var viewSrcUrl = "view-source:" + url;
 
   getBrowser().addEventListener("unload", onUnloadContent, true);
   getBrowser().addEventListener("load", onLoadContent, true);
@@ -114,12 +166,14 @@ function viewSource(url)
   //    arg[1] - Charset value in the form 'charset=xxx'.
   //    arg[2] - Page descriptor used to load content from the cache.
   //    arg[3] - Line number to go to.
+  //    arg[4] - Whether charset was forced by the user
   //
   if ("arguments" in window) {
     var arg;
     //
     // Set the charset of the viewsource window...
     //
+    var charset;
     if (window.arguments.length >= 2) {
       arg = window.arguments[1];
 
@@ -128,8 +182,23 @@ function viewSource(url)
           var arrayArgComponents = arg.split('=');
           if (arrayArgComponents) {
             //we should "inherit" the charset menu setting in a new window
-            getMarkupDocumentViewer().defaultCharacterSet = arrayArgComponents[1];
-          } 
+            charset = arrayArgComponents[1];
+            gBrowser.markupDocumentViewer.defaultCharacterSet = charset;
+          }
+        }
+      } catch (ex) {
+        // Ignore the failure and keep processing arguments...
+      }
+    }
+    // If the document had a forced charset, set it here also
+    if (window.arguments.length >= 5) {
+      arg = window.arguments[4];
+
+      try {
+        if (arg === true) {
+          var docCharset = getBrowser().docShell.QueryInterface
+                             (Components.interfaces.nsIDocCharset);
+          docCharset.charset = charset;
         }
       } catch (ex) {
         // Ignore the failure and keep processing arguments...
@@ -159,8 +228,20 @@ function viewSource(url)
           // possible) rather than the network...
           //
           PageLoader.loadPage(arg, pageLoaderIface.DISPLAY_AS_SOURCE);
-          // The content was successfully loaded from the page cookie.
+
+          // The content was successfully loaded.
           loadFromURL = false;
+
+          // Record the page load in the session history so <back> will work.
+          var shEntrySource = arg.QueryInterface(Ci.nsISHEntry);
+          var shEntry = Cc["@mozilla.org/browser/session-history-entry;1"].createInstance(Ci.nsISHEntry);
+          shEntry.setURI(makeURI(viewSrcUrl, null, null));
+          shEntry.setTitle(viewSrcUrl);
+          shEntry.loadType = Ci.nsIDocShellLoadInfo.loadHistory;
+          shEntry.cacheKey = shEntrySource.cacheKey;
+          getBrowser().webNavigation.sessionHistory
+                      .QueryInterface(Ci.nsISHistoryInternal)
+                      .addEntry(shEntry, true);
         }
       } catch(ex) {
         // Ignore the failure.  The content will be loaded via the URL
@@ -174,7 +255,6 @@ function viewSource(url)
     // Currently, an exception is thrown if the URL load fails...
     //
     var loadFlags = Components.interfaces.nsIWebNavigation.LOAD_FLAGS_NONE;
-    var viewSrcUrl = "view-source:" + url;
     getBrowser().webNavigation.loadURI(viewSrcUrl, loadFlags, null, null, null);
   }
 
@@ -195,6 +275,7 @@ function viewSource(url)
     document.getElementById("menu_highlightSyntax").setAttribute("hidden", "true");
   }
 
+  window.addEventListener("AppCommand", HandleAppCommandEvent, true);
   window._content.focus();
 
   return true;
@@ -215,6 +296,7 @@ function onLoadContent()
   window._content.getSelection()
    .QueryInterface(nsISelectionPrivate)
    .addSelectionListener(gSelectionListener);
+  gSelectionListener.attached = true;
 }
 
 function onUnloadContent()
@@ -224,6 +306,28 @@ function onUnloadContent()
   // or toggling of syntax highlighting.
   //
   document.getElementById('cmd_goToLine').setAttribute('disabled', 'true');
+
+  // If we're not just unloading the initial "about:blank" which doesn't have
+  // a selection listener, get rid of it so it doesn't try to fire after the
+  // window has gone away.
+  if (gSelectionListener.attached) {
+    window.content.getSelection().QueryInterface(nsISelectionPrivate)
+          .removeSelectionListener(gSelectionListener);
+    gSelectionListener.attached = false;
+  }
+}
+
+function HandleAppCommandEvent(evt)
+{
+  evt.stopPropagation();
+  switch (evt.command) {
+    case "Back":
+      BrowserBack();
+      break;
+    case "Forward":
+      BrowserForward();
+      break;
+  }
 }
 
 function ViewSourceClose()
@@ -259,6 +363,25 @@ function onExitPP()
 {
   var toolbox = document.getElementById("viewSource-toolbox");
   toolbox.hidden = false;
+}
+
+function getPPBrowser()
+{
+  return document.getElementById("content");
+}
+
+function getNavToolbox()
+{
+  return document.getElementById("appcontent");
+}
+
+function getWebNavigation()
+{
+  try {
+    return gBrowser.webNavigation;
+  } catch (e) {
+    return null;
+  }
 }
 
 function ViewSourceGoToLine()
@@ -344,7 +467,7 @@ function goToLine(line)
   // to position the focusNode and the caret at the beginning of the line.
 
   selection.QueryInterface(nsISelectionPrivate)
-    .interlinePosition = true;	
+    .interlinePosition = true;
 
   selection.addRange(result.range);
 
@@ -369,7 +492,6 @@ function goToLine(line)
 
   var selCon = getSelectionController();
   selCon.setDisplaySelection(nsISelectionController.SELECTION_ON);
-  selCon.setCaretEnabled(true);
   selCon.setCaretVisibilityDuringSelection(true);
 
   // Scroll the beginning of the line into view.
@@ -404,7 +526,6 @@ function updateStatusBar()
 
   var selCon = getSelectionController();
   selCon.setDisplaySelection(nsISelectionController.SELECTION_ON);
-  selCon.setCaretEnabled(true);
   selCon.setCaretVisibilityDuringSelection(true);
 
   var interlinePosition = selection
@@ -578,11 +699,16 @@ function highlightSyntax()
 // browser.js to call PageLoader.loadPage() instead of BrowserReloadWithFlags()
 function BrowserSetForcedCharacterSet(aCharset)
 {
-  var docCharset = getBrowser().docShell.QueryInterface(
-                            Components.interfaces.nsIDocCharset);
+  var docCharset = getBrowser().docShell.QueryInterface(Ci.nsIDocCharset);
   docCharset.charset = aCharset;
-  var PageLoader = getBrowser().webNavigation.QueryInterface(pageLoaderIface);
-  PageLoader.loadPage(PageLoader.currentDescriptor, pageLoaderIface.DISPLAY_NORMAL);
+  if (isHistoryEnabled()) {
+    var PageLoader = getBrowser().webNavigation.QueryInterface(pageLoaderIface);
+    PageLoader.loadPage(PageLoader.currentDescriptor,
+                        pageLoaderIface.DISPLAY_NORMAL);
+  } else {
+    getBrowser().webNavigation
+                .reload(Ci.nsIWebNavigation.LOAD_FLAGS_CHARSET_CHANGE);
+  }
 }
 
 // fix for bug #229503
@@ -595,12 +721,52 @@ function BrowserSetForcedDetector(doReload)
   getBrowser().documentCharsetInfo.forcedDetector = true; 
   if (doReload)
   {
-    var PageLoader = getBrowser().webNavigation.QueryInterface(pageLoaderIface);
-    PageLoader.loadPage(PageLoader.currentDescriptor, pageLoaderIface.DISPLAY_NORMAL);
+    if (isHistoryEnabled()) {
+      var PageLoader = getBrowser().webNavigation
+                                   .QueryInterface(pageLoaderIface);
+      PageLoader.loadPage(PageLoader.currentDescriptor,
+                          pageLoaderIface.DISPLAY_NORMAL);
+    } else {
+      getBrowser().webNavigation
+                  .reload(Ci.nsIWebNavigation.LOAD_FLAGS_CHARSET_CHANGE);
+    }
   }
 }
 
-function getMarkupDocumentViewer()
-{
-  return gBrowser.markupDocumentViewer;
+function BrowserForward(aEvent) {
+  try {
+    getBrowser().goForward();
+  }
+  catch(ex) {
+  }
+}
+
+function BrowserBack(aEvent) {
+  try {
+    getBrowser().goBack();
+  }
+  catch(ex) {
+  }
+}
+
+function UpdateBackForwardCommands(aWebNavigation) {
+  var backBroadcaster = document.getElementById("Browser:Back");
+  var forwardBroadcaster = document.getElementById("Browser:Forward");
+
+  var backDisabled = backBroadcaster.hasAttribute("disabled");
+  var forwardDisabled = forwardBroadcaster.hasAttribute("disabled");
+
+  if (backDisabled == aWebNavigation.canGoBack) {
+    if (backDisabled)
+      backBroadcaster.removeAttribute("disabled");
+    else
+      backBroadcaster.setAttribute("disabled", true);
+  }
+
+  if (forwardDisabled == aWebNavigation.canGoForward) {
+    if (forwardDisabled)
+      forwardBroadcaster.removeAttribute("disabled");
+    else
+      forwardBroadcaster.setAttribute("disabled", true);
+  }
 }

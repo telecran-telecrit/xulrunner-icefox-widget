@@ -40,6 +40,8 @@
 #define _MOZSTORAGEHELPER_H_
 
 #include "mozIStorageConnection.h"
+#include "mozIStorageStatement.h"
+#include "mozStorage.h"
 
 
 /**
@@ -64,18 +66,17 @@ public:
                         PRBool aCommitOnComplete,
                         PRInt32 aType = mozIStorageConnection::TRANSACTION_DEFERRED)
     : mConnection(aConnection),
+      mHasTransaction(PR_FALSE),
       mCommitOnComplete(aCommitOnComplete),
       mCompleted(PR_FALSE)
   {
-    PRBool transactionInProgress = PR_FALSE;
-    mConnection->GetTransactionInProgress(&transactionInProgress);
-    mHasTransaction = ! transactionInProgress;
-    if (mHasTransaction)
-      mConnection->BeginTransactionAs(aType);
+    // We won't try to get a transaction if one is already in progress.
+    if (mConnection)
+      mHasTransaction = NS_SUCCEEDED(mConnection->BeginTransactionAs(aType));
   }
   ~mozStorageTransaction()
   {
-    if (mHasTransaction && ! mCompleted) {
+    if (mConnection && mHasTransaction && ! mCompleted) {
       if (mCommitOnComplete)
         mConnection->CommitTransaction();
       else
@@ -90,8 +91,8 @@ public:
    */
   nsresult Commit()
   {
-    if (mCompleted)
-      return NS_OK; // already done
+    if (!mConnection || mCompleted)
+      return NS_OK; // no connection, or already done
     mCompleted = PR_TRUE;
     if (! mHasTransaction)
       return NS_OK; // transaction not ours, ignore
@@ -105,12 +106,21 @@ public:
    */
   nsresult Rollback()
   {
-    if (mCompleted)
-      return NS_OK; // already done
+    if (!mConnection || mCompleted)
+      return NS_OK; // no connection, or already done
     mCompleted = PR_TRUE;
     if (! mHasTransaction)
       return NS_ERROR_FAILURE;
-    return mConnection->RollbackTransaction();
+
+    // It is possible that a rollback will return busy, so we busy wait...
+    nsresult rv = NS_OK;
+    do {
+      rv = mConnection->RollbackTransaction();
+      if (rv == NS_ERROR_STORAGE_BUSY)
+        (void)PR_Sleep(PR_INTERVAL_NO_WAIT);
+    } while (rv == NS_ERROR_STORAGE_BUSY);
+
+    return rv;
   }
 
   /**
@@ -147,7 +157,7 @@ protected:
  * Note that this always just resets the statement. If the statement doesn't
  * need resetting, the reset operation is inexpensive.
  */
-class mozStorageStatementScoper
+class NS_STACK_CLASS mozStorageStatementScoper
 {
 public:
   mozStorageStatementScoper(mozIStorageStatement* aStatement)

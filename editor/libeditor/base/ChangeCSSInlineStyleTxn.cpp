@@ -47,16 +47,20 @@
 
 #define kNullCh (PRUnichar('\0'))
 
-void
-ChangeCSSInlineStyleTxn::AppendDeclaration(nsAString & aOutputString,
-                                           const nsAString & aProperty,
-                                           const nsAString & aValues)
-{
-  aOutputString.Append(aProperty
-                       + NS_LITERAL_STRING(": ")
-                       + aValues
-                       + NS_LITERAL_STRING("; "));
-}
+NS_IMPL_CYCLE_COLLECTION_CLASS(ChangeCSSInlineStyleTxn)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ChangeCSSInlineStyleTxn,
+                                                EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ChangeCSSInlineStyleTxn,
+                                                  EditTxn)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ChangeCSSInlineStyleTxn)
+NS_INTERFACE_MAP_END_INHERITING(EditTxn)
 
 // answers true if aValue is in the string list of white-space separated values aValueList
 // a case-sensitive search is performed if aCaseSensitive is true
@@ -140,10 +144,6 @@ ChangeCSSInlineStyleTxn::RemoveValueFromListOfValues(nsAString & aValues, const 
 
 ChangeCSSInlineStyleTxn::ChangeCSSInlineStyleTxn()
   : EditTxn()
-{
-}
-
-ChangeCSSInlineStyleTxn::~ChangeCSSInlineStyleTxn()
 {
 }
 
@@ -305,13 +305,6 @@ NS_IMETHODIMP ChangeCSSInlineStyleTxn::UndoTransaction(void)
 NS_IMETHODIMP ChangeCSSInlineStyleTxn::RedoTransaction(void)
 {
   return SetStyle(mRedoAttributeWasSet, mRedoValue);
-}
-
-NS_IMETHODIMP ChangeCSSInlineStyleTxn::Merge(nsITransaction *aTransaction, PRBool *aDidMerge)
-{
-  if (aDidMerge)
-    *aDidMerge = PR_FALSE;
-  return NS_OK;
 }
 
 NS_IMETHODIMP ChangeCSSInlineStyleTxn::GetTxnDescription(nsAString& aString)

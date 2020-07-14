@@ -1,6 +1,7 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- *
- * ***** BEGIN LICENSE BLOCK *****
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* vim:expandtab:shiftwidth=4:tabstop=4:
+ */
+/* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
  * The contents of this file are subject to the Mozilla Public License Version
@@ -16,13 +17,10 @@
  * The Original Code is mozilla.org code.
  *
  * The Initial Developer of the Original Code is
- *  Zack Rusin <zack@kde.org>.
- * Portions created by the Initial Developer are Copyright (C) 2004
- * the Initial Developer. All Rights Reserved.
+ *  Oleg Romashin <romaxa@gmail.com>.
  *
  * Contributor(s):
- *   Lars Knoll <knoll@kde.org>
- *   Zack Rusin <zack@kde.org>
+ *  Oleg Romashin <romaxa@gmail.com>.
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -37,174 +35,88 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
 #include "nsAppShell.h"
-
-#include "nsEventQueueWatcher.h"
-
-#include "nsIEventQueueService.h"
-#include "nsServiceManagerUtils.h"
-#include "nsIEventQueue.h"
-
 #include <qapplication.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 
-nsAppShell::nsAppShell()
-{
-}
+#include <qabstracteventdispatcher.h>
+
+#include "prenv.h"
+
+#ifdef MOZ_LOGGING
+#define FORCE_PR_LOG
+#include "prlog.h"
+#endif
+
+#ifdef PR_LOGGING
+PRLogModuleInfo *gWidgetLog = nsnull;
+PRLogModuleInfo *gWidgetFocusLog = nsnull;
+PRLogModuleInfo *gWidgetIMLog = nsnull;
+PRLogModuleInfo *gWidgetDrawLog = nsnull;
+#endif
+
+static int sPokeEvent;
 
 nsAppShell::~nsAppShell()
 {
 }
 
-//-------------------------------------------------------------------------
-// nsISupports implementation macro
-//-------------------------------------------------------------------------
-NS_IMPL_ISUPPORTS1(nsAppShell, nsIAppShell)
-
-NS_IMETHODIMP
-nsAppShell::Create(int *argc, char **argv)
+nsresult
+nsAppShell::Init()
 {
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAppShell::Run(void)
-{
-    if (!mEventQueue)
-        Spinup();
-
-    if (!mEventQueue)
-        return NS_ERROR_NOT_INITIALIZED;
-
-    qApp->exec();
-
-    Spindown();
-
-    return NS_OK;
-}
-
-//i don't like this method flow, but i left it because it follows what
-//other ports are doing here
-NS_IMETHODIMP
-nsAppShell::Spinup()
-{
-    nsresult rv = NS_OK;
-
-    // Get the event queue service
-    nsCOMPtr<nsIEventQueueService> eventQService =
-        do_GetService(NS_EVENTQUEUESERVICE_CONTRACTID,&rv);
-
-    if (NS_FAILED(rv)) {
-        NS_WARNING("Could not obtain event queue service");
-        return rv;
-    }
-
-    //Get the event queue for the thread.
-    rv = eventQService->GetThreadEventQueue(NS_CURRENT_THREAD,
-                                            getter_AddRefs(mEventQueue));
-
-    // If a queue already present use it.
-    if (mEventQueue)
-        goto done;
-
-    // Create the event queue for the thread
-    rv = eventQService->CreateThreadEventQueue();
-    if (NS_FAILED(rv)) {
-        NS_WARNING("Could not create the thread event queue");
-        return rv;
-    }
-
-    // Ask again for the event queue now that we have create one.
-    rv = eventQService->GetThreadEventQueue(NS_CURRENT_THREAD,getter_AddRefs(mEventQueue));
-    if (NS_FAILED(rv)) {
-        NS_ASSERTION("Could not obtain the thread event queue",PR_FALSE);
-        return rv;
-    }
-done:
-    AddEventQueue(mEventQueue);
-
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAppShell::Spindown(void)
-{
-    // stop listening to the event queue
-    if (mEventQueue) {
-        RemoveEventQueue(mEventQueue);
-        mEventQueue->ProcessPendingEvents();
-        mEventQueue = nsnull;
-    }
-
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAppShell::ListenToEventQueue(nsIEventQueue *aQueue, PRBool aListen)
-{
-    // whoever came up with the idea of passing bool to this
-    // method to decide what its effect should be is getting
-    // his ass kicked
-
-    if (aListen)
-        AddEventQueue(aQueue);
-    else
-        RemoveEventQueue(aQueue);
-
-    return NS_OK;
+#ifdef PR_LOGGING
+    if (!gWidgetLog)
+        gWidgetLog = PR_NewLogModule("Widget");
+    if (!gWidgetFocusLog)
+        gWidgetFocusLog = PR_NewLogModule("WidgetFocus");
+    if (!gWidgetIMLog)
+        gWidgetIMLog = PR_NewLogModule("WidgetIM");
+    if (!gWidgetDrawLog)
+        gWidgetDrawLog = PR_NewLogModule("WidgetDraw");
+#endif
+#if (QT_VERSION >= QT_VERSION_CHECK(4, 4, 0))
+    sPokeEvent = QEvent::registerEventType();
+#else
+    sPokeEvent = QEvent::User+5000;
+#endif
+    return nsBaseAppShell::Init();
 }
 
 void
-nsAppShell::AddEventQueue(nsIEventQueue *aQueue)
+nsAppShell::ScheduleNativeEventCallback()
 {
-    nsEventQueueWatcher *que = 0;
+    QCoreApplication::postEvent(this,
+                                new QEvent((QEvent::Type) sPokeEvent));
+}
 
-    if ((que = mQueueDict.find(aQueue->GetEventQueueSelectFD()))) {
-        que->ref();
+
+PRBool
+nsAppShell::ProcessNextNativeEvent(PRBool mayWait)
+{
+   QEventLoop::ProcessEventsFlags flags = QEventLoop::AllEvents;
+     
+     if (mayWait)
+         flags |= QEventLoop::WaitForMoreEvents;
+     
+     
+     QAbstractEventDispatcher *dispatcher =  QAbstractEventDispatcher::instance(qApp->thread());
+     if (!dispatcher)
+         return PR_FALSE ;
+     
+     return dispatcher->processEvents(flags)?PR_TRUE:PR_FALSE;
+
+}
+
+bool
+nsAppShell::event (QEvent *e)
+{
+    if (e->type() == sPokeEvent) {
+        NativeEventCallback();
+        return true;
     }
-    else {
-        mQueueDict.insert(aQueue->GetEventQueueSelectFD(),
-                          new nsEventQueueWatcher(aQueue, qApp));
-    }
-}
 
-void
-nsAppShell::RemoveEventQueue(nsIEventQueue *aQueue)
-{
-    nsEventQueueWatcher *qtQueue = 0;
-
-    if ((qtQueue = mQueueDict.find(aQueue->GetEventQueueSelectFD()))) {
-        qtQueue->DataReceived();
-        qtQueue->deref();
-        if (qtQueue->count <= 0) {
-            mQueueDict.take(aQueue->GetEventQueueSelectFD());
-            delete qtQueue;
-        }
-    }
-}
-
-NS_IMETHODIMP
-nsAppShell::GetNativeEvent(PRBool &aRealEvent, void * &aEvent)
-{
-    aRealEvent = PR_FALSE;
-    aEvent = 0;
-
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAppShell::DispatchNativeEvent(PRBool aRealEvent, void *aEvent)
-{
-    if (!mEventQueue)
-        return NS_ERROR_NOT_INITIALIZED;
-
-    qApp->processEvents();
-
-    return NS_OK;
-}
-
-NS_IMETHODIMP
-nsAppShell::Exit(void)
-{
-    qApp->exit(0);
-    return NS_OK;
+    return false;
 }

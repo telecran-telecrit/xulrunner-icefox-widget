@@ -63,7 +63,8 @@ extern nsRecyclingAllocator *gZlibAllocator;
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsXPTZipLoader)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsJAR)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsZipReaderCache)
-NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsJARProtocolHandler, Init)
+NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsJARProtocolHandler,
+                                         nsJARProtocolHandler::GetSingleton)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsJARURI)
 
 // The list of components we register
@@ -97,10 +98,11 @@ static const nsModuleComponentInfo components[] =
 };
 
 // Jar module shutdown hook
-static void PR_CALLBACK nsJarShutdown(nsIModule *module)
+static void nsJarShutdown(nsIModule *module)
 {
     // Release cached buffers from zlib allocator
     delete gZlibAllocator;
+    NS_IF_RELEASE(gJarHandler);
 }
 
 NS_IMPL_NSGETMODULE_WITH_DTOR(nsJarModule, components, nsJarShutdown)

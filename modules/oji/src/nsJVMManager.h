@@ -62,7 +62,8 @@ class nsIWebBrowserChrome;
  * nsIJVMManager is the more limited interface what the JVM plugin sees.
  ******************************************************************************/
 
-struct nsJVMManager : public nsIJVMManager, public nsIThreadManager, public nsILiveConnectManager, public nsIObserver {
+struct nsJVMManager : public nsIJVMManager, public nsIJVMThreadManager,
+                      public nsILiveConnectManager, public nsIObserver {
 public:
 
     NS_DECL_AGGREGATED
@@ -71,7 +72,7 @@ public:
 
     NS_DECL_NSIOBSERVER
 
-    /* from nsIThreadManager: */
+    /* from nsIJVMThreadManager: */
     
 	/**
 	 * Returns a unique identifier for the "current" system thread.
@@ -184,9 +185,6 @@ public:
     NS_IMETHOD
     GetClasspathAdditions(const char* *result);
 
-    static NS_METHOD
-    Create(nsISupports* outer, const nsIID& aIID, void* *aInstancePtr);
-
     nsIJVMPlugin* GetJVMPlugin(void) { return fJVM; }
 
     /* Unlike the nsIJVMPlugin::StartupJVM, this version handles putting
@@ -206,7 +204,7 @@ public:
     PRBool      MaybeShutdownLiveConnect(void);
     PRBool      IsLiveConnectEnabled(void);
     JSJavaVM*   GetJSJavaVM(void) { return fJSJavaVM; }
-
+    nsresult    Init();
 
     nsJVMManager(nsISupports* outer);
     virtual ~nsJVMManager(void);

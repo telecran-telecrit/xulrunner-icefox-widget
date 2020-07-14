@@ -65,32 +65,32 @@ struct HTEntry : PLDHashEntryHdr
 // Key operations
 //
 
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 matchKeyEntry(PLDHashTable*, const PLDHashEntryHdr* entry,
               const void* key)
 {
     const HTEntry* hashEntry =
-        NS_STATIC_CAST(const HTEntry*, entry);
+        static_cast<const HTEntry*>(entry);
 
     if (hashEntry->key == key)
         return PR_TRUE;
 
-    const nsHashKey* otherKey = NS_REINTERPRET_CAST(const nsHashKey*, key);
+    const nsHashKey* otherKey = reinterpret_cast<const nsHashKey*>(key);
     return otherKey->Equals(hashEntry->key);
 }
 
-PR_STATIC_CALLBACK(PLDHashNumber)
+static PLDHashNumber
 hashKey(PLDHashTable* table, const void* key)
 {
-    const nsHashKey* hashKey = NS_STATIC_CAST(const nsHashKey*, key);
+    const nsHashKey* hashKey = static_cast<const nsHashKey*>(key);
 
     return hashKey->HashCode();
 }
 
-PR_STATIC_CALLBACK(void)
+static void
 clearHashEntry(PLDHashTable* table, PLDHashEntryHdr* entry)
 {
-    HTEntry* hashEntry = NS_STATIC_CAST(HTEntry*, entry);
+    HTEntry* hashEntry = static_cast<HTEntry*>(entry);
 
     // leave it up to the nsHashKey destructor to free the "value"
     delete hashEntry->key;
@@ -103,7 +103,6 @@ clearHashEntry(PLDHashTable* table, PLDHashEntryHdr* entry)
 static const PLDHashTableOps hashtableOps = {
     PL_DHashAllocTable,
     PL_DHashFreeTable,
-    PL_DHashGetKeyStub,
     hashKey,
     matchKeyEntry,
     PL_DHashMoveEntryStub,
@@ -122,11 +121,11 @@ struct _HashEnumerateArgs {
     void* arg;
 };
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 hashEnumerate(PLDHashTable* table, PLDHashEntryHdr* hdr, PRUint32 i, void *arg)
 {
     _HashEnumerateArgs* thunk = (_HashEnumerateArgs*)arg;
-    HTEntry* entry = NS_STATIC_CAST(HTEntry*, hdr);
+    HTEntry* entry = static_cast<HTEntry*>(hdr);
     
     switch (thunk->fn(entry->key, entry->value, thunk->arg)) {
       case kHashEnumerateNext:
@@ -152,8 +151,6 @@ nsHashKey::Write(nsIObjectOutputStream* aStream) const
     NS_NOTREACHED("oops");
     return NS_ERROR_NOT_IMPLEMENTED;
 }
-
-MOZ_DECL_CTOR_COUNTER(nsHashtable)
 
 nsHashtable::nsHashtable(PRUint32 aInitSize, PRBool threadSafe)
   : mLock(NULL), mEnumerating(PR_FALSE)
@@ -216,8 +213,8 @@ void *nsHashtable::Put(nsHashKey *aKey, void *aData)
     PR_ASSERT(!mEnumerating);
     
     HTEntry* entry =
-        NS_STATIC_CAST(HTEntry*,
-                       PL_DHashTableOperate(&mHashtable, aKey, PL_DHASH_ADD));
+        static_cast<HTEntry*>
+                   (PL_DHashTableOperate(&mHashtable, aKey, PL_DHASH_ADD));
     
     if (entry) {                // don't return early, or you'll be locked!
         if (entry->key) {
@@ -243,8 +240,8 @@ void *nsHashtable::Get(nsHashKey *aKey)
     if (mLock) PR_Lock(mLock);
 
     HTEntry* entry =
-        NS_STATIC_CAST(HTEntry*,
-                       PL_DHashTableOperate(&mHashtable, aKey, PL_DHASH_LOOKUP));
+        static_cast<HTEntry*>
+                   (PL_DHashTableOperate(&mHashtable, aKey, PL_DHASH_LOOKUP));
     void *ret = PL_DHASH_ENTRY_IS_BUSY(entry) ? entry->value : nsnull;
     
     if (mLock) PR_Unlock(mLock);
@@ -265,8 +262,8 @@ void *nsHashtable::Remove(nsHashKey *aKey)
     // need to see if the entry is actually there, in order to get the
     // old value for the result
     HTEntry* entry =
-        NS_STATIC_CAST(HTEntry*,
-                       PL_DHashTableOperate(&mHashtable, aKey, PL_DHASH_LOOKUP));
+        static_cast<HTEntry*>
+                   (PL_DHashTableOperate(&mHashtable, aKey, PL_DHASH_LOOKUP));
     void *res;
     
     if (PL_DHASH_ENTRY_IS_FREE(entry)) {
@@ -285,12 +282,12 @@ void *nsHashtable::Remove(nsHashKey *aKey)
 // XXX This method was called _hashEnumerateCopy, but it didn't copy the element!
 // I don't know how this was supposed to work since the elements are neither copied
 // nor refcounted.
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 hashEnumerateShare(PLDHashTable *table, PLDHashEntryHdr *hdr,
                    PRUint32 i, void *arg)
 {
     nsHashtable *newHashtable = (nsHashtable *)arg;
-    HTEntry * entry = NS_STATIC_CAST(HTEntry*, hdr);
+    HTEntry * entry = static_cast<HTEntry*>(hdr);
     
     newHashtable->Put(entry->key, entry->value);
     return PL_DHASH_NEXT;
@@ -320,10 +317,10 @@ void nsHashtable::Enumerate(nsHashtableEnumFunc aEnumFunc, void* aClosure)
     mEnumerating = wasEnumerating;
 }
 
-PR_STATIC_CALLBACK(PLDHashOperator)
+static PLDHashOperator
 hashEnumerateRemove(PLDHashTable*, PLDHashEntryHdr* hdr, PRUint32 i, void *arg)
 {
-    HTEntry* entry = NS_STATIC_CAST(HTEntry*, hdr);
+    HTEntry* entry = static_cast<HTEntry*>(hdr);
     _HashEnumerateArgs* thunk = (_HashEnumerateArgs*)arg;
     if (thunk) {
         return thunk->fn(entry->key, entry->value, thunk->arg)
@@ -414,7 +411,7 @@ struct WriteEntryArgs {
     nsresult                  mRetVal;
 };
 
-PR_STATIC_CALLBACK(PRBool)
+static PRBool
 WriteEntry(nsHashKey *aKey, void *aData, void* aClosure)
 {
     WriteEntryArgs* args = (WriteEntryArgs*) aClosure;
@@ -445,7 +442,7 @@ nsHashtable::Write(nsIObjectOutputStream* aStream,
 
     // Write all key/value pairs in the table.
     WriteEntryArgs args = {aStream, aWriteDataFunc};
-    NS_CONST_CAST(nsHashtable*, this)->Enumerate(WriteEntry, (void*) &args);
+    const_cast<nsHashtable*>(this)->Enumerate(WriteEntry, (void*) &args);
     return args.mRetVal;
 }
 
@@ -492,7 +489,7 @@ nsCStringKey::nsCStringKey(const nsCStringKey& aKey)
 {
     if (mOwnership != NEVER_OWN) {
       PRUint32 len = mStrLen * sizeof(char);
-      char* str = NS_REINTERPRET_CAST(char*, nsMemory::Alloc(len + sizeof(char)));
+      char* str = reinterpret_cast<char*>(nsMemory::Alloc(len + sizeof(char)));
       if (!str) {
         // Pray we don't dangle!
         mOwnership = NEVER_OWN;
@@ -511,7 +508,7 @@ nsCStringKey::nsCStringKey(const nsCStringKey& aKey)
 }
 
 nsCStringKey::nsCStringKey(const nsAFlatCString& str)
-    : mStr(NS_CONST_CAST(char*, str.get())),
+    : mStr(const_cast<char*>(str.get())),
       mStrLen(str.Length()),
       mOwnership(OWN_CLONE)
 {
@@ -619,7 +616,7 @@ nsStringKey::nsStringKey(const nsStringKey& aKey)
 {
     if (mOwnership != NEVER_OWN) {
         PRUint32 len = mStrLen * sizeof(PRUnichar);
-        PRUnichar* str = NS_REINTERPRET_CAST(PRUnichar*, nsMemory::Alloc(len + sizeof(PRUnichar)));
+        PRUnichar* str = reinterpret_cast<PRUnichar*>(nsMemory::Alloc(len + sizeof(PRUnichar)));
         if (!str) {
             // Pray we don't dangle!
             mOwnership = NEVER_OWN;
@@ -638,7 +635,7 @@ nsStringKey::nsStringKey(const nsStringKey& aKey)
 }
 
 nsStringKey::nsStringKey(const nsAFlatString& str)
-    : mStr(NS_CONST_CAST(PRUnichar*, str.get())),
+    : mStr(const_cast<PRUnichar*>(str.get())),
       mStrLen(str.Length()),
       mOwnership(OWN_CLONE)
 {
@@ -753,13 +750,13 @@ nsObjectHashtable::~nsObjectHashtable()
 }
 
 
-PLDHashOperator PR_CALLBACK
+PLDHashOperator
 nsObjectHashtable::CopyElement(PLDHashTable* table,
                                PLDHashEntryHdr* hdr,
                                PRUint32 i, void *arg)
 {
     nsObjectHashtable *newHashtable = (nsObjectHashtable *)arg;
-    HTEntry *entry = NS_STATIC_CAST(HTEntry*, hdr);
+    HTEntry *entry = static_cast<HTEntry*>(hdr);
     
     void* newElement =
         newHashtable->mCloneElementFun(entry->key, entry->value,
@@ -798,17 +795,17 @@ nsObjectHashtable::RemoveAndDelete(nsHashKey *aKey)
 {
     void *value = Remove(aKey);
     if (value && mDestroyElementFun)
-        return (*mDestroyElementFun)(aKey, value, mDestroyElementClosure);
+        return !!(*mDestroyElementFun)(aKey, value, mDestroyElementClosure);
     return PR_FALSE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // nsSupportsHashtable: an nsHashtable where the elements are nsISupports*
 
-PRBool PR_CALLBACK
+PRBool
 nsSupportsHashtable::ReleaseElement(nsHashKey *aKey, void *aData, void* aClosure)
 {
-    nsISupports* element = NS_STATIC_CAST(nsISupports*, aData);
+    nsISupports* element = static_cast<nsISupports*>(aData);
     NS_IF_RELEASE(element);
     return PR_TRUE;
 }
@@ -825,7 +822,7 @@ nsSupportsHashtable::Put(nsHashKey *aKey, nsISupports* aData, nsISupports **valu
 {
     NS_IF_ADDREF(aData);
     void *prev = nsHashtable::Put(aKey, aData);
-    nsISupports *old = NS_REINTERPRET_CAST(nsISupports *, prev);
+    nsISupports *old = reinterpret_cast<nsISupports *>(prev);
     if (value)  // pass own the ownership to the caller
         *value = old;
     else        // the caller doesn't care, we do
@@ -839,7 +836,7 @@ nsSupportsHashtable::Get(nsHashKey *aKey)
     void* data = nsHashtable::Get(aKey);
     if (!data)
         return nsnull;
-    nsISupports* element = NS_REINTERPRET_CAST(nsISupports*, data);
+    nsISupports* element = reinterpret_cast<nsISupports*>(data);
     NS_IF_ADDREF(element);
     return element;
 }
@@ -850,7 +847,7 @@ PRBool
 nsSupportsHashtable::Remove(nsHashKey *aKey, nsISupports **value)
 {
     void* data = nsHashtable::Remove(aKey);
-    nsISupports* element = NS_STATIC_CAST(nsISupports*, data);
+    nsISupports* element = static_cast<nsISupports*>(data);
     if (value)            // caller wants it
         *value = element;
     else                  // caller doesn't care, we do
@@ -858,15 +855,15 @@ nsSupportsHashtable::Remove(nsHashKey *aKey, nsISupports **value)
     return data != nsnull;
 }
 
-PLDHashOperator PR_CALLBACK
+PLDHashOperator
 nsSupportsHashtable::EnumerateCopy(PLDHashTable*,
                                    PLDHashEntryHdr* hdr,
                                    PRUint32 i, void *arg)
 {
     nsHashtable *newHashtable = (nsHashtable *)arg;
-    HTEntry* entry = NS_STATIC_CAST(HTEntry*, hdr);
+    HTEntry* entry = static_cast<HTEntry*>(hdr);
     
-    nsISupports* element = NS_STATIC_CAST(nsISupports*, entry->value);
+    nsISupports* element = static_cast<nsISupports*>(entry->value);
     NS_IF_ADDREF(element);
     newHashtable->Put(entry->key, entry->value);
     return PL_DHASH_NEXT;

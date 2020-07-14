@@ -45,6 +45,22 @@
 PRLock *_pr_flock_lock;
 PRCondVar *_pr_flock_cv;
 
+#ifdef WINCE
+/*
+ * There are no stdin, stdout, stderr in Windows CE.  INVALID_HANDLE_VALUE
+ * should cause all I/O functions on the handle to fail.
+ */
+#define STD_INPUT_HANDLE  ((DWORD)-10)
+#define STD_OUTPUT_HANDLE ((DWORD)-11)
+#define STD_ERROR_HANDLE  ((DWORD)-12)
+
+static HANDLE GetStdHandle(DWORD nStdHandle)
+{
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return INVALID_HANDLE_VALUE;
+}
+#endif
+
 void _PR_InitIO(void)
 {
     const PRIOMethods *methods = PR_GetFileMethods();
@@ -55,11 +71,11 @@ void _PR_InitIO(void)
     _pr_flock_cv = PR_NewCondVar(_pr_flock_lock);
 
 #ifdef WIN32
-    _pr_stdin = PR_AllocFileDesc((PRInt32)GetStdHandle(STD_INPUT_HANDLE),
+    _pr_stdin = PR_AllocFileDesc((PROsfd)GetStdHandle(STD_INPUT_HANDLE),
             methods);
-    _pr_stdout = PR_AllocFileDesc((PRInt32)GetStdHandle(STD_OUTPUT_HANDLE),
+    _pr_stdout = PR_AllocFileDesc((PROsfd)GetStdHandle(STD_OUTPUT_HANDLE),
             methods);
-    _pr_stderr = PR_AllocFileDesc((PRInt32)GetStdHandle(STD_ERROR_HANDLE),
+    _pr_stderr = PR_AllocFileDesc((PROsfd)GetStdHandle(STD_ERROR_HANDLE),
             methods);
 #ifdef WINNT
     _pr_stdin->secret->md.sync_file_io = PR_TRUE;
@@ -118,7 +134,7 @@ PR_IMPLEMENT(PRFileDesc*) PR_GetSpecialFD(PRSpecialFD osfd)
 }
 
 PR_IMPLEMENT(PRFileDesc*) PR_AllocFileDesc(
-    PRInt32 osfd, const PRIOMethods *methods)
+    PROsfd osfd, const PRIOMethods *methods)
 {
     PRFileDesc *fd;
 
@@ -146,9 +162,6 @@ PR_IMPLEMENT(PRFileDesc*) PR_AllocFileDesc(
 PR_IMPLEMENT(void) PR_FreeFileDesc(PRFileDesc *fd)
 {
     PR_ASSERT(fd);
-#ifdef XP_MAC
-	_PR_MD_FREE_FILEDESC(fd);
-#endif
     _PR_Putfd(fd);
 }
 
@@ -184,9 +197,6 @@ PR_IMPLEMENT(PRStatus) PR_SetFDInheritable(
     }
     return PR_SUCCESS;
 #else
-#ifdef XP_MAC
-#pragma unused (fd, inheritable)
-#endif
     PR_SetError(PR_NOT_IMPLEMENTED_ERROR, 0);
     return PR_FAILURE;
 #endif

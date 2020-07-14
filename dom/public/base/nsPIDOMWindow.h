@@ -45,10 +45,14 @@
 #include "nsIDOMXULCommandDispatcher.h"
 #include "nsIDOMElement.h"
 #include "nsIDOMWindowInternal.h"
-#include "nsIChromeEventHandler.h"
+#include "nsPIDOMEventTarget.h"
 #include "nsIDOMDocument.h"
-#include "nsIURI.h"
 #include "nsCOMPtr.h"
+#include "nsEvent.h"
+
+#define DOM_WINDOW_DESTROYED_TOPIC "dom-window-destroyed"
+
+class nsIPrincipal;
 
 // Popup control state enum. The values in this enum must go from most
 // permissive to least permissive so that it's safe to push state in
@@ -62,41 +66,38 @@ enum PopupControlState {
   openOverridden    // disallow window open
 };
 
-// permissible values for GetOpenAllow
-enum OpenAllowValue {
-  allowNot = 0,     // the window opening is denied
-  allowNoAbuse,     // allowed: not a popup
-  allowWhitelisted  // allowed: it's whitelisted or popup blocking is disabled
-};
-
 class nsIDocShell;
 class nsIFocusController;
 class nsIDocument;
+class nsIScriptTimeoutHandler;
+class nsPresContext;
 struct nsTimeout;
+class nsScriptObjectHolder;
+class nsXBLPrototypeHandler;
+class nsIArray;
 
 #define NS_PIDOMWINDOW_IID \
-{ 0x55f987bc, 0xca30, 0x494c, \
-  { 0xa9, 0x85, 0xf1, 0xf3, 0x4b, 0x9d, 0x47, 0xd8 } }
+{ 0x80dd53b6, 0x8c61, 0x4dd6, \
+  { 0xb4, 0x51, 0xf7, 0xd7, 0x5c, 0xfc, 0x51, 0x96 } }
 
 class nsPIDOMWindow : public nsIDOMWindowInternal
 {
 public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_PIDOMWINDOW_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_PIDOMWINDOW_IID)
 
   virtual nsPIDOMWindow* GetPrivateRoot() = 0;
-
-  virtual nsresult GetObjectProperty(const PRUnichar* aProperty,
-                                     nsISupports** aObject) = 0;
 
   // This is private because activate/deactivate events are not part
   // of the DOM spec.
   virtual nsresult Activate() = 0;
   virtual nsresult Deactivate() = 0;
 
-  nsIChromeEventHandler* GetChromeEventHandler() const
+  nsPIDOMEventTarget* GetChromeEventHandler() const
   {
     return mChromeEventHandler;
   }
+
+  virtual void SetChromeEventHandler(nsPIDOMEventTarget* aChromeEventHandler) = 0;
 
   PRBool HasMutationListeners(PRUint32 aMutationEventType) const
   {
@@ -250,18 +251,19 @@ public:
     return win->mIsHandlingResizeEvent;
   }
 
-  virtual void SetOpenerScriptURL(nsIURI* aURI) = 0;
+  // Tell this window who opened it.  This only has an effect if there is
+  // either no document currently in the window or if the document is the
+  // original document this window came with (an about:blank document either
+  // preloaded into it when it was created, or created by
+  // CreateAboutBlankContentViewer()).
+  virtual void SetOpenerScriptPrincipal(nsIPrincipal* aPrincipal) = 0;
+  // Ask this window who opened it.
+  virtual nsIPrincipal* GetOpenerScriptPrincipal() = 0;
 
   virtual PopupControlState PushPopupControlState(PopupControlState aState,
                                                   PRBool aForce) const = 0;
   virtual void PopPopupControlState(PopupControlState state) const = 0;
   virtual PopupControlState GetPopupControlState() const = 0;
-
-  // GetOpenAllow must not be called on a window that no longer has a docshell
-  // This function is deprecated.  It will assume that there is no existing
-  // window with name aName for purposes of its answer.  Expect this function
-  // to get removed soon!
-  virtual OpenAllowValue GetOpenAllow(const nsAString &aName) = 0;
 
   // Returns an object containing the window's state.  This also suspends
   // all running timeouts in the window.
@@ -270,8 +272,28 @@ public:
   // Restore the window state from aState.
   virtual nsresult RestoreWindowState(nsISupports *aState) = 0;
 
+  // Suspend timeouts in this window and in child windows.
+  virtual void SuspendTimeouts(PRUint32 aIncrease = 1,
+                               PRBool aFreezeChildren = PR_TRUE) = 0;
+
   // Resume suspended timeouts in this window and in child windows.
-  virtual nsresult ResumeTimeouts() = 0;
+  virtual nsresult ResumeTimeouts(PRBool aThawChildren = PR_TRUE) = 0;
+
+  virtual PRUint32 TimeoutSuspendCount() = 0;
+
+  // Fire any DOM notification events related to things that happened while
+  // the window was frozen.
+  virtual nsresult FireDelayedDOMEvents() = 0;
+
+  virtual PRBool IsFrozen() const = 0;
+
+  // Add a timeout to this window.
+  virtual nsresult SetTimeoutOrInterval(nsIScriptTimeoutHandler *aHandler,
+                                        PRInt32 interval,
+                                        PRBool aIsInterval, PRInt32 *aReturn) = 0;
+
+  // Clear a timeout from this window.
+  virtual nsresult ClearTimeoutOrInterval(PRInt32 aTimerID) = 0;
 
   nsPIDOMWindow *GetOuterWindow()
   {
@@ -281,6 +303,15 @@ public:
   nsPIDOMWindow *GetCurrentInnerWindow() const
   {
     return mInnerWindow;
+  }
+
+  nsPIDOMWindow *EnsureInnerWindow()
+  {
+    NS_ASSERTION(IsOuterWindow(), "EnsureInnerWindow called on inner window");
+    // GetDocument forces inner window creation if there isn't one already
+    nsCOMPtr<nsIDOMDocument> doc;
+    GetDocument(getter_AddRefs(doc));
+    return GetCurrentInnerWindow();
   }
 
   PRBool IsInnerWindow() const
@@ -295,51 +326,36 @@ public:
 
   virtual PRBool WouldReuseInnerWindow(nsIDocument *aNewDocument) = 0;
 
-protected:
-  // The nsPIDOMWindow constructor. The aOuterWindow argument should
-  // be null if and only if the created window itself is an outer
-  // window. In all other cases aOuterWindow should be the outer
-  // window for the inner window that is being created.
-  nsPIDOMWindow(nsPIDOMWindow *aOuterWindow)
-    : mFrameElement(nsnull), mRunningTimeout(nsnull), mMutationBits(0),
-      mIsDocumentLoaded(PR_FALSE), mIsHandlingResizeEvent(PR_FALSE),
-      mIsInnerWindow(aOuterWindow != nsnull), mInnerWindow(nsnull),
-      mOuterWindow(aOuterWindow)
+  /**
+   * Get the docshell in this window.
+   */
+  nsIDocShell *GetDocShell()
   {
+    if (mOuterWindow) {
+      return mOuterWindow->mDocShell;
+    }
+
+    return mDocShell;
   }
 
-  // These two variables are special in that they're set to the same
-  // value on both the outer window and the current inner window. Make
-  // sure you keep them in sync!
-  nsCOMPtr<nsIChromeEventHandler> mChromeEventHandler; // strong
-  nsCOMPtr<nsIDOMDocument> mDocument; // strong
+  /**
+   * Set or unset the docshell in the window.
+   */
+  virtual void SetDocShell(nsIDocShell *aDocShell) = 0;
 
-  // These members are only used on outer windows.
-  nsIDOMElement *mFrameElement; // weak
-  nsCOMPtr<nsIURI> mOpenerScriptURL; // strong; used to determine whether to clear scope
-
-  // These variables are only used on inner windows.
-  nsTimeout             *mRunningTimeout;
-
-  PRUint32               mMutationBits;
-
-  PRPackedBool           mIsDocumentLoaded;
-  PRPackedBool           mIsHandlingResizeEvent;
-  PRPackedBool           mIsInnerWindow;
-
-  // And these are the references between inner and outer windows.
-  nsPIDOMWindow         *mInnerWindow;
-  nsPIDOMWindow         *mOuterWindow;
-};
-
-#define NS_PIDOMWINDOW_MOZILLA_1_8_BRANCH_IID \
-{ 0xa9b7f235, 0x4c98, 0x4257, \
-  { 0xb1, 0x1a, 0xbe, 0x53, 0x39, 0x69, 0xdf, 0x2a } }
-
-class nsPIDOMWindow_MOZILLA_1_8_BRANCH : public nsPIDOMWindow
-{
-public:
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_PIDOMWINDOW_MOZILLA_1_8_BRANCH_IID)
+  /**
+   * Set a new document in the window. Calling this method will in
+   * most cases create a new inner window. If this method is called on
+   * an inner window the call will be forewarded to the outer window,
+   * if the inner window is not the current inner window an
+   * NS_ERROR_NOT_AVAILABLE error code will be returned. This may be
+   * called with a pointer to the current document, in that case the
+   * document remains unchanged, but a new inner window will be
+   * created.
+   */
+  virtual nsresult SetNewDocument(nsIDocument *aDocument,
+                                  nsISupports *aState,
+                                  PRBool aClearScope) = 0;
 
   /**
    * Set the opener window.  aOriginalOpener is true if and only if this is the
@@ -351,11 +367,7 @@ public:
   virtual void SetOpenerWindow(nsIDOMWindowInternal *aOpener,
                                PRBool aOriginalOpener) = 0;
 
-  /**
-   * Fire any DOM notification events related to things that happened while
-   * the window was frozen.
-   */
-  virtual nsresult FireDelayedDOMEvents() = 0;
+  virtual void EnsureSizeUpToDate() = 0;
 
   /**
    * Callback for notifying a window about a modal dialog being
@@ -364,13 +376,125 @@ public:
   virtual void EnterModalState() = 0;
   virtual void LeaveModalState() = 0;
 
+  void SetModalContentWindow(PRBool aIsModalContentWindow)
+  {
+    mIsModalContentWindow = aIsModalContentWindow;
+  }
+
+  PRBool IsModalContentWindow() const
+  {
+    return mIsModalContentWindow;
+  }
+
+  /**
+   * Call this to indicate that some node (this window, its document,
+   * or content in that document) has a paint event listener.
+   */
+  void SetHasPaintEventListeners()
+  {
+    mMayHavePaintEventListener = PR_TRUE;
+  }
+
+  /**
+   * Call this to check whether some node (this window, its document,
+   * or content in that document) has a paint event listener.
+   */
+  PRBool HasPaintEventListeners()
+  {
+    return mMayHavePaintEventListener;
+  }
+  
+  /**
+   * Initialize window.java and window.Packages, and start LiveConnect
+   * if we're running with a non-NPRuntime enabled Java plugin.
+   */
+  virtual void InitJavaProperties() = 0;
+
+  virtual void* GetCachedXBLPrototypeHandler(nsXBLPrototypeHandler* aKey) = 0;
+  virtual void CacheXBLPrototypeHandler(nsXBLPrototypeHandler* aKey,
+                                        nsScriptObjectHolder& aHandler) = 0;
+
 protected:
-  nsPIDOMWindow_MOZILLA_1_8_BRANCH(nsPIDOMWindow *aOuterWindow)
+  // The nsPIDOMWindow constructor. The aOuterWindow argument should
+  // be null if and only if the created window itself is an outer
+  // window. In all other cases aOuterWindow should be the outer
+  // window for the inner window that is being created.
+  nsPIDOMWindow(nsPIDOMWindow *aOuterWindow)
+    : mFrameElement(nsnull), mDocShell(nsnull), mModalStateDepth(0),
+      mRunningTimeout(nsnull), mMutationBits(0), mIsDocumentLoaded(PR_FALSE),
+      mIsHandlingResizeEvent(PR_FALSE), mIsInnerWindow(aOuterWindow != nsnull),
+      mMayHavePaintEventListener(PR_FALSE),
+      mIsModalContentWindow(PR_FALSE), mInnerWindow(nsnull),
+      mOuterWindow(aOuterWindow)
+  {
+  }
+
+  void SetChromeEventHandlerInternal(nsPIDOMEventTarget* aChromeEventHandler) {
+    mChromeEventHandler = aChromeEventHandler;
+  }
+
+  // These two variables are special in that they're set to the same
+  // value on both the outer window and the current inner window. Make
+  // sure you keep them in sync!
+  nsCOMPtr<nsPIDOMEventTarget> mChromeEventHandler; // strong
+  nsCOMPtr<nsIDOMDocument> mDocument; // strong
+
+  // These members are only used on outer windows.
+  nsCOMPtr<nsIDOMElement> mFrameElement;
+  nsIDocShell           *mDocShell;  // Weak Reference
+
+  PRUint32               mModalStateDepth;
+
+  // These variables are only used on inner windows.
+  nsTimeout             *mRunningTimeout;
+
+  PRUint32               mMutationBits;
+
+  PRPackedBool           mIsDocumentLoaded;
+  PRPackedBool           mIsHandlingResizeEvent;
+  PRPackedBool           mIsInnerWindow;
+  PRPackedBool           mMayHavePaintEventListener;
+
+  // This variable is used on both inner and outer windows (and they
+  // should match).
+  PRPackedBool           mIsModalContentWindow;
+
+  // And these are the references between inner and outer windows.
+  nsPIDOMWindow         *mInnerWindow;
+  nsPIDOMWindow         *mOuterWindow;
+};
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindow, NS_PIDOMWINDOW_IID)
+
+
+#define NS_PIDOMWINDOW_1_9_1_IID \
+{ 0x76cdc610, 0x324f, 0x4d5c, \
+  { 0x8d, 0x3b, 0x6f, 0xee, 0x1d, 0x88, 0xba, 0xfc } }
+
+class nsPIDOMWindow_1_9_1 : public nsPIDOMWindow
+{
+public:
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_PIDOMWINDOW_1_9_1_IID)
+
+  /**
+   * Set a arguments for this window. This will be set on the window
+   * right away (if there's an existing document) and it will also be
+   * installed on the window when the next document is loaded. Each
+   * language impl is responsible for converting to an array of args
+   * as appropriate for that language.
+   */
+  virtual nsresult SetArguments(nsIArray *aArguments, nsIPrincipal *aOrigin) = 0;
+
+protected:
+  nsPIDOMWindow_1_9_1(nsPIDOMWindow *aOuterWindow)
     : nsPIDOMWindow(aOuterWindow)
   {
-  }                                     
+  }
 };
-  
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindow_1_9_1, NS_PIDOMWINDOW_1_9_1_IID)
+
+
 #ifdef _IMPL_NS_LAYOUT
 PopupControlState
 PushPopupControlState(PopupControlState aState, PRBool aForce);

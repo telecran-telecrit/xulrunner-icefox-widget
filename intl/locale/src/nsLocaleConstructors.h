@@ -41,7 +41,6 @@
 
 #include "nsCollationCID.h"
 #include "nsDateTimeFormatCID.h"
-#include "nsFontPackageService.h"
 #include "nsIGenericFactory.h"
 #include "nsILocaleService.h"
 #include "nsIScriptableDateFormat.h"
@@ -70,6 +69,8 @@
 #endif
 
 #ifdef USE_MAC_LOCALE
+// We currently do not define USE_UCCOLLATIONKEY because it causes crashes.
+// See bug 128323 and bug 255192
 #ifdef USE_UCCOLLATIONKEY
 #include "nsCollationMacUC.h"
 #else
@@ -106,7 +107,6 @@ NSLOCALE_MAKE_CTOR(CreateLocaleService, nsILocaleService, NS_NewLocaleService)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsCollationFactory)
 //NS_GENERIC_FACTORY_CONSTRUCTOR(nsScriptableDateTimeFormat)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsLanguageAtomService)
-NS_GENERIC_FACTORY_CONSTRUCTOR(nsFontPackageService)
 
 
 #ifdef XP_WIN

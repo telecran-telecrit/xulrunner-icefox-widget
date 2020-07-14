@@ -37,6 +37,8 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/* XPCOM interface to provide some internal information to DOM inspector */
+
 #ifndef nsInspectorCSSUtils_h___
 #define nsInspectorCSSUtils_h___
 
@@ -46,7 +48,7 @@
 
 class nsIPresShell;
 
-class nsInspectorCSSUtils : public nsIInspectorCSSUtils {
+class nsInspectorCSSUtils : public nsIInspectorCSSUtils_MOZILLA_1_9_BRANCH {
 
 public:
 
@@ -60,7 +62,6 @@ public:
     NS_IMETHOD GetRuleNodeParent(nsRuleNode *aNode, nsRuleNode **aParent);
     NS_IMETHOD GetRuleNodeRule(nsRuleNode *aNode, nsIStyleRule **aRule);
     NS_IMETHOD IsRuleNodeRoot(nsRuleNode *aNode, PRBool *aIsRoot);
-    NS_IMETHOD AdjustRectForMargins(nsIFrame* aFrame, nsRect& aRect);
     NS_IMETHOD GetRuleNodeForContent(nsIContent* aContent,
                                      nsRuleNode** aRuleNode);
     NS_IMETHOD GetBindingURLs(nsIDOMElement *aElement, nsIArray **aResult);
@@ -68,6 +69,11 @@ public:
     static already_AddRefed<nsStyleContext>
     GetStyleContextForContent(nsIContent* aContent, nsIAtom* aPseudo,
                               nsIPresShell* aPresShell);
+
+    // nsIInspectorCSSUtils_MOZILLA_1_9_BRANCH
+    NS_IMETHOD GetRuleNodeForContent(nsIContent* aContent,
+                                     nsStyleContext** aStyleContext,
+                                     nsRuleNode** aRuleNode);
 
 private:
     static nsStyleContext* GetStyleContextForFrame(nsIFrame* aFrame);

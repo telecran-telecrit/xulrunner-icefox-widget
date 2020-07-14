@@ -36,8 +36,9 @@
  * ***** END LICENSE BLOCK ***** */
 
 #include "nsIDOMCDATASection.h"
+#include "nsIDOM3Text.h"
 #include "nsGenericDOMDataNode.h"
-#include "nsLayoutAtoms.h"
+#include "nsGkAtoms.h"
 #include "nsIDocument.h"
 #include "nsContentUtils.h"
 
@@ -46,7 +47,7 @@ class nsXMLCDATASection : public nsGenericDOMDataNode,
                           public nsIDOMCDATASection
 {
 public:
-  nsXMLCDATASection(nsNodeInfoManager *aNodeInfoManager);
+  nsXMLCDATASection(nsINodeInfo *aNodeInfo);
   virtual ~nsXMLCDATASection();
 
   // nsISupports
@@ -65,17 +66,11 @@ public:
   // Empty interface
 
   // nsIContent
-  virtual nsIAtom *Tag() const;
-  virtual PRBool IsContentOfType(PRUint32 aFlags) const;
+  virtual PRBool IsNodeOfType(PRUint32 aFlags) const;
 #ifdef DEBUG
   virtual void List(FILE* out, PRInt32 aIndent) const;
   virtual void DumpContent(FILE* out, PRInt32 aIndent,PRBool aDumpAll) const;
 #endif
-
-  virtual already_AddRefed<nsITextContent> CloneContent(PRBool aCloneText,
-                                                        nsNodeInfoManager *aNodeInfoManager);
-
-protected:
 };
 
 nsresult
@@ -86,7 +81,12 @@ NS_NewXMLCDATASection(nsIContent** aInstancePtrResult,
 
   *aInstancePtrResult = nsnull;
 
-  nsXMLCDATASection *instance = new nsXMLCDATASection(aNodeInfoManager);
+  nsCOMPtr<nsINodeInfo> ni;
+  ni = aNodeInfoManager->GetNodeInfo(nsGkAtoms::cdataTagName,
+                                     nsnull, kNameSpaceID_None);
+  NS_ENSURE_TRUE(ni, NS_ERROR_OUT_OF_MEMORY);
+
+  nsXMLCDATASection *instance = new nsXMLCDATASection(ni);
   if (!instance) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -96,8 +96,8 @@ NS_NewXMLCDATASection(nsIContent** aInstancePtrResult,
   return NS_OK;
 }
 
-nsXMLCDATASection::nsXMLCDATASection(nsNodeInfoManager *aNodeInfoManager)
-  : nsGenericDOMDataNode(aNodeInfoManager)
+nsXMLCDATASection::nsXMLCDATASection(nsINodeInfo *aNodeInfo)
+  : nsGenericDOMDataNode(aNodeInfo)
 {
 }
 
@@ -107,12 +107,10 @@ nsXMLCDATASection::~nsXMLCDATASection()
 
 
 // QueryInterface implementation for nsXMLCDATASection
-NS_INTERFACE_MAP_BEGIN(nsXMLCDATASection)
-  NS_INTERFACE_MAP_ENTRY(nsITextContent)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMNode)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMCharacterData)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMText)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMCDATASection)
+NS_INTERFACE_TABLE_HEAD(nsXMLCDATASection)
+  NS_NODE_INTERFACE_TABLE4(nsXMLCDATASection, nsIDOMNode, nsIDOMCharacterData,
+                           nsIDOMText, nsIDOMCDATASection)
+  NS_INTERFACE_MAP_ENTRY_TEAROFF(nsIDOM3Text, new nsText3Tearoff(this))
   NS_INTERFACE_MAP_ENTRY_CONTENT_CLASSINFO(CDATASection)
 NS_INTERFACE_MAP_END_INHERITING(nsGenericDOMDataNode)
 
@@ -120,16 +118,10 @@ NS_IMPL_ADDREF_INHERITED(nsXMLCDATASection, nsGenericDOMDataNode)
 NS_IMPL_RELEASE_INHERITED(nsXMLCDATASection, nsGenericDOMDataNode)
 
 
-nsIAtom *
-nsXMLCDATASection::Tag() const
-{
-  return nsLayoutAtoms::cdataTagName;
-}
-
 PRBool
-nsXMLCDATASection::IsContentOfType(PRUint32 aFlags) const
+nsXMLCDATASection::IsNodeOfType(PRUint32 aFlags) const
 {
-  return !(aFlags & ~eTEXT);
+  return !(aFlags & ~(eCONTENT | eTEXT | eDATA_NODE));
 }
 
 NS_IMETHODIMP
@@ -158,27 +150,13 @@ nsXMLCDATASection::GetNodeType(PRUint16* aNodeType)
   return NS_OK;
 }
 
-NS_IMETHODIMP
-nsXMLCDATASection::CloneNode(PRBool aDeep, nsIDOMNode** aReturn)
+nsGenericDOMDataNode*
+nsXMLCDATASection::CloneDataNode(nsINodeInfo *aNodeInfo, PRBool aCloneText) const
 {
-  nsCOMPtr<nsITextContent> textContent = CloneContent(PR_TRUE, mNodeInfoManager);
-  NS_ENSURE_TRUE(textContent, NS_ERROR_OUT_OF_MEMORY);
-
-  return CallQueryInterface(textContent, aReturn);
-}
-
-already_AddRefed<nsITextContent> 
-nsXMLCDATASection::CloneContent(PRBool aCloneText, nsNodeInfoManager *aNodeInfoManager)
-{
-  nsXMLCDATASection* it = new nsXMLCDATASection(aNodeInfoManager);
-  if (!it)
-    return nsnull;
-
-  if (aCloneText) {
+  nsXMLCDATASection *it = new nsXMLCDATASection(aNodeInfo);
+  if (it && aCloneText) {
     it->mText = mText;
   }
-
-  NS_ADDREF(it);
 
   return it;
 }
@@ -187,8 +165,6 @@ nsXMLCDATASection::CloneContent(PRBool aCloneText, nsNodeInfoManager *aNodeInfoM
 void
 nsXMLCDATASection::List(FILE* out, PRInt32 aIndent) const
 {
-  NS_PRECONDITION(IsInDoc(), "bad content");
-
   PRInt32 index;
   for (index = aIndent; --index >= 0; ) fputs("  ", out);
 
@@ -196,7 +172,7 @@ nsXMLCDATASection::List(FILE* out, PRInt32 aIndent) const
 
   nsAutoString tmp;
   ToCString(tmp, 0, mText.GetLength());
-  fputs(NS_LossyConvertUCS2toASCII(tmp).get(), out);
+  fputs(NS_LossyConvertUTF16toASCII(tmp).get(), out);
 
   fputs(">\n", out);
 }

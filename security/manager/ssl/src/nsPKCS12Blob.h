@@ -34,7 +34,7 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
-/* $Id: nsPKCS12Blob.h,v 1.13.28.2 2006/01/31 12:50:31 kaie%kuix.de Exp $ */
+/* $Id: nsPKCS12Blob.h,v 1.16 2006/04/12 15:43:32 benjamin%smedbergs.us Exp $ */
 
 #ifndef _NS_PKCS12BLOB_H_
 #define _NS_PKCS12BLOB_H_
@@ -44,7 +44,7 @@
 #include "nsIPK11TokenDB.h"
 #include "nsNSSHelper.h"
 #include "nsIPK11Token.h"
-#include "nsIArray.h"
+#include "nsIMutableArray.h"
 
 #include "nss.h"
 
@@ -90,7 +90,7 @@ private:
   nsresult newPKCS12FilePassword(SECItem *);
   nsresult inputToDecoder(SEC_PKCS12DecoderContext *, nsILocalFile *);
   void unicodeToItem(const PRUnichar *, SECItem *);
-  PRBool handleError(int myerr = 0);
+  void handleError(int myerr = 0);
 
   // RetryReason and ImportMode are used when importing a PKCS12 file.
   // There are two reasons that cause us to retry:

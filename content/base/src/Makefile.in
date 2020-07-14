@@ -50,6 +50,7 @@ REQUIRES	= xpcom \
 		  string \
 		  dom \
 		  gfx \
+		  thebes \
 		  layout \
 		  widget \
 		  view \
@@ -58,7 +59,10 @@ REQUIRES	= xpcom \
 		  js \
 		  webshell \
 		  necko \
+		  nkcache \
 		  mimetype \
+		  exthandler \
+		  chardet \
 		  caps \
 		  lwbrk \
 		  uconv \
@@ -69,17 +73,37 @@ REQUIRES	= xpcom \
 		  intl \
 		  webbrowserpersist \
 		  imglib2 \
+		  plugin \
 		  prefetch \
 		  xuldoc \
+		  uriloader \
+		  rdf \
+		  xultmpl \
+		  util \
+		  appshell \
+		  shistory \
+		  editor \
+		  windowwatcher \
 		  $(NULL)
+
+ifdef ACCESSIBILITY
+REQUIRES	+= accessibility
+endif
 
 EXPORTS		= \
 		nsAtomListUtils.h \
+		nsAttrName.h \
 		nsContentList.h \
+		nsGkAtomList.h \
+		nsGkAtoms.h \
 		nsNodeInfoManager.h \
 		nsPropertyTable.h \
+		nsScriptLoader.h \
 		nsStubDocumentObserver.h \
+		nsStubImageDecoderObserver.h \
+		nsStubMutationObserver.h \
 		nsTextFragment.h \
+		mozAutoDocUpdate.h \
 		$(NULL)
 
 CPPSRCS		= \
@@ -87,6 +111,7 @@ CPPSRCS		= \
 		nsAtomListUtils.cpp \
 		nsAttrAndChildArray.cpp \
 		nsAttrValue.cpp \
+		nsCCUncollectableMarker.cpp \
 		nsCommentNode.cpp \
 		nsContentAreaDragDrop.cpp \
 		nsContentIterator.cpp \
@@ -95,10 +120,12 @@ CPPSRCS		= \
 		nsContentSink.cpp \
 		nsContentUtils.cpp \
 		nsCopySupport.cpp \
+		nsCrossSiteListenerProxy.cpp \
 		nsDataDocumentContentPolicy.cpp \
 		nsDOMAttribute.cpp \
 		nsDOMAttributeMap.cpp \
 		nsDOMDocumentType.cpp \
+		nsDOMFile.cpp \
 		nsDOMLists.cpp \
 		nsDOMParser.cpp \
 		nsDOMSerializer.cpp \
@@ -107,38 +134,52 @@ CPPSRCS		= \
 		nsDocumentFragment.cpp \
 		nsFrameLoader.cpp \
 		nsGenConImageContent.cpp \
-		nsGeneratedIterator.cpp \
 		nsGenericDOMDataNode.cpp \
-		nsGenericDOMNodeList.cpp \
 		nsGenericElement.cpp \
+		nsGkAtoms.cpp \
 		nsHTMLContentSerializer.cpp \
 		nsImageLoadingContent.cpp \
+		nsLineBreaker.cpp \
 		nsLoadListenerProxy.cpp \
+		nsMappedAttributeElement.cpp \
 		nsMappedAttributes.cpp \
 		nsNameSpaceManager.cpp \
 		nsNoDataProtocolContentPolicy.cpp \
 		nsNodeInfo.cpp \
 		nsNodeInfoManager.cpp \
+		nsNodeIterator.cpp \
+		nsNodeUtils.cpp \
+		nsObjectLoadingContent.cpp \
 		nsParserUtils.cpp \
 		nsPlainTextSerializer.cpp \
 		nsPropertyTable.cpp \
 		nsRange.cpp \
+		nsReferencedElement.cpp \
+		nsScriptElement.cpp \
 		nsScriptEventManager.cpp \
 		nsScriptLoader.cpp \
 		nsStubDocumentObserver.cpp \
+		nsStubImageDecoderObserver.cpp \
+		nsStubMutationObserver.cpp \
+		nsStyledElement.cpp \
 		nsStyleLinkElement.cpp \
 		nsSyncLoadService.cpp \
 		nsTextFragment.cpp \
 		nsTextNode.cpp \
+		nsTraversal.cpp \
 		nsTreeWalker.cpp \
 		nsXMLContentSerializer.cpp \
 		nsXMLHttpRequest.cpp \
 		nsXMLNameSpaceMap.cpp \
 		$(NULL)
 
+GQI_SRCS = contentbase.gqi
+
 # we don't want the shared lib, but we want to force the creation of a
 # static lib.
 FORCE_STATIC_LIB = 1
+
+EXTRA_COMPONENTS = $(srcdir)/nsBadCertHandler.js
 
 include $(topsrcdir)/config/rules.mk
 
@@ -153,6 +194,8 @@ INCLUDES	+= \
 		-I$(srcdir)/../../../layout/generic \
 		-I$(srcdir)/../../../layout/style \
 		-I$(srcdir)/../../../dom/src/base \
+		-I$(srcdir)/../../xml/document/src \
+		-I$(topsrcdir)/xpcom/io \
 		$(NULL)
 
 DEFINES += -D_IMPL_NS_LAYOUT

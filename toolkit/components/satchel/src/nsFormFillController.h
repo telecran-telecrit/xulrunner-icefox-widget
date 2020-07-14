@@ -50,25 +50,25 @@
 #include "nsIDOMCompositionListener.h"
 #include "nsIDOMFormListener.h"
 #include "nsIDOMMouseListener.h"
-#include "nsIDOMLoadListener.h"
 #include "nsIDOMContextMenuListener.h"
 #include "nsCOMPtr.h"
 #include "nsISupportsArray.h"
+#include "nsDataHashtable.h"
 #include "nsIDocShell.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMHTMLInputElement.h"
+#include "nsILoginManager.h"
 
 class nsFormHistory;
 
 class nsFormFillController : public nsIFormFillController,
-                             public nsIAutoCompleteInput_MOZILLA_1_8_BRANCH,
+                             public nsIAutoCompleteInput,
                              public nsIAutoCompleteSearch,
                              public nsIDOMFocusListener,
                              public nsIDOMKeyListener,
                              public nsIDOMCompositionListener,
                              public nsIDOMFormListener,
                              public nsIDOMMouseListener,
-                             public nsIDOMLoadListener,
                              public nsIDOMContextMenuListener
 {
 public:
@@ -76,7 +76,6 @@ public:
   NS_DECL_NSIFORMFILLCONTROLLER
   NS_DECL_NSIAUTOCOMPLETESEARCH
   NS_DECL_NSIAUTOCOMPLETEINPUT
-  NS_DECL_NSIAUTOCOMPLETEINPUT_MOZILLA_1_8_BRANCH
   NS_DECL_NSIDOMEVENTLISTENER
 
   // nsIDOMFocusListener
@@ -92,8 +91,6 @@ public:
   NS_IMETHOD HandleStartComposition(nsIDOMEvent* aCompositionEvent);
   NS_IMETHOD HandleEndComposition(nsIDOMEvent* aCompositionEvent);
   NS_IMETHOD HandleQueryComposition(nsIDOMEvent* aCompositionEvent);
-  NS_IMETHOD HandleQueryReconversion(nsIDOMEvent* aCompositionEvent);
-  NS_IMETHOD HandleQueryCaretRect(nsIDOMEvent* aCompositionEvent);
 
   // nsIDOMFormListener
   NS_IMETHOD Submit(nsIDOMEvent* aEvent);
@@ -110,13 +107,6 @@ public:
   NS_IMETHOD MouseOver(nsIDOMEvent* aMouseEvent);
   NS_IMETHOD MouseOut(nsIDOMEvent* aMouseEvent);
 
-  // nsIDOMLoadListener
-  NS_IMETHOD Load(nsIDOMEvent *aLoadEvent);
-  NS_IMETHOD BeforeUnload(nsIDOMEvent *aLoadEvent);
-  NS_IMETHOD Unload(nsIDOMEvent *aLoadEvent);
-  NS_IMETHOD Abort(nsIDOMEvent *aLoadEvent);
-  NS_IMETHOD Error(nsIDOMEvent *aLoadEvent);
-
   // nsIDOMContextMenuListener
   NS_IMETHOD ContextMenu(nsIDOMEvent* aContextMenuEvent);
 
@@ -127,6 +117,9 @@ protected:
   void AddWindowListeners(nsIDOMWindow *aWindow);
   void RemoveWindowListeners(nsIDOMWindow *aWindow);
   
+  void AddKeyListener(nsIDOMHTMLInputElement *aInput);
+  void RemoveKeyListener();
+  
   void StartControllingInput(nsIDOMHTMLInputElement *aInput);
   void StopControllingInput();
   
@@ -136,15 +129,22 @@ protected:
   inline nsIDOMWindow *GetWindowForDocShell(nsIDocShell *aDocShell);
   inline PRInt32 GetIndexOfDocShell(nsIDocShell *aDocShell);
 
+  static PLDHashOperator RemoveForDOMDocumentEnumerator(nsISupports* aKey,
+                                                        PRInt32& aEntry,
+                                                        void* aUserData);
+  PRBool IsEventTrusted(nsIDOMEvent *aEvent);
   // members //////////////////////////////////////////
 
   nsCOMPtr<nsIAutoCompleteController> mController;
+  nsCOMPtr<nsILoginManager> mLoginManager;
   nsCOMPtr<nsIDOMHTMLInputElement> mFocusedInput;
   nsCOMPtr<nsIAutoCompletePopup> mFocusedPopup;
 
   nsCOMPtr<nsISupportsArray> mDocShells;
   nsCOMPtr<nsISupportsArray> mPopups;
-  
+
+  nsDataHashtable<nsISupportsHashKey,PRInt32> mPwmgrInputs;
+
   PRUint32 mTimeout;
   PRUint32 mMinResultsForPopup;
   PRUint32 mMaxRows;
@@ -153,7 +153,6 @@ protected:
   PRPackedBool mCompleteSelectedIndex;
   PRPackedBool mForceComplete;
   PRPackedBool mSuppressOnInput;
-  PRPackedBool mIgnoreClick;
 };
 
 #endif // __nsFormFillController__

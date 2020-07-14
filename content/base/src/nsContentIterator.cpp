@@ -36,18 +36,12 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-/*
- * nsContentIterator.cpp: Implementation of the nsContentIterator object.
- * This ite
- */
-
 #include "nsISupports.h"
 #include "nsIDOMNodeList.h"
 #include "nsIContentIterator.h"
 #include "nsRange.h"
 #include "nsIContent.h"
 #include "nsIDOMText.h"
-#include "nsISupportsArray.h"
 #include "nsCOMPtr.h"
 #include "nsPresContext.h"
 #include "nsIComponentManager.h"
@@ -55,139 +49,72 @@
 #include "nsLayoutCID.h"
 #include "nsVoidArray.h"
 #include "nsContentUtils.h"
+#include "nsINode.h"
+#include "nsCycleCollectionParticipant.h"
 
 static NS_DEFINE_IID(kISupportsIID, NS_ISUPPORTS_IID);
 
 // couple of utility static functs
 
 ///////////////////////////////////////////////////////////////////////////
-// GetNumChildren: returns the number of things inside aNode. 
-//
-static PRUint32
-GetNumChildren(nsIDOMNode *aNode) 
-{
-  if (!aNode)
-    return 0;
-
-  PRUint32 numChildren = 0;
-  PRBool hasChildNodes;
-  aNode->HasChildNodes(&hasChildNodes);
-  if (hasChildNodes)
-  {
-    nsCOMPtr<nsIContent> content(do_QueryInterface(aNode));
-
-    if (content)
-      return content->GetChildCount();
-
-    nsCOMPtr<nsIDOMNodeList>nodeList;
-    aNode->GetChildNodes(getter_AddRefs(nodeList));
-    if (nodeList) 
-      nodeList->GetLength(&numChildren);
-  }
-
-  return numChildren;
-}
-
-///////////////////////////////////////////////////////////////////////////
-// GetChildAt: returns the node at this position index in the parent
-//
-static nsCOMPtr<nsIDOMNode> 
-GetChildAt(nsIDOMNode *aParent, PRInt32 aOffset)
-{
-  nsCOMPtr<nsIDOMNode> resultNode;
-
-  if (!aParent) 
-    return resultNode;
-
-  nsCOMPtr<nsIContent> content(do_QueryInterface(aParent));
-
-  if (content) {
-    resultNode = do_QueryInterface(content->GetChildAt(aOffset));
-  } else if (aParent) {
-    PRBool hasChildNodes;
-    aParent->HasChildNodes(&hasChildNodes);
-    if (hasChildNodes)
-    {
-      nsCOMPtr<nsIDOMNodeList>nodeList;
-      aParent->GetChildNodes(getter_AddRefs(nodeList));
-      if (nodeList) 
-        nodeList->Item(aOffset, getter_AddRefs(resultNode));
-    }
-  }
-  
-  return resultNode;
-}
-  
-///////////////////////////////////////////////////////////////////////////
-// ContentHasChildren: returns true if the content has children
+// ContentHasChildren: returns true if the node has children
 //
 static inline PRBool
-ContentHasChildren(nsIContent *aContent)
+NodeHasChildren(nsINode *aNode)
 {
-  return aContent->GetChildCount() > 0;
+  return aNode->GetChildCount() > 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////
-// ContentToParentOffset: returns the content node's parent and offset.
+// NodeToParentOffset: returns the node's parent and offset.
 //
 
-static void
-ContentToParentOffset(nsIContent *aContent, nsIDOMNode **aParent,
-                      PRInt32 *aOffset)
+static nsINode*
+NodeToParentOffset(nsINode *aNode, PRInt32 *aOffset)
 {
-  *aParent = nsnull;
   *aOffset  = 0;
 
-  nsIContent* parent = aContent->GetParent();
+  nsINode* parent = aNode->GetNodeParent();
 
-  if (!parent)
-    return;
-
-  *aOffset = parent->IndexOf(aContent);
-
-  CallQueryInterface(parent, aParent);
+  if (parent) {
+    *aOffset = parent->IndexOf(aNode);
+  }
+  
+  return parent;
 }
 
 ///////////////////////////////////////////////////////////////////////////
-// ContentIsInTraversalRange: returns true if content is visited during
+// NodeIsInTraversalRange: returns true if content is visited during
 // the traversal of the range in the specified mode.
 //
 static PRBool
-ContentIsInTraversalRange(nsIContent *aContent,   PRBool aIsPreMode,
-                          nsIDOMNode *aStartNode, PRInt32 aStartOffset,
-                          nsIDOMNode *aEndNode,   PRInt32 aEndOffset)
+NodeIsInTraversalRange(nsINode *aNode, PRBool aIsPreMode,
+                       nsINode *aStartNode, PRInt32 aStartOffset,
+                       nsINode *aEndNode, PRInt32 aEndOffset)
 {
-  if (!aStartNode || !aEndNode || !aContent)
+  if (!aStartNode || !aEndNode || !aNode)
     return PR_FALSE;
 
-  nsCOMPtr<nsIDOMCharacterData> cData(do_QueryInterface(aContent));
-
-  if (cData)
-  {
-    // If a chardata node contains an end point of the traversal range,
-    // it is always in the traversal range.
-
-    nsCOMPtr<nsIContent> startContent(do_QueryInterface(aStartNode));
-    nsCOMPtr<nsIContent> endContent(do_QueryInterface(aEndNode));
-
-    if (aContent == startContent || aContent == endContent)
-      return PR_TRUE;
+  // If a chardata node contains an end point of the traversal range,
+  // it is always in the traversal range.
+  if (aNode->IsNodeOfType(nsINode::eDATA_NODE) &&
+      (aNode == aStartNode || aNode == aEndNode)) {
+    return PR_TRUE;
   }
 
-  nsCOMPtr<nsIDOMNode> parentNode;
-  PRInt32 indx = 0;
-
-  ContentToParentOffset(aContent, getter_AddRefs(parentNode), &indx);
-
-  if (!parentNode)
+  nsINode* parent = aNode->GetNodeParent();
+  if (!parent)
     return PR_FALSE;
+
+  PRInt32 indx = parent->IndexOf(aNode);
 
   if (!aIsPreMode)
     ++indx;
 
-  return (nsRange::ComparePoints(aStartNode, aStartOffset,
-                                 parentNode, indx) <= 0) &&
-         (nsRange::ComparePoints(aEndNode, aEndOffset, parentNode, indx) >= 0);
+  return (nsContentUtils::ComparePoints(aStartNode, aStartOffset,
+                                        parent, indx) <= 0) &&
+         (nsContentUtils::ComparePoints(aEndNode, aEndOffset,
+                                        parent, indx) >= 0);
 }
 
 
@@ -198,14 +125,15 @@ ContentIsInTraversalRange(nsIContent *aContent,   PRBool aIsPreMode,
 class nsContentIterator : public nsIContentIterator //, public nsIEnumerator
 {
 public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_CLASS(nsContentIterator)
 
-  nsContentIterator();
+  explicit nsContentIterator(PRBool aPre);
   virtual ~nsContentIterator();
 
   // nsIContentIterator interface methods ------------------------------
 
-  virtual nsresult Init(nsIContent* aRoot);
+  virtual nsresult Init(nsINode* aRoot);
 
   virtual nsresult Init(nsIDOMRange* aRange);
 
@@ -217,11 +145,11 @@ public:
 
   virtual void Prev();
 
-  virtual nsIContent *GetCurrentNode();
+  virtual nsINode *GetCurrentNode();
 
   virtual PRBool IsDone();
 
-  virtual nsresult PositionAt(nsIContent* aCurNode);
+  virtual nsresult PositionAt(nsINode* aCurNode);
 
   // nsIEnumertor interface methods ------------------------------
   
@@ -229,24 +157,29 @@ public:
 
 protected:
 
-  nsIContent *GetDeepFirstChild(nsIContent *aRoot, nsVoidArray *aIndexes);
-  nsIContent *GetDeepLastChild(nsIContent *aRoot, nsVoidArray *aIndexes);
+  nsINode* GetDeepFirstChild(nsINode *aRoot, nsVoidArray *aIndexes);
+  nsINode* GetDeepLastChild(nsINode *aRoot, nsVoidArray *aIndexes);
 
-  nsIContent *GetNextSibling(nsIContent *aNode, nsVoidArray *aIndexes);
-  nsIContent *GetPrevSibling(nsIContent *aNode, nsVoidArray *aIndexes);
+  // Get the next sibling of aNode.  Note that this will generally return null
+  // if aNode happens not to be a content node.  That's OK.
+  nsINode* GetNextSibling(nsINode *aNode, nsVoidArray *aIndexes);
 
-  nsIContent *NextNode(nsIContent *aNode, nsVoidArray *aIndexes);
-  nsIContent *PrevNode(nsIContent *aNode, nsVoidArray *aIndexes);
+  // Get the prev sibling of aNode.  Note that this will generally return null
+  // if aNode happens not to be a content node.  That's OK.
+  nsINode* GetPrevSibling(nsINode *aNode, nsVoidArray *aIndexes);
+
+  nsINode* NextNode(nsINode *aNode, nsVoidArray *aIndexes);
+  nsINode* PrevNode(nsINode *aNode, nsVoidArray *aIndexes);
 
   // WARNING: This function is expensive
   nsresult RebuildIndexStack();
 
   void MakeEmpty();
   
-  nsCOMPtr<nsIContent> mCurNode;
-  nsCOMPtr<nsIContent> mFirst;
-  nsCOMPtr<nsIContent> mLast;
-  nsCOMPtr<nsIContent> mCommonParent;
+  nsCOMPtr<nsINode> mCurNode;
+  nsCOMPtr<nsINode> mFirst;
+  nsCOMPtr<nsINode> mLast;
+  nsCOMPtr<nsINode> mCommonParent;
 
   // used by nsContentIterator to cache indices
   nsAutoVoidArray mIndexes;
@@ -261,11 +194,11 @@ protected:
   // instead of the mre robust array of indicies (which is what the basic content iterator uses)?
   // The reason is that subtree iterators do not do much transitioning between parents and children.
   // They tend to stay at the same level.  In fact, you can prove (though I won't attempt it here)
-  // that they change levels at most n+m times, where n is the height of the parent heirarchy from the 
-  // range start to the common ancestor, and m is the the height of the parent heirarchy from the 
+  // that they change levels at most n+m times, where n is the height of the parent hierarchy from the 
+  // range start to the common ancestor, and m is the the height of the parent hierarchy from the 
   // range end to the common ancestor.  If we used the index array, we would pay the price up front
   // for n, and then pay the cost for m on the fly later on.  With the simple cache, we only "pay
-  // as we go".  Either way, we call IndexOf() once for each change of level in the heirarchy.
+  // as we go".  Either way, we call IndexOf() once for each change of level in the hierarchy.
   // Since a trivial index is much simpler, we use it for the subtree iterator.
   
   PRBool mIsDone;
@@ -280,25 +213,13 @@ private:
 };
 
 
-/*
- *  A simple iterator class for traversing the content in "open tag" order
- */
-
-class nsPreContentIterator : public nsContentIterator
-{
-public:
-  nsPreContentIterator() { mPre = PR_TRUE; }
-};
-
-
-
 /******************************************************
  * repository cruft
  ******************************************************/
 
 nsresult NS_NewContentIterator(nsIContentIterator** aInstancePtrResult)
 {
-  nsContentIterator * iter = new nsContentIterator();
+  nsContentIterator * iter = new nsContentIterator(PR_FALSE);
   if (!iter) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -311,7 +232,7 @@ nsresult NS_NewContentIterator(nsIContentIterator** aInstancePtrResult)
 
 nsresult NS_NewPreContentIterator(nsIContentIterator** aInstancePtrResult)
 {
-  nsContentIterator * iter = new nsPreContentIterator();
+  nsContentIterator * iter = new nsContentIterator(PR_TRUE);
   if (!iter) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
@@ -326,16 +247,28 @@ nsresult NS_NewPreContentIterator(nsIContentIterator** aInstancePtrResult)
  * XPCOM cruft
  ******************************************************/
  
-NS_IMPL_ISUPPORTS1(nsContentIterator, nsIContentIterator)
+NS_IMPL_CYCLE_COLLECTING_ADDREF(nsContentIterator)
+NS_IMPL_CYCLE_COLLECTING_RELEASE(nsContentIterator)
 
+NS_INTERFACE_MAP_BEGIN(nsContentIterator)
+  NS_INTERFACE_MAP_ENTRY(nsIContentIterator)
+  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIContentIterator)
+  NS_INTERFACE_MAP_ENTRIES_CYCLE_COLLECTION(nsContentIterator)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_CYCLE_COLLECTION_4(nsContentIterator,
+                           mCurNode,
+                           mFirst,
+                           mLast,
+                           mCommonParent)
 
 /******************************************************
  * constructor/destructor
  ******************************************************/
 
-nsContentIterator::nsContentIterator() :
+nsContentIterator::nsContentIterator(PRBool aPre) :
   // don't need to explicitly initialize |nsCOMPtr|s, they will automatically be NULL
-  mCachedIndex(0), mIsDone(PR_FALSE), mPre(PR_FALSE)
+  mCachedIndex(0), mIsDone(PR_FALSE), mPre(aPre)
 {
 }
 
@@ -351,10 +284,11 @@ nsContentIterator::~nsContentIterator()
 
 
 nsresult
-nsContentIterator::Init(nsIContent* aRoot)
+nsContentIterator::Init(nsINode* aRoot)
 {
   if (!aRoot) 
     return NS_ERROR_NULL_POINTER; 
+
   mIsDone = PR_FALSE;
   mIndexes.Clear();
   
@@ -379,49 +313,29 @@ nsContentIterator::Init(nsIContent* aRoot)
 nsresult
 nsContentIterator::Init(nsIDOMRange* aRange)
 {
-  if (!aRange) 
-    return NS_ERROR_NULL_POINTER; 
+  nsCOMPtr<nsIRange> range = do_QueryInterface(aRange);
+  NS_ENSURE_TRUE(range, NS_ERROR_NULL_POINTER);
 
-  nsCOMPtr<nsIDOMNode> dN;
-
-  nsCOMPtr<nsIContent> startCon;
-  nsCOMPtr<nsIDOMNode> startDOM;
-  nsCOMPtr<nsIContent> endCon;
-  nsCOMPtr<nsIDOMNode> endDOM;
-  PRInt32 startIndx;
-  PRInt32 endIndx;
-  
   mIsDone = PR_FALSE;
 
   // get common content parent
-  if (NS_FAILED(aRange->GetCommonAncestorContainer(getter_AddRefs(dN))) || !dN)
-    return NS_ERROR_FAILURE;
-  mCommonParent = do_QueryInterface(dN);
+  mCommonParent = range->GetCommonAncestor();
+  NS_ENSURE_TRUE(mCommonParent, NS_ERROR_FAILURE);
 
-  // get the start node and offset, convert to nsIContent
-  aRange->GetStartContainer(getter_AddRefs(startDOM));
-  if (!startDOM) 
-    return NS_ERROR_ILLEGAL_VALUE;
-  startCon = do_QueryInterface(startDOM);
-  if (!startCon) 
-    return NS_ERROR_FAILURE;
-  
-  aRange->GetStartOffset(&startIndx);
-  
-  // get the end node and offset, convert to nsIContent
-  aRange->GetEndContainer(getter_AddRefs(endDOM));
-  if (!endDOM) 
-    return NS_ERROR_ILLEGAL_VALUE;
-  endCon = do_QueryInterface(endDOM);
-  if (!endCon) 
-    return NS_ERROR_FAILURE;
+  // get the start node and offset
+  PRInt32 startIndx = range->StartOffset();
+  nsINode* startNode = range->GetStartParent();
+  NS_ENSURE_TRUE(startNode, NS_ERROR_FAILURE);
 
-  aRange->GetEndOffset(&endIndx);
-  
-  nsCOMPtr<nsIDOMCharacterData> cData(do_QueryInterface(startCon));
+  // get the end node and offset
+  PRInt32 endIndx = range->EndOffset();
+  nsINode* endNode = range->GetEndParent();
+  NS_ENSURE_TRUE(endNode, NS_ERROR_FAILURE);
+
+  PRBool startIsData = startNode->IsNodeOfType(nsINode::eDATA_NODE);
 
   // short circuit when start node == end node
-  if (startDOM == endDOM)
+  if (startNode == endNode)
   {
     // Check to see if we have a collapsed range, if so,
     // there is nothing to iterate over.
@@ -430,19 +344,21 @@ nsContentIterator::Init(nsIDOMRange* aRange)
     //      since we always want to be able to iterate text nodes at
     //      the end points of a range.
 
-    if (!cData && startIndx == endIndx)
+    if (!startIsData && startIndx == endIndx)
     {
       MakeEmpty();
       return NS_OK;
     }
 
-    if (cData)
+    if (startIsData)
     {
       // It's a textnode.
+      NS_ASSERTION(startNode->IsNodeOfType(nsINode::eCONTENT),
+                   "Data node that's not content?");
 
-      mFirst   = startCon;
-      mLast    = startCon;
-      mCurNode = startCon;
+      mFirst   = static_cast<nsIContent*>(startNode);
+      mLast    = mFirst;
+      mCurNode = mFirst;
 
       RebuildIndexStack();
       return NS_OK;
@@ -453,33 +369,49 @@ nsContentIterator::Init(nsIDOMRange* aRange)
 
   nsIContent *cChild = nsnull;
 
-  if (!cData && ContentHasChildren(startCon))
-    cChild = startCon->GetChildAt(startIndx);
+  if (!startIsData && NodeHasChildren(startNode))
+    cChild = startNode->GetChildAt(startIndx);
 
   if (!cChild) // no children, must be a text node
   {
+    // XXXbz no children might also just mean no children.  So I'm not
+    // sure what that comment above is talking about.
     if (mPre)
     {
       // XXX: In the future, if start offset is after the last
       //      character in the cdata node, should we set mFirst to
       //      the next sibling?
 
-      if (!cData)
+      if (!startIsData)
       {
-        mFirst = GetNextSibling(startCon, nsnull);
+        mFirst = GetNextSibling(startNode, nsnull);
 
         // Does mFirst node really intersect the range?
         // The range could be 'degenerate', ie not collapsed 
         // but still contain no content.
   
-        if (mFirst && !ContentIsInTraversalRange(mFirst, mPre, startDOM, startIndx, endDOM, endIndx))
+        if (mFirst &&
+            !NodeIsInTraversalRange(mFirst, mPre, startNode, startIndx,
+                                    endNode, endIndx)) {
           mFirst = nsnull;
+        }
       }
-      else
-        mFirst = startCon;
+      else {
+        NS_ASSERTION(startNode->IsNodeOfType(nsINode::eCONTENT),
+                   "Data node that's not content?");
+
+        mFirst = static_cast<nsIContent*>(startNode);
+      }
     }
-    else // post-order
-      mFirst = startCon;
+    else {
+      // post-order
+      if (startNode->IsNodeOfType(nsINode::eCONTENT)) {
+        mFirst = static_cast<nsIContent*>(startNode);
+      } else {
+        // What else can we do?
+        mFirst = nsnull;
+      }
+    }
   }
   else
   {
@@ -493,7 +425,9 @@ nsContentIterator::Init(nsIDOMRange* aRange)
       // The range could be 'degenerate', ie not collapsed 
       // but still contain no content.
   
-      if (mFirst && !ContentIsInTraversalRange(mFirst, mPre, startDOM, startIndx, endDOM, endIndx))
+      if (mFirst &&
+          !NodeIsInTraversalRange(mFirst, mPre, startNode, startIndx,
+                                  endNode, endIndx))
         mFirst = nsnull;
     }
   }
@@ -501,34 +435,45 @@ nsContentIterator::Init(nsIDOMRange* aRange)
 
   // Find last node in range.
 
-  cData = do_QueryInterface(endCon);
+  PRBool endIsData = endNode->IsNodeOfType(nsINode::eDATA_NODE);
 
-  if (cData || !ContentHasChildren(endCon) || endIndx == 0)
+  if (endIsData || !NodeHasChildren(endNode) || endIndx == 0)
   {
-    if (mPre)
-      mLast = endCon;
+    if (mPre) {
+      if (endNode->IsNodeOfType(nsINode::eCONTENT)) {
+        mLast = static_cast<nsIContent*>(endNode);
+      } else {
+        // Not much else to do here...
+        mLast = nsnull;
+      }
+    }
     else // post-order
     {
       // XXX: In the future, if end offset is before the first
       //      character in the cdata node, should we set mLast to
       //      the prev sibling?
 
-      if (!cData)
+      if (!endIsData)
       {
-        mLast = GetPrevSibling(endCon, nsnull);
+        mLast = GetPrevSibling(endNode, nsnull);
 
-        if (!ContentIsInTraversalRange(mLast, mPre, startDOM, startIndx, endDOM, endIndx))
+        if (!NodeIsInTraversalRange(mLast, mPre, startNode, startIndx,
+                                    endNode, endIndx))
           mLast = nsnull;
       }
-      else
-        mLast = endCon;
+      else {
+        NS_ASSERTION(endNode->IsNodeOfType(nsINode::eCONTENT),
+                     "Data node that's not content?");
+
+        mLast = static_cast<nsIContent*>(endNode);
+      }
     }
   }
   else
   {
     PRInt32 indx = endIndx;
 
-    cChild = endCon->GetChildAt(--indx);
+    cChild = endNode->GetChildAt(--indx);
 
     if (!cChild)  // No child at offset!
     {
@@ -540,11 +485,14 @@ nsContentIterator::Init(nsIDOMRange* aRange)
     {
       mLast  = GetDeepLastChild(cChild, nsnull);
 
-      if (!ContentIsInTraversalRange(mLast, mPre, startDOM, startIndx, endDOM, endIndx))
+      if (!NodeIsInTraversalRange(mLast, mPre, startNode, startIndx,
+                                  endNode, endIndx)) {
         mLast = nsnull;
+      }
     }
-    else // post-order
+    else { // post-order 
       mLast = cChild;
+    }
   }
 
   // If either first or last is null, they both
@@ -576,9 +524,9 @@ nsresult nsContentIterator::RebuildIndexStack()
 {
   // Make sure we start at the right indexes on the stack!  Build array up
   // to common parent of start and end.  Perhaps it's too many entries, but
-  // thats far better than too few.
-  nsIContent* parent;
-  nsIContent* current;
+  // that's far better than too few.
+  nsINode* parent;
+  nsINode* current;
 
   mIndexes.Clear();
   current = mCurNode;
@@ -588,7 +536,7 @@ nsresult nsContentIterator::RebuildIndexStack()
 
   while (current != mCommonParent)
   {
-    parent = current->GetParent();
+    parent = current->GetNodeParent();
     
     if (!parent)
       return NS_ERROR_FAILURE;
@@ -611,69 +559,69 @@ nsContentIterator::MakeEmpty()
   mIndexes.Clear();
 }
 
-nsIContent *
-nsContentIterator::GetDeepFirstChild(nsIContent *aRoot, nsVoidArray *aIndexes)
+nsINode*
+nsContentIterator::GetDeepFirstChild(nsINode *aRoot, nsVoidArray *aIndexes)
 {
   if (!aRoot) {
     return nsnull;
   }
 
-  nsIContent *cN = aRoot;
-  nsIContent *cChild = cN->GetChildAt(0);
+  nsINode *n = aRoot;
+  nsINode *nChild = n->GetChildAt(0);
 
-  while (cChild)
+  while (nChild)
   {
     if (aIndexes)
     {
       // Add this node to the stack of indexes
       aIndexes->AppendElement(NS_INT32_TO_PTR(0));
     }
-    cN = cChild;
-    cChild = cN->GetChildAt(0);
+    n = nChild;
+    nChild = n->GetChildAt(0);
   }
 
-  return cN;
+  return n;
 }
 
-nsIContent *
-nsContentIterator::GetDeepLastChild(nsIContent *aRoot, nsVoidArray *aIndexes)
+nsINode*
+nsContentIterator::GetDeepLastChild(nsINode *aRoot, nsVoidArray *aIndexes)
 {
   if (!aRoot) {
     return nsnull;
   }
 
-  nsIContent *deepLastChild = aRoot;
+  nsINode *deepLastChild = aRoot;
 
-  nsIContent *cN = aRoot;
-  PRInt32 numChildren = cN->GetChildCount();
+  nsINode *n = aRoot;
+  PRInt32 numChildren = n->GetChildCount();
 
   while (numChildren)
   {
-    nsIContent *cChild = cN->GetChildAt(--numChildren);
+    nsINode *nChild = n->GetChildAt(--numChildren);
 
     if (aIndexes)
     {
       // Add this node to the stack of indexes
       aIndexes->AppendElement(NS_INT32_TO_PTR(numChildren));
     }
-    numChildren = cChild->GetChildCount();
-    cN = cChild;
+    numChildren = nChild->GetChildCount();
+    n = nChild;
 
-    deepLastChild = cN;
+    deepLastChild = n;
   }
 
   return deepLastChild;
 }
 
 // Get the next sibling, or parents next sibling, or grandpa's next sibling...
-nsIContent *
-nsContentIterator::GetNextSibling(nsIContent *aNode, 
+nsINode *
+nsContentIterator::GetNextSibling(nsINode *aNode, 
                                   nsVoidArray *aIndexes)
 {
   if (!aNode) 
     return nsnull;
 
-  nsIContent *parent = aNode->GetParent();
+  nsINode *parent = aNode->GetNodeParent();
   if (!parent)
     return nsnull;
 
@@ -691,7 +639,7 @@ nsContentIterator::GetNextSibling(nsIContent *aNode,
   // reverify that the index of the current node hasn't changed.
   // not super cheap, but a lot cheaper than IndexOf(), and still O(1).
   // ignore result this time - the index may now be out of range.
-  nsIContent *sib = parent->GetChildAt(indx);
+  nsINode *sib = parent->GetChildAt(indx);
   if (sib != aNode)
   {
     // someone changed our index - find the new index the painful way
@@ -730,14 +678,14 @@ nsContentIterator::GetNextSibling(nsIContent *aNode,
 }
 
 // Get the prev sibling, or parents prev sibling, or grandpa's prev sibling...
-nsIContent *
-nsContentIterator::GetPrevSibling(nsIContent *aNode, 
+nsINode*
+nsContentIterator::GetPrevSibling(nsINode *aNode, 
                                   nsVoidArray *aIndexes)
 {
   if (!aNode)
     return nsnull;
 
-  nsIContent *parent = aNode->GetParent();
+  nsINode *parent = aNode->GetNodeParent();
   if (!parent)
     return nsnull;
 
@@ -754,7 +702,7 @@ nsContentIterator::GetPrevSibling(nsIContent *aNode,
 
   // reverify that the index of the current node hasn't changed
   // ignore result this time - the index may now be out of range.
-  nsIContent *sib = parent->GetChildAt(indx);
+  nsINode *sib = parent->GetChildAt(indx);
   if (sib != aNode)
   {
     // someone changed our index - find the new index the painful way
@@ -784,18 +732,18 @@ nsContentIterator::GetPrevSibling(nsIContent *aNode,
   return sib;
 }
 
-nsIContent *
-nsContentIterator::NextNode(nsIContent *aNode, nsVoidArray *aIndexes)
+nsINode*
+nsContentIterator::NextNode(nsINode *aNode, nsVoidArray *aIndexes)
 {
-  nsIContent *cN = aNode;
-  nsIContent *nextNode = nsnull;
+  nsINode *n = aNode;
+  nsINode *nextNode = nsnull;
 
   if (mPre)  // if we are a Pre-order iterator, use pre-order
   {
     // if it has children then next node is first child
-    if (ContentHasChildren(cN))
+    if (NodeHasChildren(n))
     {
-      nsIContent *cFirstChild = cN->GetChildAt(0);
+      nsINode *nFirstChild = n->GetChildAt(0);
 
       // update cache
       if (aIndexes)
@@ -805,16 +753,16 @@ nsContentIterator::NextNode(nsIContent *aNode, nsVoidArray *aIndexes)
       }
       else mCachedIndex = 0;
       
-      return cFirstChild;
+      return nFirstChild;
     }
 
     // else next sibling is next
-    nextNode = GetNextSibling(cN, aIndexes);
+    nextNode = GetNextSibling(n, aIndexes);
   }
   else  // post-order
   {
-    nsIContent *parent = cN->GetParent();
-    nsIContent *cSibling = nsnull;
+    nsINode *parent = n->GetNodeParent();
+    nsINode *nSibling = nsnull;
     PRInt32 indx;
 
     // get the cached index
@@ -830,16 +778,16 @@ nsContentIterator::NextNode(nsIContent *aNode, nsVoidArray *aIndexes)
     // not super cheap, but a lot cheaper than IndexOf(), and still O(1).
     // ignore result this time - the index may now be out of range.
     if (indx >= 0)
-      cSibling = parent->GetChildAt(indx);
-    if (cSibling != cN)
+      nSibling = parent->GetChildAt(indx);
+    if (nSibling != n)
     {
       // someone changed our index - find the new index the painful way
-      indx = parent->IndexOf(cN);
+      indx = parent->IndexOf(n);
     }
 
     // indx is now canonically correct
-    cSibling = parent->GetChildAt(++indx);
-    if (cSibling)
+    nSibling = parent->GetChildAt(++indx);
+    if (nSibling)
     {
       // update cache
       if (aIndexes)
@@ -850,7 +798,7 @@ nsContentIterator::NextNode(nsIContent *aNode, nsVoidArray *aIndexes)
       else mCachedIndex = indx;
       
       // next node is siblings "deep left" child
-      return GetDeepFirstChild(cSibling, aIndexes); 
+      return GetDeepFirstChild(nSibling, aIndexes); 
     }
   
     // else it's the parent
@@ -870,16 +818,16 @@ nsContentIterator::NextNode(nsIContent *aNode, nsVoidArray *aIndexes)
   return nextNode;
 }
 
-nsIContent *
-nsContentIterator::PrevNode(nsIContent *aNode, nsVoidArray *aIndexes)
+nsINode*
+nsContentIterator::PrevNode(nsINode *aNode, nsVoidArray *aIndexes)
 {
-  nsIContent *prevNode = nsnull;
-  nsIContent *cN = aNode;
+  nsINode *prevNode = nsnull;
+  nsINode *n = aNode;
    
   if (mPre)  // if we are a Pre-order iterator, use pre-order
   {
-    nsIContent *parent = cN->GetParent();
-    nsIContent *cSibling = nsnull;
+    nsINode *parent = n->GetNodeParent();
+    nsINode *nSibling = nsnull;
     PRInt32 indx;
 
     // get the cached index
@@ -895,16 +843,16 @@ nsContentIterator::PrevNode(nsIContent *aNode, nsVoidArray *aIndexes)
     // not super cheap, but a lot cheaper than IndexOf(), and still O(1).
     // ignore result this time - the index may now be out of range.
     if (indx >= 0)
-      cSibling = parent->GetChildAt(indx);
+      nSibling = parent->GetChildAt(indx);
 
-    if (cSibling != cN)
+    if (nSibling != n)
     {
       // someone changed our index - find the new index the painful way
-      indx = parent->IndexOf(cN);
+      indx = parent->IndexOf(n);
     }
 
     // indx is now canonically correct
-    if (indx && (cSibling = parent->GetChildAt(--indx)))
+    if (indx && (nSibling = parent->GetChildAt(--indx)))
     {
       // update cache
       if (aIndexes)
@@ -915,7 +863,7 @@ nsContentIterator::PrevNode(nsIContent *aNode, nsVoidArray *aIndexes)
       else mCachedIndex = indx;
       
       // prev node is siblings "deep right" child
-      return GetDeepLastChild(cSibling, aIndexes); 
+      return GetDeepLastChild(nSibling, aIndexes); 
     }
   
     // else it's the parent
@@ -930,12 +878,12 @@ nsContentIterator::PrevNode(nsIContent *aNode, nsVoidArray *aIndexes)
   }
   else  // post-order
   {
-    PRInt32 numChildren = cN->GetChildCount();
+    PRInt32 numChildren = n->GetChildCount();
   
     // if it has children then prev node is last child
     if (numChildren)
     {
-      nsIContent *cLastChild = cN->GetChildAt(--numChildren);
+      nsINode *nLastChild = n->GetChildAt(--numChildren);
 
       // update cache
       if (aIndexes)
@@ -945,11 +893,11 @@ nsContentIterator::PrevNode(nsIContent *aNode, nsVoidArray *aIndexes)
       }
       else mCachedIndex = numChildren;
       
-      return cLastChild;
+      return nLastChild;
     }
 
     // else prev sibling is previous
-    prevNode = GetPrevSibling(cN, aIndexes);
+    prevNode = GetPrevSibling(n, aIndexes);
   }
 
   return prevNode;
@@ -1037,13 +985,13 @@ nsContentIterator::IsDone()
 // Keeping arrays of indexes for the stack of nodes makes PositionAt
 // interesting...
 nsresult
-nsContentIterator::PositionAt(nsIContent* aCurNode)
+nsContentIterator::PositionAt(nsINode* aCurNode)
 {
   if (!aCurNode)
     return NS_ERROR_NULL_POINTER;
 
-  nsIContent *newCurNode = aCurNode;
-  nsIContent *tempNode = mCurNode;
+  nsINode *newCurNode = aCurNode;
+  nsINode *tempNode = mCurNode;
 
   mCurNode = aCurNode;
   // take an early out if this doesn't actually change the position
@@ -1055,45 +1003,41 @@ nsContentIterator::PositionAt(nsIContent* aCurNode)
 
   // Check to see if the node falls within the traversal range.
 
-  nsCOMPtr<nsIDOMNode> firstNode(do_QueryInterface(mFirst));
-  nsCOMPtr<nsIDOMNode> lastNode(do_QueryInterface(mLast));
+  nsINode* firstNode = mFirst;
+  nsINode* lastNode = mLast;
   PRInt32 firstOffset=0, lastOffset=0;
 
   if (firstNode && lastNode)
   {
-    PRUint32 numChildren;
-
     if (mPre)
     {
-      ContentToParentOffset(mFirst, getter_AddRefs(firstNode), &firstOffset);
+      firstNode = NodeToParentOffset(mFirst, &firstOffset);
 
-      numChildren = GetNumChildren(lastNode);
-
-      if (numChildren)
+      if (lastNode->GetChildCount())
         lastOffset = 0;
       else
       {
-        ContentToParentOffset(mLast, getter_AddRefs(lastNode), &lastOffset);
+        lastNode = NodeToParentOffset(mLast, &lastOffset);
         ++lastOffset;
       }
     }
     else
     {
-      numChildren = GetNumChildren(firstNode);
+      PRUint32 numChildren = firstNode->GetChildCount();
 
       if (numChildren)
         firstOffset = numChildren;
       else
-        ContentToParentOffset(mFirst, getter_AddRefs(firstNode), &firstOffset);
+        firstNode = NodeToParentOffset(mFirst, &firstOffset);
 
-      ContentToParentOffset(mLast, getter_AddRefs(lastNode), &lastOffset);
+      lastNode = NodeToParentOffset(mLast, &lastOffset);
       ++lastOffset;
     }
   }
 
   if (!firstNode || !lastNode ||
-      !ContentIsInTraversalRange(mCurNode, mPre, firstNode, firstOffset,
-                                 lastNode, lastOffset))
+      !NodeIsInTraversalRange(mCurNode, mPre, firstNode, firstOffset,
+                              lastNode, lastOffset))
   {
     mIsDone = PR_TRUE;
     return NS_ERROR_FAILURE;
@@ -1125,7 +1069,7 @@ nsContentIterator::PositionAt(nsIContent* aCurNode)
     // Insert at head since we're walking up
     oldParentStack.InsertElementAt(tempNode,0);
 
-    nsIContent *parent = tempNode->GetParent();
+    nsINode *parent = tempNode->GetNodeParent();
 
     if (!parent)  // this node has no parent, and thus no index
       break;
@@ -1145,7 +1089,7 @@ nsContentIterator::PositionAt(nsIContent* aCurNode)
   // Ok.  We have the array of old parents.  Look for a match.
   while (newCurNode)
   {
-    nsIContent *parent = newCurNode->GetParent();
+    nsINode *parent = newCurNode->GetNodeParent();
 
     if (!parent)  // this node has no parent, and thus no index
       break;
@@ -1180,8 +1124,7 @@ nsContentIterator::PositionAt(nsIContent* aCurNode)
   return NS_OK;
 }
 
-
-nsIContent *
+nsINode*
 nsContentIterator::GetCurrentNode()
 {
   if (mIsDone) {
@@ -1216,12 +1159,15 @@ nsContentIterator::GetCurrentNode()
 class nsContentSubtreeIterator : public nsContentIterator 
 {
 public:
-  nsContentSubtreeIterator() {};
-  virtual ~nsContentSubtreeIterator() {};
+  nsContentSubtreeIterator() : nsContentIterator(PR_FALSE) {}
+  virtual ~nsContentSubtreeIterator() {}
 
   // nsContentIterator overrides ------------------------------
 
-  virtual nsresult Init(nsIContent* aRoot);
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(nsContentSubtreeIterator, nsContentIterator)
+
+  virtual nsresult Init(nsINode* aRoot);
 
   virtual nsresult Init(nsIDOMRange* aRange);
 
@@ -1229,7 +1175,7 @@ public:
 
   virtual void Prev();
 
-  virtual nsresult PositionAt(nsIContent* aCurNode);
+  virtual nsresult PositionAt(nsINode* aCurNode);
 
   // Must override these because we don't do PositionAt
   virtual void First();
@@ -1239,8 +1185,8 @@ public:
 
 protected:
 
-  nsresult GetTopAncestorInRange(nsIContent *aNode,
-                                 nsCOMPtr<nsIContent> *outAnestor);
+  nsresult GetTopAncestorInRange(nsINode *aNode,
+                                 nsCOMPtr<nsINode> *outAnestor);
 
   // no copy's or assigns  FIX ME
   nsContentSubtreeIterator(const nsContentSubtreeIterator&);
@@ -1256,6 +1202,20 @@ protected:
   nsAutoVoidArray mEndNodes;
   nsAutoVoidArray mEndOffsets;
 };
+
+NS_IMPL_ADDREF_INHERITED(nsContentSubtreeIterator, nsContentIterator)
+NS_IMPL_RELEASE_INHERITED(nsContentSubtreeIterator, nsContentIterator)
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION_INHERITED(nsContentSubtreeIterator)
+NS_INTERFACE_MAP_END_INHERITING(nsContentIterator)
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsContentSubtreeIterator)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsContentSubtreeIterator, nsContentIterator)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mRange)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(nsContentSubtreeIterator, nsContentIterator)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK_NSCOMPTR(mRange)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 nsresult NS_NewContentSubtreeIterator(nsIContentIterator** aInstancePtrResult);
 
@@ -1285,7 +1245,7 @@ nsresult NS_NewContentSubtreeIterator(nsIContentIterator** aInstancePtrResult)
  ******************************************************/
 
 
-nsresult nsContentSubtreeIterator::Init(nsIContent* aRoot)
+nsresult nsContentSubtreeIterator::Init(nsINode* aRoot)
 {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -1300,19 +1260,16 @@ nsresult nsContentSubtreeIterator::Init(nsIDOMRange* aRange)
 
   mRange = aRange;
   
-  // get the start node and offset, convert to nsIContent
+  // get the start node and offset, convert to nsINode
   nsCOMPtr<nsIDOMNode> commonParent;
   nsCOMPtr<nsIDOMNode> startParent;
   nsCOMPtr<nsIDOMNode> endParent;
-  nsCOMPtr<nsIContent> cStartP;
-  nsCOMPtr<nsIContent> cEndP;
-  nsCOMPtr<nsIContent> cN;
-  nsIContent *firstCandidate = nsnull;
-  nsIContent *lastCandidate = nsnull;
-  nsCOMPtr<nsIDOMNode> dChild;
-  nsCOMPtr<nsIContent> cChild;
+  nsCOMPtr<nsINode> nStartP;
+  nsCOMPtr<nsINode> nEndP;
+  nsCOMPtr<nsINode> n;
+  nsINode *firstCandidate = nsnull;
+  nsINode *lastCandidate = nsnull;
   PRInt32 indx, startIndx, endIndx;
-  PRInt32 numChildren;
 
   // get common content parent
   if (NS_FAILED(aRange->GetCommonAncestorContainer(getter_AddRefs(commonParent))) || !commonParent)
@@ -1322,28 +1279,21 @@ nsresult nsContentSubtreeIterator::Init(nsIDOMRange* aRange)
   // get start content parent
   if (NS_FAILED(aRange->GetStartContainer(getter_AddRefs(startParent))) || !startParent)
     return NS_ERROR_FAILURE;
-  cStartP = do_QueryInterface(startParent);
+  nStartP = do_QueryInterface(startParent);
   aRange->GetStartOffset(&startIndx);
 
   // get end content parent
   if (NS_FAILED(aRange->GetEndContainer(getter_AddRefs(endParent))) || !endParent)
     return NS_ERROR_FAILURE;
-  cEndP = do_QueryInterface(endParent);
+  nEndP = do_QueryInterface(endParent);
   aRange->GetEndOffset(&endIndx);
 
-  if (!cStartP || !cEndP)
-  {
-    // XXX Hack to account for the fact that not everything QIs to nsIContent.
-    // See bug 302775
-    return NS_ERROR_FAILURE;
-  }
-  
   // short circuit when start node == end node
   if (startParent == endParent)
   {
-    cChild = cStartP->GetChildAt(0);
+    nsINode* nChild = nStartP->GetChildAt(0);
   
-    if (!cChild) // no children, must be a text node or empty container
+    if (!nChild) // no children, must be a text node or empty container
     {
       // all inside one text node - empty subtree iterator
       MakeEmpty();
@@ -1369,30 +1319,28 @@ nsresult nsContentSubtreeIterator::Init(nsIDOMRange* aRange)
 
   // find first node in range
   aRange->GetStartOffset(&indx);
-  numChildren = GetNumChildren(startParent);
-  
-  if (!numChildren) // no children, must be a text node
+
+  if (!nStartP->GetChildCount()) // no children, start at the node itself
   {
-    cN = cStartP; 
+    n = nStartP;
   }
   else
   {
-    dChild = GetChildAt(startParent, indx);
-    cChild = do_QueryInterface(dChild);
-    if (!cChild)  // offset after last child
+    nsINode* nChild = nStartP->GetChildAt(indx);
+    if (!nChild)  // offset after last child
     {
-      cN = cStartP;
+      n = nStartP;
     }
     else
     {
-      firstCandidate = cChild;
+      firstCandidate = nChild;
     }
   }
   
   if (!firstCandidate)
   {
     // then firstCandidate is next node after cN
-    firstCandidate = GetNextSibling(cN, nsnull);
+    firstCandidate = GetNextSibling(n, nsnull);
 
     if (!firstCandidate)
     {
@@ -1426,39 +1374,31 @@ nsresult nsContentSubtreeIterator::Init(nsIDOMRange* aRange)
 
   // now to find the last node
   aRange->GetEndOffset(&indx);
-  numChildren = GetNumChildren(endParent);
+  PRInt32 numChildren = nEndP->GetChildCount();
 
   if (indx > numChildren) indx = numChildren;
   if (!indx)
   {
-    cN = cEndP;
+    n = nEndP;
   }
   else
   {
     if (!numChildren) // no children, must be a text node
     {
-      cN = cEndP; 
+      n = nEndP;
     }
     else
     {
-      dChild = GetChildAt(endParent, --indx);
-      cChild = do_QueryInterface(dChild);
-      if (!cChild)  // shouldn't happen
-      {
-        NS_ASSERTION(0,"tree traversal trouble in nsContentSubtreeIterator::Init");
-        return NS_ERROR_FAILURE;
-      }
-      else
-      {
-        lastCandidate = cChild;
-      }
+      lastCandidate = nEndP->GetChildAt(--indx);
+      NS_ASSERTION(lastCandidate,
+                   "tree traversal trouble in nsContentSubtreeIterator::Init");
     }
   }
   
   if (!lastCandidate)
   {
-    // then lastCandidate is prev node before cN
-    lastCandidate = GetPrevSibling(cN, nsnull);
+    // then lastCandidate is prev node before n
+    lastCandidate = GetPrevSibling(n, nsnull);
   }
   
   lastCandidate = GetDeepLastChild(lastCandidate, nsnull);
@@ -1524,7 +1464,7 @@ nsContentSubtreeIterator::Next()
     return;
   }
 
-  nsIContent *nextNode = GetNextSibling(mCurNode, nsnull);
+  nsINode *nextNode = GetNextSibling(mCurNode, nsnull);
   NS_ASSERTION(nextNode, "No next sibling!?! This could mean deadlock!");
 
 /*
@@ -1571,7 +1511,7 @@ nsContentSubtreeIterator::Prev()
     return;
   }
 
-  nsIContent *prevNode = PrevNode(GetDeepFirstChild(mCurNode, nsnull), nsnull);
+  nsINode *prevNode = PrevNode(GetDeepFirstChild(mCurNode, nsnull), nsnull);
 
   prevNode = GetDeepLastChild(prevNode, nsnull);
   
@@ -1585,7 +1525,7 @@ nsContentSubtreeIterator::Prev()
 
 
 nsresult
-nsContentSubtreeIterator::PositionAt(nsIContent* aCurNode)
+nsContentSubtreeIterator::PositionAt(nsINode* aCurNode)
 {
   NS_ERROR("Not implemented!");
 
@@ -1597,12 +1537,12 @@ nsContentSubtreeIterator::PositionAt(nsIContent* aCurNode)
  ****************************************************************/
 
 nsresult
-nsContentSubtreeIterator::GetTopAncestorInRange(nsIContent *aNode,
-                                                nsCOMPtr<nsIContent> *outAnestor)
+nsContentSubtreeIterator::GetTopAncestorInRange(nsINode *aNode,
+                                                nsCOMPtr<nsINode> *outAncestor)
 {
   if (!aNode) 
     return NS_ERROR_NULL_POINTER;
-  if (!outAnestor) 
+  if (!outAncestor) 
     return NS_ERROR_NULL_POINTER;
   
   
@@ -1615,15 +1555,15 @@ nsContentSubtreeIterator::GetTopAncestorInRange(nsIContent *aNode,
   if (nodeBefore || nodeAfter)
     return NS_ERROR_FAILURE;
   
-  nsCOMPtr<nsIContent> parent, tmp;
+  nsCOMPtr<nsINode> parent, tmp;
   while (aNode)
   {
-    parent = aNode->GetParent();
+    parent = aNode->GetNodeParent();
     if (!parent)
     {
       if (tmp)
       {
-        *outAnestor = tmp;
+        *outAncestor = tmp;
         return NS_OK;
       }
       else return NS_ERROR_FAILURE;
@@ -1634,7 +1574,7 @@ nsContentSubtreeIterator::GetTopAncestorInRange(nsIContent *aNode,
 
     if (nodeBefore || nodeAfter)
     {
-      *outAnestor = aNode;
+      *outAncestor = aNode;
       return NS_OK;
     }
     tmp = aNode;

@@ -34,16 +34,54 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/* utility functions for drawing borders and backgrounds */
+
 #ifndef nsCSSRendering_h___
 #define nsCSSRendering_h___
 
 #include "nsIRenderingContext.h"
+#include "nsStyleConsts.h"
+#include "gfxBlur.h"
+#include "gfxContext.h"
+#include "gfxImageSurface.h"
+
 struct nsPoint;
 class nsStyleContext;
 class nsPresContext;
 
-class nsCSSRendering {
-public:
+struct nsCSSRendering {
+  /**
+   * Initialize any static variables used by nsCSSRendering.
+   */
+  static nsresult Init();
+  
+  /**
+   * Clean up any static variables used by nsCSSRendering.
+   */
+  static void Shutdown();
+  
+  static void PaintBoxShadowInner(nsPresContext* aPresContext,
+                                  nsIRenderingContext& aRenderingContext,
+                                  nsIFrame* aForFrame,
+                                  const nsRect& aFrameArea,
+                                  const nsRect& aDirtyRect);
+
+  static void PaintBoxShadowOuter(nsPresContext* aPresContext,
+                                  nsIRenderingContext& aRenderingContext,
+                                  nsIFrame* aForFrame,
+                                  const nsRect& aFrameArea,
+                                  const nsRect& aDirtyRect);
+
+  /**
+   * Get the size, in app units, of the border radii. It returns FALSE iff all
+   * returned radii == 0 (so no border radii), TRUE otherwise.
+   * For the aRadii indexes, use the NS_CORNER_* constants in nsStyleConsts.h
+   */
+  static PRBool GetBorderRadiusTwips(const nsStyleCorners& aBorderRadius,
+                                     const nscoord& aFrameWidth,
+                                     nscoord aRadii[8]);
+
   /**
    * Render the border for an element using css rendering rules
    * for borders. aSkipSides is a bitmask of the sides to skip
@@ -59,10 +97,7 @@ public:
                           const nsRect& aBorderArea,
                           const nsStyleBorder& aBorderStyle,
                           nsStyleContext* aStyleContext,
-                          PRIntn aSkipSides,
-                          nsRect* aGap = 0,
-                          nscoord aHardBorderSize = 0,
-                          PRBool aShouldIgnoreRounded = PR_FALSE);
+                          PRIntn aSkipSides = 0);
 
   /**
    * Render the outline for an element using css rendering rules
@@ -79,42 +114,40 @@ public:
                           const nsRect& aBorderArea,
                           const nsStyleBorder& aBorderStyle,
                           const nsStyleOutline& aOutlineStyle,
-                          nsStyleContext* aStyleContext,
-                          PRIntn aSkipSides,
-                          nsRect* aGap = 0);
+                          nsStyleContext* aStyleContext);
 
   /**
-   * Just like PaintBorder, but takes as input a list of border segments
-   * rather than a single border style.  Useful for any object that needs to
-   * draw a border where an edge is not necessarily homogenous.
-   * Render the border for an element using css rendering rules
-   * for borders. aSkipSides is a bitmask of the sides to skip
-   * when rendering. If 0 then no sides are skipped.
-   *
-   * Both aDirtyRect and aBorderArea are in the local coordinate space
-   * of aForFrame
+   * Render keyboard focus on an element.
+   * |aFocusRect| is the outer rectangle of the focused element.
+   * Uses a fixed style equivalent to "1px dotted |aColor|".
+   * Not used for controls, because the native theme may differ.
    */
-  static void PaintBorderEdges(nsPresContext* aPresContext,
-                               nsIRenderingContext& aRenderingContext,
-                               nsIFrame* aForFrame,
-                               const nsRect& aDirtyRect,
-                               const nsRect& aBorderArea,
-                               nsBorderEdges * aBorderEdges,
-                               nsStyleContext* aStyleContext,
-                               PRIntn aSkipSides,
-                               nsRect* aGap = 0);
-
+  static void PaintFocus(nsPresContext* aPresContext,
+                         nsIRenderingContext& aRenderingContext,
+                         const nsRect& aFocusRect,
+                         nscolor aColor);
 
   /**
-   * Fill in an nsStyleBackground to be used to paint the background for
-   * an element.  The nsStyleBackground should first be initialized
-   * using the pres context.  This applies the rules for propagating
+   * @return PR_TRUE if |aForFrame| is a canvas frame, in the CSS sense.
+   */
+  static PRBool IsCanvasFrame(nsIFrame* aFrame);
+
+  /**
+   * Fill in an nsStyleBackground to be used to paint the background
+   * for an element.  This applies the rules for propagating
    * backgrounds between BODY, the root element, and the canvas.
+   * @return PR_TRUE if there is some meaningful background.
    */
   static PRBool FindBackground(nsPresContext* aPresContext,
                                nsIFrame* aForFrame,
-                               const nsStyleBackground** aBackground,
-                               PRBool* aIsCanvas);
+                               const nsStyleBackground** aBackground);
+
+  /**
+   * As FindBackground, but the passed-in frame is known to be a root frame
+   * (returned from nsCSSFrameConstructor::GetRootElementStyleFrame())
+   * and there is always some meaningful background returned.
+   */
+  static const nsStyleBackground* FindRootFrameBackground(nsIFrame* aForFrame);
 
   /**
    * Find a non-transparent background, for various table-related and
@@ -133,19 +166,24 @@ public:
    * Both aDirtyRect and aBorderArea are in the local coordinate space
    * of aForFrame
    */
+  enum {
+    /**
+     * When this flag is passed, the element's nsDisplayBorder will be
+     * painted immediately on top of this background.
+     */
+    PAINT_WILL_PAINT_BORDER = 0x01
+  };
   static void PaintBackground(nsPresContext* aPresContext,
                               nsIRenderingContext& aRenderingContext,
                               nsIFrame* aForFrame,
                               const nsRect& aDirtyRect,
                               const nsRect& aBorderArea,
-                              const nsStyleBorder& aBorder,
-                              const nsStylePadding& aPadding,
-                              PRBool aUsePrintSettings,
+                              PRUint32 aFlags,
                               nsRect* aBGClipRect = nsnull);
 
   /**
-   * Same as |PaintBackground|, except using the provided style context
-   * (which short-circuits the code that ensures that the root element's
+   * Same as |PaintBackground|, except using the provided style structs.
+   * This short-circuits the code that ensures that the root element's
    * background is drawn on the canvas.
    */
   static void PaintBackgroundWithSC(nsPresContext* aPresContext,
@@ -155,8 +193,7 @@ public:
                                     const nsRect& aBorderArea,
                                     const nsStyleBackground& aColor,
                                     const nsStyleBorder& aBorder,
-                                    const nsStylePadding& aPadding,
-                                    PRBool aUsePrintSettings = PR_FALSE,
+                                    PRUint32 aFlags,
                                     nsRect* aBGClipRect = nsnull);
 
   /**
@@ -165,238 +202,164 @@ public:
    */
   static void DidPaint();
 
-
-  static void DrawDashedSides(PRIntn startSide,
-                              nsIRenderingContext& aContext,
-                              const nsRect& aDirtyRect,
-                              const PRUint8 borderStyles[],
-                              const nscolor borderColors[],    
-                              const nsRect& borderOutside,
-                              const nsRect& borderInside,
-                              PRIntn aSkipSides,
-                              nsRect* aGap);
-
-  static void DrawDashedSides(PRIntn startSide,
-                              nsIRenderingContext& aContext,
-                              const nsRect& aDirtyRect,
-                              const nsStyleColor* aColorStyle,
-                              const nsStyleBorder* aBorderStyle,  
-                              const nsStyleOutline* aOutlineStyle,  
-                              PRBool aDoOutline,
-                              const nsRect& borderOutside,
-                              const nsRect& borderInside,
-                              PRIntn aSkipSides,
-                              nsRect* aGap);
-
-  /** draw the dashed segements of a segmented border */
-  //XXX: boy is it annoying that we have 3 methods to draw dashed sides!
-  //     they clearly can be factored.
-  static void DrawDashedSegments(nsIRenderingContext& aContext,
-                                 const nsRect& aBounds,
-                                 nsBorderEdges * aBorderEdges,
-                                 PRIntn aSkipSides,
-                                 nsRect* aGap);
-
-  // Draw a border segment in the table collapsing border model without beveling corners
-  static void DrawTableBorderSegment(nsIRenderingContext&     aContext,
-                                     PRUint8                  aBorderStyle,  
-                                     nscolor                  aBorderColor,
+  // Draw a border segment in the table collapsing border model without
+  // beveling corners
+  static void DrawTableBorderSegment(nsIRenderingContext& aContext,
+                                     PRUint8              aBorderStyle,  
+                                     nscolor              aBorderColor,
                                      const nsStyleBackground* aBGColor,
-                                     const nsRect&            aBorderRect,
-                                     float                    aPixelsToTwips,
-                                     PRUint8                  aStartBevelSide = 0,
-                                     nscoord                  aStartBevelOffset = 0,
-                                     PRUint8                  aEndBevelSide = 0,
-                                     nscoord                  aEndBevelOffset = 0);
+                                     const nsRect&        aBorderRect,
+                                     PRInt32              aAppUnitsPerCSSPixel,
+                                     PRUint8              aStartBevelSide = 0,
+                                     nscoord              aStartBevelOffset = 0,
+                                     PRUint8              aEndBevelSide = 0,
+                                     nscoord              aEndBevelOffset = 0);
+
   /**
-   * transform a color to a color that will show up on a printer if needed
-   * aMapColor - color to evaluate
-   * aIsPrinter - Is this a printing device
-   * return - the transformed color
+   * Function for painting the decoration lines for the text.
+   * NOTE: aPt, aLineSize, aAscent and aOffset are non-rounded device pixels,
+   *       not app units.
+   *   input:
+   *     @param aGfxContext
+   *     @param aColor            the color of the decoration line
+   *     @param aPt               the top/left edge of the text
+   *     @param aLineSize         the width and the height of the decoration
+   *                              line
+   *     @param aAscent           the ascent of the text
+   *     @param aOffset           the offset of the decoration line from
+   *                              the baseline of the text (if the value is
+   *                              positive, the line is lifted up)
+   *     @param aDecoration       which line will be painted. The value can be
+   *                              NS_STYLE_TEXT_DECORATION_UNDERLINE or
+   *                              NS_STYLE_TEXT_DECORATION_OVERLINE or
+   *                              NS_STYLE_TEXT_DECORATION_LINE_THROUGH.
+   *     @param aStyle            the style of the decoration line. The value
+   *                              can be NS_STYLE_BORDER_STYLE_SOLID or
+   *                              NS_STYLE_BORDER_STYLE_DOTTED or
+   *                              NS_STYLE_BORDER_STYLE_DASHED or
+   *                              NS_STYLE_BORDER_STYLE_DOUBLE.
    */
-  static nscolor TransformColor(nscolor  aMapColor,PRBool aNoBackGround);
+  static void PaintDecorationLine(gfxContext* aGfxContext,
+                                  const nscolor aColor,
+                                  const gfxPoint& aPt,
+                                  const gfxSize& aLineSize,
+                                  const gfxFloat aAscent,
+                                  const gfxFloat aOffset,
+                                  const PRUint8 aDecoration,
+                                  const PRUint8 aStyle);
+
+  /**
+   * Function for getting the decoration line rect for the text.
+   * NOTE: aLineSize, aAscent and aOffset are non-rounded device pixels,
+   *       not app units.
+   *   input:
+   *     @param aPresContext
+   *     @param aLineSize         the width and the height of the decoration
+   *                              line
+   *     @param aAscent           the ascent of the text
+   *     @param aOffset           the offset of the decoration line from
+   *                              the baseline of the text (if the value is
+   *                              positive, the line is lifted up)
+   *     @param aDecoration       which line will be painted. The value can be
+   *                              NS_STYLE_TEXT_DECORATION_UNDERLINE or
+   *                              NS_STYLE_TEXT_DECORATION_OVERLINE or
+   *                              NS_STYLE_TEXT_DECORATION_LINE_THROUGH.
+   *     @param aStyle            the style of the decoration line. The value
+   *                              can be NS_STYLE_BORDER_STYLE_SOLID or
+   *                              NS_STYLE_BORDER_STYLE_DOTTED or
+   *                              NS_STYLE_BORDER_STYLE_DASHED or
+   *                              NS_STYLE_BORDER_STYLE_DOUBLE.
+   *   output:
+   *     @return                  the decoration line rect for the input,
+   *                              the each values are app units.
+   */
+  static nsRect GetTextDecorationRect(nsPresContext* aPresContext,
+                                      const gfxSize& aLineSize,
+                                      const gfxFloat aAscent,
+                                      const gfxFloat aOffset,
+                                      const PRUint8 aDecoration,
+                                      const PRUint8 aStyle);
+};
+
+/*
+ * nsContextBoxBlur
+ * Creates an 8-bit alpha channel context for callers to draw in, blurs the
+ * contents of that context and applies it as a 1-color mask on a
+ * different existing context. Uses gfxAlphaBoxBlur as its back end.
+ *
+ * You must call Init() first to create a suitable temporary surface to draw
+ * on.  You must then draw any desired content onto the given context, then
+ * call DoPaint() to apply the blurred content as a single-color mask. You
+ * can only call Init() once, so objects cannot be reused.
+ *
+ * This is very useful for creating drop shadows or silhouettes.
+ */
+class nsContextBoxBlur {
+public:
+  /**
+   * Prepares a gfxContext to draw on. Do not call this twice; if you want
+   * to get the gfxContext again use GetContext().
+   *
+   * @param aRect                The coordinates of the surface to create.
+   *                             All coordinates must be in app units.
+   *                             This must not include the blur radius, pass
+   *                             it as the second parameter and everything
+   *                             is taken care of.
+   *
+   * @param aBlurRadius          The blur radius in app units.
+   *
+   * @param aAppUnitsPerDevPixel The number of app units in a device pixel,
+   *                             for conversion.  Most of the time you'll
+   *                             pass this from the current PresContext if
+   *                             available.
+   *
+   * @param aDestinationCtx      The graphics context to apply the blurred
+   *                             mask to when you call DoPaint(). Make sure
+   *                             it is not destroyed before you call
+   *                             DoPaint(). To set the color of the
+   *                             resulting blurred graphic mask, you must
+   *                             set the color on this context before
+   *                             calling Init().
+   *
+   * @param aDirtyRect           The absolute dirty rect in app units. Used to
+   *                             optimize the temporary surface size and speed up blur.
+   *
+   * @return            A blank 8-bit alpha-channel-only graphics context to
+   *                    draw on, or null on error. Must not be freed. The
+   *                    context has a device offset applied to it given by
+   *                    aRect. This means you can use coordinates as if it
+   *                    were at the desired position at aRect and you don't
+   *                    need to worry about translating any coordinates to
+   *                    draw on this temporary surface.
+   *
+   * If aBlurRadius is 0, the returned context is aDestinationCtx and
+   * DoPaint() does nothing, because no blurring is required. Therefore, you
+   * should prepare the destination context as if you were going to draw
+   * directly on it instead of any temporary surface created in this class.
+   */
+  gfxContext* Init(const gfxRect& aRect, nscoord aBlurRadius,
+                   PRInt32 aAppUnitsPerDevPixel, gfxContext* aDestinationCtx,
+                   const gfxRect& aDirtyRect);
+
+  /**
+   * Does the actual blurring and mask applying. Users of this object *must*
+   * have called Init() first, then have drawn whatever they want to be
+   * blurred onto the internal gfxContext before calling this.
+   */
+  void DoPaint();
+
+  /**
+   * Gets the internal gfxContext at any time. Must not be freed. Avoid
+   * calling this before calling Init() since the context would not be
+   * constructed at that point.
+   */
+  gfxContext* GetContext();
 
 protected:
-  /**
-   * Render the border for an element using css rendering rules
-   * for borders. aSkipSides is a bitmask of the sides to skip
-   * when rendering. If 0 then no sides are skipped.
-   * Both aDirtyRect and aBorderArea are in the local coordinate space
-   * of aForFrame
-   */
-  static void PaintRoundedBorder(nsPresContext* aPresContext,
-                          nsIRenderingContext& aRenderingContext,
-                          nsIFrame* aForFrame,
-                          const nsRect& aDirtyRect,
-                          const nsRect& aBorderArea,
-                          const nsStyleBorder* aBorderStyle,
-                          const nsStyleOutline* aOutlineStyle,
-                          nsStyleContext* aStyleContext,
-                          PRIntn aSkipSides,
-                          PRInt16 aBorderRadius[4],nsRect* aGap = 0,
-                          PRBool aIsOutline=PR_FALSE);
-
-  static void RenderSide(nsFloatPoint aPoints[],nsIRenderingContext& aRenderingContext,
-                        const nsStyleBorder* aBorderStyle,const nsStyleOutline* aOutlineStyle,nsStyleContext* aStyleContext,
-                        PRUint8 aSide,nsMargin  &aBorThick,nscoord aTwipsPerPixel,
-                        PRBool aIsOutline=PR_FALSE);
-
-  static void PaintBackgroundColor(nsPresContext* aPresContext,
-                                   nsIRenderingContext& aRenderingContext,
-                                   nsIFrame* aForFrame,
-                                   const nsRect& aBgClipArea,
-                                   const nsStyleBackground& aColor,
-                                   const nsStyleBorder& aBorder,
-                                   const nsStylePadding& aPadding,
-                                   PRBool aCanPaintNonWhite);
-
-  static void PaintRoundedBackground(nsPresContext* aPresContext,
-                                     nsIRenderingContext& aRenderingContext,
-                                     nsIFrame* aForFrame,
-                                     const nsRect& aBorderArea,
-                                     const nsStyleBackground& aColor,
-                                     const nsStyleBorder& aBorder,
-                                     PRInt16 aTheRadius[4],
-                                     PRBool aCanPaintNonWhite);
-
-  static nscolor MakeBevelColor(PRIntn whichSide, PRUint8 style,
-                                nscolor aBackgroundColor,
-                                nscolor aBorderColor,
-                                PRBool aSpecialCase);
-
-  static PRIntn MakeSide(nsPoint aPoints[],
-                         nsIRenderingContext& aContext,
-                         PRIntn whichSide,
-                         const nsRect& outside, const nsRect& inside,
-                         PRIntn aSkipSides,
-                         PRIntn borderPart, float borderFrac,
-                         nscoord twipsPerPixel);
-
-  static void DrawSide(nsIRenderingContext& aContext,
-                       PRIntn whichSide,
-                       const PRUint8 borderStyle,
-                       const nscolor borderColor,
-                       const nscolor aBackgroundColor, 
-                       const nsRect& borderOutside,
-                       const nsRect& borderInside,
-                       PRIntn aSkipSides,
-                       nscoord twipsPerPixel,
-                       nsRect* aGap = 0);
-
-
-  static void DrawCompositeSide(nsIRenderingContext& aContext,
-                                PRIntn aWhichSide,
-                                nsBorderColors* aCompositeColors,
-                                const nsRect& aOuterRect,
-                                const nsRect& aInnerRect,
-                                PRInt16* aBorderRadii,
-                                nscoord aTwipsPerPixel,
-                                nsRect* aGap);
-
-  static void DrawLine (nsIRenderingContext& aContext, 
-                        nscoord aX1, nscoord aY1, nscoord aX2, nscoord aY2,
-                        nsRect* aGap);
-
-  static void FillPolygon (nsIRenderingContext& aContext, 
-                           const nsPoint aPoints[],
-                           PRInt32 aNumPoints,
-                           nsRect* aGap);
-
+  gfxAlphaBoxBlur blur;
+  nsRefPtr<gfxContext> mContext;
+  gfxContext* mDestinationCtx;
+  
 };
-
-
-
-/** ---------------------------------------------------
- *  Class QBCurve, a quadratic bezier curve, used to implement the rounded rectangles
- *	@update 3/26/99 dwc
- */
-class QBCurve
-{
-
-public:
-	nsFloatPoint	mAnc1;
-	nsFloatPoint	mCon;
-	nsFloatPoint mAnc2;
-
-  QBCurve() {mAnc1.x=0;mAnc1.y=0;mCon=mAnc2=mAnc1;}
-  void SetControls(nsFloatPoint &aAnc1,nsFloatPoint &aCon,nsFloatPoint &aAnc2) { mAnc1 = aAnc1; mCon = aCon; mAnc2 = aAnc2;}
-  void SetPoints(float a1x,float a1y,float acx,float acy,float a2x,float a2y) {mAnc1.MoveTo(a1x,a1y),mCon.MoveTo(acx,acy),mAnc2.MoveTo(a2x,a2y);}
-
-/** ---------------------------------------------------
- *  Divide a Quadratic curve into line segments if it is not smaller than a certain size
- *  else it is so small that it can be approximated by 2 lineto calls
- *  @param aRenderingContext -- The RenderingContext to use to draw with
- *  @param aPointArray[] -- A list of points we can put line calls into instead of drawing.  If null, lines are drawn
- *  @param aCurInex -- a pointer to an Integer that tells were to put the points into the array, incremented when finished
- *	@update 3/26/99 dwc
- */
-  void SubDivide(nsIRenderingContext *aRenderingContext,nsPoint  aPointArray[],PRInt32 *aCurIndex);
-
-/** ---------------------------------------------------
- *  Divide a Quadratic Bezier curve at the mid-point
- *	@update 3/26/99 dwc
- *  @param aCurve1 -- Curve 1 as a result of the division
- *  @param aCurve2 -- Curve 2 as a result of the division
- */
-  void MidPointDivide(QBCurve *A,QBCurve *B);
-};
-
-
-/** ---------------------------------------------------
- *  Class RoundedRect, A class to encapsulate all the rounded rect functionality, 
- *  which are based on the QBCurve
- *	@update 4/13/99 dwc
- */
-class RoundedRect
-{
-
-public:
-  PRInt32 mRoundness[4];
-
-  PRBool  mDoRound;
-
-  PRInt32 mLeft;
-  PRInt32 mRight;
-  PRInt32 mTop;
-  PRInt32 mBottom;
-
-  /** 
-   *  Construct a rounded rectangle object
-   *  @update 4/19/99
-   */
-  void  RoundRect() {mRoundness[0]=0;}
-
-  /**
-   *  Set the curves boundaries and then break it up into the curve pieces for rendering
-   *  @update 4/13/99 dwc
-   *  @param aLeft -- Left side of bounding box
-   *  @param aTop -- Top side of bounding box
-   *  @param aWidth -- Width of bounding box
-   *  @param aHeight -- Height of bounding box
-   *  @param aRadius -- radius for the rounding
-   */
-  void  Set(nscoord aLeft,nscoord aTop,PRInt32  aWidth,PRInt32 aHeight,PRInt16 aRadius[4],PRInt16 aNumTwipPerPix);
-
-
-  /**
-   *  Calculate the inset of a curve based on a border
-   *  @update 4/13/99 dwc
-   *  @param aLeft -- Left side of bounding box
-   *  @param aTop -- Top side of bounding box
-   */
-  void  CalcInsetCurves(QBCurve &aULCurve,QBCurve &aURCurve,QBCurve &aLLCurve,QBCurve &aLRCurve,nsMargin &aBorder);
-
-  /** ---------------------------------------------------
-   *  set the passed in curves to the rounded borders of the rectangle
-   *	@update 4/13/99 dwc
-   *  @param aULCurve -- upperleft curve
-   *  @param aURCurve -- upperright curve
-   *  @param aLRCurve -- lowerright curve
-   *  @param aLLCurve -- lowerleft curve
-   */
-  void GetRoundedBorders(QBCurve &aULCurve,QBCurve &aURCurve,QBCurve &aLLCurve,QBCurve &aLRCurve);
-
-};
-
 
 #endif /* nsCSSRendering_h___ */

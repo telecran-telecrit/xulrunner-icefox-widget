@@ -1,4 +1,4 @@
-#! /bin/sh  
+#! /bin/bash  
 #
 # ***** BEGIN LICENSE BLOCK *****
 # Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -17,7 +17,7 @@
 #
 # The Initial Developer of the Original Code is
 # Netscape Communications Corporation.
-# Portions created by the Initial Developer are Copyright (C) 1994-2000
+# Portions created by the Initial Developer are Copyright (C) 1994-2009
 # the Initial Developer. All Rights Reserved.
 #
 # Contributor(s):
@@ -91,11 +91,11 @@ crmf_main()
 {
   echo "$SCRIPTNAME: CRMF/CMMF Tests ------------------------------"
   echo "crmftest -d ${P_R_BOBDIR} -p Bob -e dave@bogus.com -s TestCA -P nss crmf decode"
-  crmftest -d ${P_R_BOBDIR} -p Bob -e dave@bogus.com -s TestCA -P nss crmf decode
+  ${BINDIR}/crmftest -d ${P_R_BOBDIR} -p Bob -e dave@bogus.com -s TestCA -P nss crmf decode
   html_msg $? 0 "CRMF test" "."
 
   echo "crmftest -d ${P_R_BOBDIR} -p Bob -e dave@bogus.com -s TestCA -P nss cmmf"
-  crmftest -d ${P_R_BOBDIR} -p Bob -e dave@bogus.com -s TestCA -P nss cmmf 
+  ${BINDIR}/crmftest -d ${P_R_BOBDIR} -p Bob -e dave@bogus.com -s TestCA -P nss cmmf 
   html_msg $? 0 "CMMF test" "."
 
 # Add tests for key recovery and challange as crmftest's capabilities increase

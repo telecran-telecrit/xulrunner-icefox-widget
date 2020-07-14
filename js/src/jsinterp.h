@@ -1,4 +1,5 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
+ * vim: set ts=8 sw=4 et tw=78:
  *
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -44,8 +45,16 @@
  */
 #include "jsprvtd.h"
 #include "jspubtd.h"
+#include "jsfun.h"
+#include "jsopcode.h"
+#include "jsscript.h"
 
 JS_BEGIN_EXTERN_C
+
+typedef struct JSFrameRegs {
+    jsbytecode      *pc;            /* program counter */
+    jsval           *sp;            /* stack pointer */
+} JSFrameRegs;
 
 /*
  * JS stack frame, may be allocated on the C stack by native callers.  Always
@@ -58,217 +67,364 @@ JS_BEGIN_EXTERN_C
  * with well-known slots, if possible.
  */
 struct JSStackFrame {
+    JSFrameRegs     *regs;
+    jsbytecode      *imacpc;        /* null or interpreter macro call pc */
+    jsval           *slots;         /* variables, locals and operand stack */
     JSObject        *callobj;       /* lazily created Call object */
     JSObject        *argsobj;       /* lazily created arguments object */
     JSObject        *varobj;        /* variables object, where vars go */
+    JSObject        *callee;        /* function or script object */
     JSScript        *script;        /* script being interpreted */
     JSFunction      *fun;           /* function being called or null */
     JSObject        *thisp;         /* "this" pointer if in method */
     uintN           argc;           /* actual argument count */
     jsval           *argv;          /* base of argument stack slots */
     jsval           rval;           /* function return value */
-    uintN           nvars;          /* local variable count */
-    jsval           *vars;          /* base of variable stack slots */
     JSStackFrame    *down;          /* previous frame */
     void            *annotation;    /* used by Java security */
-    JSObject        *scopeChain;    /* scope chain */
-    jsbytecode      *pc;            /* program counter */
-    jsval           *sp;            /* stack pointer */
-    jsval           *spbase;        /* operand stack base */
+
+    /*
+     * We can't determine in advance which local variables can live on
+     * the stack and be freed when their dynamic scope ends, and which
+     * will be closed over and need to live in the heap.  So we place
+     * variables on the stack initially, note when they are closed
+     * over, and copy those that are out to the heap when we leave
+     * their dynamic scope.
+     * 
+     * The bytecode compiler produces a tree of block objects
+     * accompanying each JSScript representing those lexical blocks in
+     * the script that have let-bound variables associated with them.
+     * These block objects are never modified, and never become part
+     * of any function's scope chain.  Their parent slots point to the
+     * innermost block that encloses them, or are NULL in the
+     * outermost blocks within a function or in eval or global code.
+     *
+     * When we are in the static scope of such a block, blockChain
+     * points to its compiler-allocated block object; otherwise, it is
+     * NULL.
+     * 
+     * scopeChain is the current scope chain, including 'call' and
+     * 'block' objects for those function calls and lexical blocks
+     * whose static scope we are currently executing in, and 'with'
+     * objects for with statements; the chain is typically terminated
+     * by a global object.  However, as an optimization, the young end
+     * of the chain omits block objects we have not yet cloned.  To
+     * create a closure, we clone the missing blocks from blockChain
+     * (which is always current), place them at the head of
+     * scopeChain, and use that for the closure's scope chain.  If we
+     * never close over a lexical block, we never place a mutable
+     * clone of it on scopeChain.
+     *
+     * This lazy cloning is implemented in js_GetScopeChain, which is
+     * also used in some other cases --- entering 'with' blocks, for
+     * example.
+     */
+    JSObject        *scopeChain;
+    JSObject        *blockChain;
+
     uintN           sharpDepth;     /* array/object initializer depth */
     JSObject        *sharpArray;    /* scope for #n= initializer vars */
     uint32          flags;          /* frame flags -- see below */
     JSStackFrame    *dormantNext;   /* next dormant frame chain */
     JSObject        *xmlNamespace;  /* null or default xml namespace in E4X */
-    JSObject        *blockChain;    /* active compile-time block scopes */
+    JSStackFrame    *displaySave;   /* previous value of display entry for
+                                       script->staticLevel */
+
+#ifdef __cplusplus /* Aargh, LiveConnect, bug 442399. */
+    inline void assertValidStackDepth(uintN depth);
+#endif
 };
+
+#ifdef __cplusplus
+static JS_INLINE uintN
+FramePCOffset(JSStackFrame* fp)
+{
+    return uintN((fp->imacpc ? fp->imacpc : fp->regs->pc) - fp->script->code);
+}
+#endif
+
+static JS_INLINE jsval *
+StackBase(JSStackFrame *fp)
+{
+    return fp->slots + fp->script->nfixed;
+}
+
+#ifdef __cplusplus /* Aargh, LiveConnect, bug 442399. */
+void
+JSStackFrame::assertValidStackDepth(uintN depth)
+{
+    JS_ASSERT(0 <= regs->sp - StackBase(this));
+    JS_ASSERT(depth <= uintptr_t(regs->sp - StackBase(this)));
+}
+#endif
+
+static JS_INLINE uintN
+GlobalVarCount(JSStackFrame *fp)
+{
+    uintN n;
+    
+    JS_ASSERT(!fp->fun);
+    n = fp->script->nfixed;
+    if (fp->script->regexpsOffset != 0)
+        n -= JS_SCRIPT_REGEXPS(fp->script)->length;
+    return n;
+}
 
 typedef struct JSInlineFrame {
     JSStackFrame    frame;          /* base struct */
-    jsval           *rvp;           /* ptr to caller's return value slot */
+    JSFrameRegs     callerRegs;     /* parent's frame registers */
     void            *mark;          /* mark before inline frame */
     void            *hookData;      /* debugger call hook data */
     JSVersion       callerVersion;  /* dynamic version of calling script */
 } JSInlineFrame;
 
 /* JS stack frame flags. */
-#define JSFRAME_CONSTRUCTING  0x01  /* frame is for a constructor invocation */
-#define JSFRAME_INTERNAL      0x02  /* internal call, not invoked by a script */
-#define JSFRAME_SKIP_CALLER   0x04  /* skip one link when evaluating f.caller
-                                       for this invocation of f */
-#define JSFRAME_ASSIGNING     0x08  /* a complex (not simplex JOF_ASSIGNING) op
+#define JSFRAME_CONSTRUCTING   0x01 /* frame is for a constructor invocation */
+#define JSFRAME_COMPUTED_THIS  0x02 /* frame.thisp was computed already */
+#define JSFRAME_ASSIGNING      0x04 /* a complex (not simplex JOF_ASSIGNING) op
                                        is currently assigning to a property */
-#define JSFRAME_DEBUGGER      0x10  /* frame for JS_EvaluateInStackFrame */
-#define JSFRAME_EVAL          0x20  /* frame for obj_eval */
-#define JSFRAME_SPECIAL       0x30  /* special evaluation frame flags */
-#define JSFRAME_COMPILING     0x40  /* frame is being used by compiler */
-#define JSFRAME_COMPILE_N_GO  0x80  /* compiler-and-go mode, can optimize name
-                                       references based on scope chain */
-#define JSFRAME_SCRIPT_OBJECT 0x100 /* compiling source for a Script object */
-#define JSFRAME_YIELDING      0x200 /* js_Interpret dispatched JSOP_YIELD */
-#define JSFRAME_FILTERING     0x400 /* XML filtering predicate expression */
-#define JSFRAME_ITERATOR      0x800 /* trying to get an iterator for for-in */
-#define JSFRAME_POP_BLOCKS   0x1000 /* scope chain contains blocks to pop */
-#define JSFRAME_GENERATOR    0x2000 /* frame belongs to generator-iterator */
+#define JSFRAME_DEBUGGER       0x08 /* frame for JS_EvaluateInStackFrame */
+#define JSFRAME_EVAL           0x10 /* frame for obj_eval */
+#define JSFRAME_ROOTED_ARGV    0x20 /* frame.argv is rooted by the caller */
+#define JSFRAME_YIELDING       0x40 /* js_Interpret dispatched JSOP_YIELD */
+#define JSFRAME_ITERATOR       0x80 /* trying to get an iterator for for-in */
+#define JSFRAME_GENERATOR     0x200 /* frame belongs to generator-iterator */
 
 #define JSFRAME_OVERRIDE_SHIFT 24   /* override bit-set params; see jsfun.c */
 #define JSFRAME_OVERRIDE_BITS  8
 
+#define JSFRAME_SPECIAL       (JSFRAME_DEBUGGER | JSFRAME_EVAL)
+
 /*
- * Property cache for quickened get/set property opcodes.
+ * Property cache with structurally typed capabilities for invalidation, for
+ * polymorphic callsite method/get/set speedups.
+ *
+ * See bug https://bugzilla.mozilla.org/show_bug.cgi?id=365851.
  */
-#define PROPERTY_CACHE_LOG2     10
+#define PROPERTY_CACHE_LOG2     12
 #define PROPERTY_CACHE_SIZE     JS_BIT(PROPERTY_CACHE_LOG2)
 #define PROPERTY_CACHE_MASK     JS_BITMASK(PROPERTY_CACHE_LOG2)
 
-#define PROPERTY_CACHE_HASH(obj, id) \
-    ((((jsuword)(obj) >> JSVAL_TAGBITS) ^ (jsuword)(id)) & PROPERTY_CACHE_MASK)
+/*
+ * Add kshape rather than xor it to avoid collisions between nearby bytecode
+ * that are evolving an object by setting successive properties, incrementing
+ * the object's scope->shape on each set.
+ */
+#define PROPERTY_CACHE_HASH(pc,kshape)                                        \
+    (((((jsuword)(pc) >> PROPERTY_CACHE_LOG2) ^ (jsuword)(pc)) + (kshape)) &  \
+     PROPERTY_CACHE_MASK)
 
-#ifdef JS_THREADSAFE
+#define PROPERTY_CACHE_HASH_PC(pc,kshape)                                     \
+    PROPERTY_CACHE_HASH(pc, kshape)
 
-#if HAVE_ATOMIC_DWORD_ACCESS
+#define PROPERTY_CACHE_HASH_ATOM(atom,obj,pobj)                               \
+    PROPERTY_CACHE_HASH((jsuword)(atom) >> 2, OBJ_SHAPE(obj))
 
-#define PCE_LOAD(cache, pce, entry)     JS_ATOMIC_DWORD_LOAD(pce, entry)
-#define PCE_STORE(cache, pce, entry)    JS_ATOMIC_DWORD_STORE(pce, entry)
+/*
+ * Property cache value capability macros.
+ */
+#define PCVCAP_PROTOBITS        4
+#define PCVCAP_PROTOSIZE        JS_BIT(PCVCAP_PROTOBITS)
+#define PCVCAP_PROTOMASK        JS_BITMASK(PCVCAP_PROTOBITS)
 
-#else  /* !HAVE_ATOMIC_DWORD_ACCESS */
+#define PCVCAP_SCOPEBITS        4
+#define PCVCAP_SCOPESIZE        JS_BIT(PCVCAP_SCOPEBITS)
+#define PCVCAP_SCOPEMASK        JS_BITMASK(PCVCAP_SCOPEBITS)
 
-#define JS_PROPERTY_CACHE_METERING      1
+#define PCVCAP_TAGBITS          (PCVCAP_PROTOBITS + PCVCAP_SCOPEBITS)
+#define PCVCAP_TAGMASK          JS_BITMASK(PCVCAP_TAGBITS)
+#define PCVCAP_TAG(t)           ((t) & PCVCAP_TAGMASK)
 
-#define PCE_LOAD(cache, pce, entry)                                           \
-    JS_BEGIN_MACRO                                                            \
-        uint32 prefills_;                                                     \
-        uint32 fills_ = (cache)->fills;                                       \
-        do {                                                                  \
-            /* Load until cache->fills is stable (see FILL macro below). */   \
-            prefills_ = fills_;                                               \
-            (entry) = *(pce);                                                 \
-        } while ((fills_ = (cache)->fills) != prefills_);                     \
-    JS_END_MACRO
+#define PCVCAP_MAKE(t,s,p)      ((uint32(t) << PCVCAP_TAGBITS) |              \
+                                 ((s) << PCVCAP_PROTOBITS) |                  \
+                                 (p))
+#define PCVCAP_SHAPE(t)         ((t) >> PCVCAP_TAGBITS)
 
-#define PCE_STORE(cache, pce, entry)                                          \
-    JS_BEGIN_MACRO                                                            \
-        do {                                                                  \
-            /* Store until no racing collider stores half or all of pce. */   \
-            *(pce) = (entry);                                                 \
-        } while (PCE_OBJECT(*pce) != PCE_OBJECT(entry) ||                     \
-                 PCE_PROPERTY(*pce) != PCE_PROPERTY(entry));                  \
-    JS_END_MACRO
+#define SHAPE_OVERFLOW_BIT      JS_BIT(32 - PCVCAP_TAGBITS)
 
-#endif /* !HAVE_ATOMIC_DWORD_ACCESS */
-
-#else  /* !JS_THREADSAFE */
-
-#define PCE_LOAD(cache, pce, entry)     ((entry) = *(pce))
-#define PCE_STORE(cache, pce, entry)    (*(pce) = (entry))
-
-#endif /* !JS_THREADSAFE */
-
-typedef union JSPropertyCacheEntry {
-    struct {
-        JSObject        *object;        /* weak link to object */
-        JSScopeProperty *property;      /* weak link to property */
-    } s;
-#ifdef HAVE_ATOMIC_DWORD_ACCESS
-    prdword align;
+#ifndef JS_THREADSAFE
+# define js_GenerateShape(cx, gcLocked)    js_GenerateShape (cx)
 #endif
-} JSPropertyCacheEntry;
 
-/* These may be called in lvalue or rvalue position. */
-#define PCE_OBJECT(entry)       ((entry).s.object)
-#define PCE_PROPERTY(entry)     ((entry).s.property)
+extern uint32
+js_GenerateShape(JSContext *cx, JSBool gcLocked);
+
+struct JSPropCacheEntry {
+    jsbytecode          *kpc;           /* pc if vcap tag is <= 1, else atom */
+    jsuword             kshape;         /* key shape if pc, else obj for atom */
+    jsuword             vcap;           /* value capability, see above */
+    jsuword             vword;          /* value word, see PCVAL_* below */
+};
+
+/*
+ * Special value for functions returning JSPropCacheEntry * to distinguish
+ * between failure and no no-cache-fill cases.
+ */
+#define JS_NO_PROP_CACHE_FILL ((JSPropCacheEntry *) NULL + 1)
+
+#if defined DEBUG_brendan || defined DEBUG_brendaneich
+#define JS_PROPERTY_CACHE_METERING 1
+#endif
 
 typedef struct JSPropertyCache {
-    JSPropertyCacheEntry table[PROPERTY_CACHE_SIZE];
-    JSBool               empty;
-    JSBool               disabled;
+    JSPropCacheEntry    table[PROPERTY_CACHE_SIZE];
+    JSBool              empty;
 #ifdef JS_PROPERTY_CACHE_METERING
-    uint32               fills;
-    uint32               recycles;
-    uint32               tests;
-    uint32               misses;
-    uint32               flushes;
-# define PCMETER(x)      x
+    JSPropCacheEntry    *pctestentry;   /* entry of the last PC-based test */
+    uint32              fills;          /* number of cache entry fills */
+    uint32              nofills;        /* couldn't fill (e.g. default get) */
+    uint32              rofills;        /* set on read-only prop can't fill */
+    uint32              disfills;       /* fill attempts on disabled cache */
+    uint32              oddfills;       /* fill attempt after setter deleted */
+    uint32              modfills;       /* fill that rehashed to a new entry */
+    uint32              brandfills;     /* scope brandings to type structural
+                                           method fills */
+    uint32              noprotos;       /* resolve-returned non-proto pobj */
+    uint32              longchains;     /* overlong scope and/or proto chain */
+    uint32              recycles;       /* cache entries recycled by fills */
+    uint32              pcrecycles;     /* pc-keyed entries recycled by atom-
+                                           keyed fills */
+    uint32              tests;          /* cache probes */
+    uint32              pchits;         /* fast-path polymorphic op hits */
+    uint32              protopchits;    /* pchits hitting immediate prototype */
+    uint32              initests;       /* cache probes from JSOP_INITPROP */
+    uint32              inipchits;      /* init'ing next property pchit case */
+    uint32              inipcmisses;    /* init'ing next property pc misses */
+    uint32              settests;       /* cache probes from JOF_SET opcodes */
+    uint32              addpchits;      /* adding next property pchit case */
+    uint32              setpchits;      /* setting existing property pchit */
+    uint32              setpcmisses;    /* setting/adding property pc misses */
+    uint32              slotchanges;    /* clasp->reserveSlots result variance-
+                                           induced slot changes */
+    uint32              setmisses;      /* JSOP_SET{NAME,PROP} total misses */
+    uint32              idmisses;       /* slow-path key id == atom misses */
+    uint32              komisses;       /* slow-path key object misses */
+    uint32              vcmisses;       /* value capability misses */
+    uint32              misses;         /* cache misses */
+    uint32              flushes;        /* cache flushes */
+    uint32              pcpurges;       /* shadowing purges on proto chain */
+# define PCMETER(x)     x
 #else
-# define PCMETER(x)      /* nothing */
+# define PCMETER(x)     ((void)0)
 #endif
 } JSPropertyCache;
 
-#define PROPERTY_CACHE_FILL(cache, obj, id, sprop)                            \
-    JS_BEGIN_MACRO                                                            \
-        JSPropertyCache *cache_ = (cache);                                    \
-        if (!cache_->disabled) {                                              \
-            uintN hashIndex_ = (uintN) PROPERTY_CACHE_HASH(obj, id);          \
-            JSPropertyCacheEntry *pce_ = &cache_->table[hashIndex_];          \
-            JSPropertyCacheEntry entry_;                                      \
-            JSScopeProperty *pce_sprop_;                                      \
-            PCE_LOAD(cache_, pce_, entry_);                                   \
-            pce_sprop_ = PCE_PROPERTY(entry_);                                \
-            PCMETER(if (pce_sprop_ && pce_sprop_ != sprop)                    \
-                        cache_->recycles++);                                  \
-            PCE_OBJECT(entry_) = obj;                                         \
-            PCE_PROPERTY(entry_) = sprop;                                     \
-            cache_->empty = JS_FALSE;                                         \
-            PCMETER(cache_->fills++);                                         \
-            PCE_STORE(cache_, pce_, entry_);                                  \
-        }                                                                     \
-    JS_END_MACRO
+/*
+ * Property cache value tagging/untagging macros.
+ */
+#define PCVAL_OBJECT            0
+#define PCVAL_SLOT              1
+#define PCVAL_SPROP             2
 
-#define PROPERTY_CACHE_TEST(cache, obj, id, sprop)                            \
-    JS_BEGIN_MACRO                                                            \
-        uintN hashIndex_ = (uintN) PROPERTY_CACHE_HASH(obj, id);              \
-        JSPropertyCache *cache_ = (cache);                                    \
-        JSPropertyCacheEntry *pce_ = &cache_->table[hashIndex_];              \
-        JSPropertyCacheEntry entry_;                                          \
-        JSScopeProperty *pce_sprop_;                                          \
-        PCE_LOAD(cache_, pce_, entry_);                                       \
-        pce_sprop_ = PCE_PROPERTY(entry_);                                    \
+#define PCVAL_TAGBITS           2
+#define PCVAL_TAGMASK           JS_BITMASK(PCVAL_TAGBITS)
+#define PCVAL_TAG(v)            ((v) & PCVAL_TAGMASK)
+#define PCVAL_CLRTAG(v)         ((v) & ~(jsuword)PCVAL_TAGMASK)
+#define PCVAL_SETTAG(v,t)       ((jsuword)(v) | (t))
+
+#define PCVAL_NULL              0
+#define PCVAL_IS_NULL(v)        ((v) == PCVAL_NULL)
+
+#define PCVAL_IS_OBJECT(v)      (PCVAL_TAG(v) == PCVAL_OBJECT)
+#define PCVAL_TO_OBJECT(v)      ((JSObject *) (v))
+#define OBJECT_TO_PCVAL(obj)    ((jsuword) (obj))
+
+#define PCVAL_OBJECT_TO_JSVAL(v) OBJECT_TO_JSVAL(PCVAL_TO_OBJECT(v))
+#define JSVAL_OBJECT_TO_PCVAL(v) OBJECT_TO_PCVAL(JSVAL_TO_OBJECT(v))
+
+#define PCVAL_IS_SLOT(v)        ((v) & PCVAL_SLOT)
+#define PCVAL_TO_SLOT(v)        ((jsuint)(v) >> 1)
+#define SLOT_TO_PCVAL(i)        (((jsuword)(i) << 1) | PCVAL_SLOT)
+
+#define PCVAL_IS_SPROP(v)       (PCVAL_TAG(v) == PCVAL_SPROP)
+#define PCVAL_TO_SPROP(v)       ((JSScopeProperty *) PCVAL_CLRTAG(v))
+#define SPROP_TO_PCVAL(sprop)   PCVAL_SETTAG(sprop, PCVAL_SPROP)
+
+/*
+ * Fill property cache entry for key cx->fp->pc, optimized value word computed
+ * from obj and sprop, and entry capability forged from 24-bit OBJ_SHAPE(obj),
+ * 4-bit scopeIndex, and 4-bit protoIndex.
+ *
+ * Return the filled cache entry or JS_NO_PROP_CACHE_FILL if caching was not
+ * possible.
+ */
+extern JS_REQUIRES_STACK JSPropCacheEntry *
+js_FillPropertyCache(JSContext *cx, JSObject *obj,
+                     uintN scopeIndex, uintN protoIndex, JSObject *pobj,
+                     JSScopeProperty *sprop, JSBool adding);
+
+/*
+ * Property cache lookup macros. PROPERTY_CACHE_TEST is designed to inline the
+ * fast path in js_Interpret, so it makes "just-so" restrictions on parameters,
+ * e.g. pobj and obj should not be the same variable, since for JOF_PROP-mode
+ * opcodes, obj must not be changed because of a cache miss.
+ *
+ * On return from PROPERTY_CACHE_TEST, if atom is null then obj points to the
+ * scope chain element in which the property was found, pobj is locked, and
+ * entry is valid. If atom is non-null then no object is locked but entry is
+ * still set correctly for use, e.g., by js_FillPropertyCache and atom should
+ * be used as the id to find.
+ *
+ * We must lock pobj on a hit in order to close races with threads that might
+ * be deleting a property from its scope, or otherwise invalidating property
+ * caches (on all threads) by re-generating scope->shape.
+ */
+#define PROPERTY_CACHE_TEST(cx, pc, obj, pobj, entry, atom)                   \
+    do {                                                                      \
+        JSPropertyCache *cache_ = &JS_PROPERTY_CACHE(cx);                     \
+        uint32 kshape_ = (JS_ASSERT(OBJ_IS_NATIVE(obj)), OBJ_SHAPE(obj));     \
+        entry = &cache_->table[PROPERTY_CACHE_HASH_PC(pc, kshape_)];          \
+        PCMETER(cache_->pctestentry = entry);                                 \
         PCMETER(cache_->tests++);                                             \
-        if (pce_sprop_ &&                                                     \
-            PCE_OBJECT(entry_) == obj &&                                      \
-            pce_sprop_->id == id) {                                           \
-            sprop = pce_sprop_;                                               \
-        } else {                                                              \
-            PCMETER(cache_->misses++);                                        \
-            sprop = NULL;                                                     \
+        JS_ASSERT(&obj != &pobj);                                             \
+        if (entry->kpc == pc && entry->kshape == kshape_) {                   \
+            JSObject *tmp_;                                                   \
+            pobj = obj;                                                       \
+            JS_LOCK_OBJ(cx, pobj);                                            \
+            JS_ASSERT(PCVCAP_TAG(entry->vcap) <= 1);                          \
+            if (PCVCAP_TAG(entry->vcap) == 1 &&                               \
+                (tmp_ = LOCKED_OBJ_GET_PROTO(pobj)) != NULL &&                \
+                OBJ_IS_NATIVE(tmp_)) {                                        \
+                JS_UNLOCK_OBJ(cx, pobj);                                      \
+                pobj = tmp_;                                                  \
+                JS_LOCK_OBJ(cx, pobj);                                        \
+            }                                                                 \
+            if (PCVCAP_SHAPE(entry->vcap) == OBJ_SHAPE(pobj)) {               \
+                PCMETER(cache_->pchits++);                                    \
+                PCMETER(!PCVCAP_TAG(entry->vcap) || cache_->protopchits++);   \
+                pobj = OBJ_SCOPE(pobj)->object;                               \
+                atom = NULL;                                                  \
+                break;                                                        \
+            }                                                                 \
+            JS_UNLOCK_OBJ(cx, pobj);                                          \
         }                                                                     \
-    JS_END_MACRO
+        atom = js_FullTestPropertyCache(cx, pc, &obj, &pobj, &entry);         \
+        if (atom)                                                             \
+            PCMETER(cache_->misses++);                                        \
+    } while (0)
+
+extern JS_REQUIRES_STACK JSAtom *
+js_FullTestPropertyCache(JSContext *cx, jsbytecode *pc,
+                         JSObject **objp, JSObject **pobjp,
+                         JSPropCacheEntry **entryp);
+
+/* The property cache does not need a destructor. */
+#define js_FinishPropertyCache(cache) ((void) 0)
 
 extern void
-js_FlushPropertyCache(JSContext *cx);
+js_PurgePropertyCache(JSContext *cx, JSPropertyCache *cache);
 
 extern void
-js_DisablePropertyCache(JSContext *cx);
+js_PurgePropertyCacheForScript(JSContext *cx, JSScript *script);
 
-extern void
-js_EnablePropertyCache(JSContext *cx);
-
-extern JS_FRIEND_API(jsval *)
+/*
+ * Interpreter stack arena-pool alloc and free functions.
+ */
+extern JS_REQUIRES_STACK JS_FRIEND_API(jsval *)
 js_AllocStack(JSContext *cx, uintN nslots, void **markp);
 
-extern JS_FRIEND_API(void)
+extern JS_REQUIRES_STACK JS_FRIEND_API(void)
 js_FreeStack(JSContext *cx, void *mark);
-
-extern JSBool
-js_GetArgument(JSContext *cx, JSObject *obj, jsval id, jsval *vp);
-
-extern JSBool
-js_SetArgument(JSContext *cx, JSObject *obj, jsval id, jsval *vp);
-
-extern JSBool
-js_GetLocalVariable(JSContext *cx, JSObject *obj, jsval id, jsval *vp);
-
-extern JSBool
-js_SetLocalVariable(JSContext *cx, JSObject *obj, jsval id, jsval *vp);
-
-#ifdef DUMP_CALL_TABLE
-# define JSOPTION_LOGCALL_TOSOURCE JS_BIT(15)
-
-extern JSHashTable  *js_CallTable;
-extern size_t       js_LogCallToSourceLimit;
-
-extern void         js_DumpCallTable(JSContext *cx);
-#endif
 
 /*
  * Refresh and return fp->scopeChain.  It may be stale if block scopes are
@@ -281,22 +437,61 @@ extern JSObject *
 js_GetScopeChain(JSContext *cx, JSStackFrame *fp);
 
 /*
- * Compute the 'this' parameter for a call with nominal 'this' given by thisp
- * and arguments including argv[-1] (nominal 'this') and argv[-2] (callee).
- * Activation objects ("Call" objects not created with "new Call()", i.e.,
- * "Call" objects that have private data) may not be referred to by 'this',
- * per ECMA-262, so js_ComputeThis censors them.
+ * Given a context and a vector of [callee, this, args...] for a function that
+ * was specified with a JSFUN_THISP_PRIMITIVE flag, get the primitive value of
+ * |this| into *thisvp. In doing so, if |this| is an object, insist it is an
+ * instance of clasp and extract its private slot value to return via *thisvp.
+ *
+ * NB: this function loads and uses *vp before storing *thisvp, so the two may
+ * alias the same jsval.
+ */
+extern JSBool
+js_GetPrimitiveThis(JSContext *cx, jsval *vp, JSClass *clasp, jsval *thisvp);
+
+/*
+ * For a call with arguments argv including argv[-1] (nominal |this|) and
+ * argv[-2] (callee) replace null |this| with callee's parent, replace
+ * primitive values with the equivalent wrapper objects and censor activation
+ * objects as, per ECMA-262, they may not be referred to by |this|. argv[-1]
+ * must not be a JSVAL_VOID.
  */
 extern JSObject *
-js_ComputeThis(JSContext *cx, JSObject *thisp, jsval *argv);
+js_ComputeThis(JSContext *cx, JSBool lazy, jsval *argv);
+
+extern const uint16 js_PrimitiveTestFlags[];
+
+#define PRIMITIVE_THIS_TEST(fun,thisv)                                        \
+    (JS_ASSERT(!JSVAL_IS_VOID(thisv)),                                        \
+     JSFUN_THISP_TEST(JSFUN_THISP_FLAGS((fun)->flags),                        \
+                      js_PrimitiveTestFlags[JSVAL_TAG(thisv) - 1]))
+
+#ifdef __cplusplus /* Aargh, libgjs, bug 492720. */
+static JS_INLINE JSObject *
+js_ComputeThisForFrame(JSContext *cx, JSStackFrame *fp)
+{
+    JSObject* obj;
+    if (fp->flags & JSFRAME_COMPUTED_THIS)
+        return fp->thisp;
+    obj = js_ComputeThis(cx, JS_TRUE, fp->argv);
+    if (!obj)
+        return NULL;
+    fp->thisp = obj;
+    fp->flags |= JSFRAME_COMPUTED_THIS;
+    return obj;
+}
+#endif
 
 /*
  * NB: js_Invoke requires that cx is currently running JS (i.e., that cx->fp
- * is non-null), and that the callee, |this| parameter, and actual arguments
- * are already pushed on the stack under cx->fp->sp.
+ * is non-null), and that vp points to the callee, |this| parameter, and
+ * actual arguments of the call. [vp .. vp + 2 + argc) must belong to the last
+ * JS stack segment that js_AllocStack allocated. The function may use the
+ * space available after vp + 2 + argc in the stack segment for temporaries,
+ * so the caller should not use that space for values that must be preserved
+ * across the call.
  */
-extern JS_FRIEND_API(JSBool)
-js_Invoke(JSContext *cx, uintN argc, uintN flags);
+extern JS_REQUIRES_STACK JS_FRIEND_API(JSBool)
+js_Invoke(JSContext *cx, uintN argc, jsval *vp, uintN flags);
 
 /*
  * Consolidated js_Invoke flags simply rename certain JSFRAME_* flags, so that
@@ -312,8 +507,6 @@ js_Invoke(JSContext *cx, uintN argc, uintN flags);
  * See jsfun.h for the latter four and flag renaming macros.
  */
 #define JSINVOKE_CONSTRUCT      JSFRAME_CONSTRUCTING
-#define JSINVOKE_INTERNAL       JSFRAME_INTERNAL
-#define JSINVOKE_SKIP_CALLER    JSFRAME_SKIP_CALLER
 #define JSINVOKE_ITERATOR       JSFRAME_ITERATOR
 
 /*
@@ -339,22 +532,134 @@ extern JSBool
 js_InternalGetOrSet(JSContext *cx, JSObject *obj, jsid id, jsval fval,
                     JSAccessMode mode, uintN argc, jsval *argv, jsval *rval);
 
-extern JSBool
+extern JS_FORCES_STACK JSBool
 js_Execute(JSContext *cx, JSObject *chain, JSScript *script,
            JSStackFrame *down, uintN flags, jsval *result);
+
+extern JS_REQUIRES_STACK JSBool
+js_InvokeConstructor(JSContext *cx, uintN argc, JSBool clampReturn, jsval *vp);
+
+extern JS_REQUIRES_STACK JSBool
+js_Interpret(JSContext *cx);
+
+#define JSPROP_INITIALIZER 0x100   /* NB: Not a valid property attribute. */
 
 extern JSBool
 js_CheckRedeclaration(JSContext *cx, JSObject *obj, jsid id, uintN attrs,
                       JSObject **objp, JSProperty **propp);
 
 extern JSBool
-js_StrictlyEqual(jsval lval, jsval rval);
+js_StrictlyEqual(JSContext *cx, jsval lval, jsval rval);
 
 extern JSBool
-js_InvokeConstructor(JSContext *cx, jsval *vp, uintN argc);
+js_InternNonIntElementId(JSContext *cx, JSObject *obj, jsval idval, jsid *idp);
+
+/* Work around liveconnect building this file as C on 1.9.1 branch */
+#ifdef __cplusplus 
+
+/*
+ * Given an active context, a static scope level, and an upvar cookie, return
+ * the value of the upvar.
+ */
+extern jsval&
+js_GetUpvar(JSContext *cx, uintN level, uintN cookie);
+
+#endif
+
+/*
+ * JS_LONE_INTERPRET indicates that the compiler should see just the code for
+ * the js_Interpret function when compiling jsinterp.cpp. The rest of the code
+ * from the file should be visible only when compiling jsinvoke.cpp. It allows
+ * platform builds to optimize selectively js_Interpret when the granularity
+ * of the optimizations with the given compiler is a compilation unit.
+ *
+ * JS_STATIC_INTERPRET is the modifier for functions defined in jsinterp.cpp
+ * that only js_Interpret calls. When JS_LONE_INTERPRET is true all such
+ * functions are declared below.
+ */
+#ifndef JS_LONE_INTERPRET
+# ifdef _MSC_VER
+#  define JS_LONE_INTERPRET 0
+# else
+#  define JS_LONE_INTERPRET 1
+# endif
+#endif
+
+#if !JS_LONE_INTERPRET
+# define JS_STATIC_INTERPRET    static
+#else
+# define JS_STATIC_INTERPRET
+
+extern JS_REQUIRES_STACK jsval *
+js_AllocRawStack(JSContext *cx, uintN nslots, void **markp);
+
+extern JS_REQUIRES_STACK void
+js_FreeRawStack(JSContext *cx, void *mark);
+
+/*
+ * ECMA requires "the global object", but in embeddings such as the browser,
+ * which have multiple top-level objects (windows, frames, etc. in the DOM),
+ * we prefer fun's parent.  An example that causes this code to run:
+ *
+ *   // in window w1
+ *   function f() { return this }
+ *   function g() { return f }
+ *
+ *   // in window w2
+ *   var h = w1.g()
+ *   alert(h() == w1)
+ *
+ * The alert should display "true".
+ */
+extern JSObject *
+js_ComputeGlobalThis(JSContext *cx, JSBool lazy, jsval *argv);
+
+extern JS_REQUIRES_STACK JSBool
+js_EnterWith(JSContext *cx, jsint stackIndex);
+
+extern JS_REQUIRES_STACK void
+js_LeaveWith(JSContext *cx);
+
+extern JS_REQUIRES_STACK JSClass *
+js_IsActiveWithOrBlock(JSContext *cx, JSObject *obj, int stackDepth);
+
+/*
+ * Unwind block and scope chains to match the given depth. The function sets
+ * fp->sp on return to stackDepth.
+ */
+extern JS_REQUIRES_STACK JSBool
+js_UnwindScope(JSContext *cx, JSStackFrame *fp, jsint stackDepth,
+               JSBool normalUnwind);
 
 extern JSBool
-js_Interpret(JSContext *cx, jsbytecode *pc, jsval *result);
+js_OnUnknownMethod(JSContext *cx, jsval *vp);
+
+/*
+ * Find the results of incrementing or decrementing *vp. For pre-increments,
+ * both *vp and *vp2 will contain the result on return. For post-increments,
+ * vp will contain the original value converted to a number and vp2 will get
+ * the result. Both vp and vp2 must be roots.
+ */
+extern JSBool
+js_DoIncDec(JSContext *cx, const JSCodeSpec *cs, jsval *vp, jsval *vp2);
+
+/*
+ * Opcode tracing helper. When len is not 0, cx->fp->regs->pc[-len] gives the
+ * previous opcode.
+ */
+extern JS_REQUIRES_STACK void
+js_TraceOpcode(JSContext *cx);
+
+/*
+ * JS_OPMETER helper functions.
+ */
+extern void
+js_MeterOpcodePair(JSOp op1, JSOp op2);
+
+extern void
+js_MeterSlotOpcode(JSOp op, uint32 slot);
+
+#endif /* JS_LONE_INTERPRET */
 
 JS_END_EXTERN_C
 

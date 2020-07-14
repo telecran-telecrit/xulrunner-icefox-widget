@@ -42,7 +42,9 @@
 
 #include "nsBaseFilePicker.h"
 #include "nsString.h"
+#include "nsIURI.h"
 #include "nsVoidArray.h"
+#include <qfiledialog.h>
 
 class nsIWidget;
 class nsILocalFile;
@@ -67,7 +69,7 @@ public:
     NS_IMETHODIMP GetFilterIndex(PRInt32 *aFilterIndex);
     NS_IMETHODIMP SetFilterIndex(PRInt32 aFilterIndex);
     NS_IMETHODIMP GetFile(nsILocalFile * *aFile);
-    NS_IMETHODIMP GetFileURL(nsIFileURL * *aFileURL);
+    NS_IMETHODIMP GetFileURL(nsIURI * *aFileURL);
     NS_IMETHODIMP GetFiles(nsISimpleEnumerator * *aFiles);
     NS_IMETHODIMP Show(PRInt16 *aReturn);
 

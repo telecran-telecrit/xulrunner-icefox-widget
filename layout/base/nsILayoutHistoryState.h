@@ -36,6 +36,11 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+/*
+ * interface for container for information saved in session history when
+ * the document is not
+ */
+
 #ifndef _nsILayoutHistoryState_h
 #define _nsILayoutHistoryState_h
 
@@ -45,12 +50,12 @@
 class nsPresState;
 
 #define NS_ILAYOUTHISTORYSTATE_IID \
-{0xe6abfb7c, 0x6624, 0x4b4d, \
-{0x9d, 0xfe, 0xea, 0x62, 0xae, 0xfe, 0x03, 0x31}}
+{ 0x003919e2, 0x5e6b, 0x4d76, \
+ { 0xa9, 0x4f, 0xbc, 0x5d, 0x15, 0x5b, 0x1c, 0x67 } }
 
 class nsILayoutHistoryState : public nsISupports {
  public: 
-  NS_DEFINE_STATIC_IID_ACCESSOR(NS_ILAYOUTHISTORYSTATE_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ILAYOUTHISTORYSTATE_IID)
 
   /**
    * Set |aState| as the state object for |aKey|.
@@ -69,7 +74,21 @@ class nsILayoutHistoryState : public nsISupports {
    * Remove the state object for |aKey|.
    */
   NS_IMETHOD RemoveState(const nsCString& aKey) = 0;
+
+  /**
+   * Check whether this history has any states in it
+   */
+  NS_IMETHOD_(PRBool) HasStates() const = 0;
+
+  /**
+   * Sets whether this history can contain only scroll position history
+   * or all possible history
+   */
+   NS_IMETHOD SetScrollPositionOnly(const PRBool aFlag) = 0;
 };
+
+NS_DEFINE_STATIC_IID_ACCESSOR(nsILayoutHistoryState,
+                              NS_ILAYOUTHISTORYSTATE_IID)
 
 nsresult
 NS_NewLayoutHistoryState(nsILayoutHistoryState** aState);

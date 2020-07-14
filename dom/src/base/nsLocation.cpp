@@ -57,7 +57,6 @@
 #include "nsCOMPtr.h"
 #include "nsEscape.h"
 #include "nsJSUtils.h"
-#include "nsIScriptSecurityManager.h"
 #include "nsIDOMWindow.h"
 #include "nsIDOMDocument.h"
 #include "nsIDocument.h"
@@ -82,11 +81,16 @@ GetContextFromStack(nsIJSContextStack *aStack, JSContext **aContext)
 
   nsresult rv = iterator->Reset(aStack);
   NS_ENSURE_SUCCESS(rv, rv);
-  
+
   PRBool done;
   while (NS_SUCCEEDED(iterator->Done(&done)) && !done) {
     rv = iterator->Prev(aContext);
     NS_ASSERTION(NS_SUCCEEDED(rv), "Broken iterator implementation");
+
+    // Consider a null context the end of the line.
+    if (!*aContext) {
+      break;
+    }
 
     if (nsJSUtils::GetDynamicScriptContext(*aContext)) {
       return NS_OK;
@@ -144,7 +148,6 @@ nsLocation::~nsLocation()
 
 // QueryInterface implementation for nsLocation
 NS_INTERFACE_MAP_BEGIN(nsLocation)
-  NS_INTERFACE_MAP_ENTRY(nsIDOMNSLocation)
   NS_INTERFACE_MAP_ENTRY(nsIDOMLocation)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIDOMLocation)
   NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(Location)
@@ -219,8 +222,7 @@ nsLocation::CheckURL(nsIURI* aURI, nsIDocShellLoadInfo** aLoadInfo)
         !principal)
       return NS_ERROR_FAILURE;
     owner = do_QueryInterface(principal);
-
-    GetSourceURL(cx, getter_AddRefs(sourceURI));
+    principal->GetURI(getter_AddRefs(sourceURI));
   }
 
   // Create load info
@@ -242,7 +244,9 @@ nsLocation::CheckURL(nsIURI* aURI, nsIDocShellLoadInfo** aLoadInfo)
 
 // Walk up the docshell hierarchy and find a usable base URI. Basically 
 // anything that would allow a relative uri.
-
+// XXXbz we don't need this for javascript: URIs anymore.  Do we need
+// it for about:blank?  I would think that we don't, and that we can
+// nuke this code.
 nsresult
 nsLocation::FindUsableBaseURI(nsIURI * aBaseURI, nsIDocShell * aParent,
                               nsIURI ** aUsableURI)
@@ -423,18 +427,21 @@ NS_IMETHODIMP
 nsLocation::SetHash(const nsAString& aHash)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result = NS_OK;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   nsCOMPtr<nsIURL> url(do_QueryInterface(uri));
-
   if (url) {
-    url->SetRef(NS_ConvertUCS2toUTF8(aHash));
-    SetURI(url);
+    NS_ConvertUTF16toUTF8 hash(aHash);
+    if (hash.IsEmpty() || hash.First() != PRUnichar('#')) {
+      hash.Insert(PRUnichar('#'), 0);
+    }
+    rv = url->SetRef(hash);
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(url);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -464,16 +471,16 @@ NS_IMETHODIMP
 nsLocation::SetHost(const nsAString& aHost)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   if (uri) {
-    uri->SetHostPort(NS_ConvertUCS2toUTF8(aHost));
-    SetURI(uri);
+    rv = uri->SetHostPort(NS_ConvertUTF16toUTF8(aHost));
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(uri);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -503,16 +510,16 @@ NS_IMETHODIMP
 nsLocation::SetHostname(const nsAString& aHostname)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   if (uri) {
-    uri->SetHost(NS_ConvertUCS2toUTF8(aHostname));
-    SetURI(uri);
+    rv = uri->SetHost(NS_ConvertUTF16toUTF8(aHostname));
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(uri);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -682,16 +689,16 @@ NS_IMETHODIMP
 nsLocation::SetPathname(const nsAString& aPathname)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result = NS_OK;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   if (uri) {
-    uri->SetPath(NS_ConvertUCS2toUTF8(aPathname));
-    SetURI(uri);
+    rv = uri->SetPath(NS_ConvertUTF16toUTF8(aPathname));
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(uri);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -725,13 +732,11 @@ NS_IMETHODIMP
 nsLocation::SetPort(const nsAString& aPort)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result = NS_OK;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   if (uri) {
     // perhaps use nsReadingIterators at some point?
-    NS_ConvertUCS2toUTF8 portStr(aPort);
+    NS_ConvertUTF16toUTF8 portStr(aPort);
     const char *buf = portStr.get();
     PRInt32 port = -1;
 
@@ -744,11 +749,13 @@ nsLocation::SetPort(const nsAString& aPort)
       }
     }
 
-    uri->SetPort(port);
-    SetURI(uri);
+    rv = uri->SetPort(port);
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(uri);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -779,16 +786,16 @@ NS_IMETHODIMP
 nsLocation::SetProtocol(const nsAString& aProtocol)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result = NS_OK;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   if (uri) {
-    uri->SetScheme(NS_ConvertUCS2toUTF8(aProtocol));
-    SetURI(uri);
+    rv = uri->SetScheme(NS_ConvertUTF16toUTF8(aProtocol));
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(uri);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -821,17 +828,17 @@ NS_IMETHODIMP
 nsLocation::SetSearch(const nsAString& aSearch)
 {
   nsCOMPtr<nsIURI> uri;
-  nsresult result = NS_OK;
-
-  result = GetWritableURI(getter_AddRefs(uri));
+  nsresult rv = GetWritableURI(getter_AddRefs(uri));
 
   nsCOMPtr<nsIURL> url(do_QueryInterface(uri));
   if (url) {
-    result = url->SetQuery(NS_ConvertUCS2toUTF8(aSearch));
-    SetURI(uri);
+    rv = url->SetQuery(NS_ConvertUTF16toUTF8(aSearch));
+    if (NS_SUCCEEDED(rv)) {
+      SetURI(uri);
+    }
   }
 
-  return result;
+  return rv;
 }
 
 NS_IMETHODIMP
@@ -840,6 +847,27 @@ nsLocation::Reload(PRBool aForceget)
   nsresult rv;
   nsCOMPtr<nsIDocShell> docShell(do_QueryReferent(mDocShell));
   nsCOMPtr<nsIWebNavigation> webNav(do_QueryInterface(docShell));
+  nsCOMPtr<nsPIDOMWindow> window(do_GetInterface(docShell));
+
+  if (window && window->IsHandlingResizeEvent()) {
+    // location.reload() was called on a window that is handling a
+    // resize event. Sites do this since Netscape 4.x needed it, but
+    // we don't, and it's a horrible experience for nothing. In stead
+    // of reloading the page, just clear style data and reflow the
+    // page since some sites may use this trick to work around gecko
+    // reflow bugs, and this should have the same effect.
+
+    nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
+
+    nsIPresShell *shell;
+    nsPresContext *pcx;
+    if (doc && (shell = doc->GetPrimaryShell()) &&
+        (pcx = shell->GetPresContext())) {
+      pcx->RebuildAllStyleData(NS_STYLE_HINT_REFLOW);
+    }
+
+    return NS_OK;
+  }
 
   if (webNav) {
     PRUint32 reloadFlags = nsIWebNavigation::LOAD_FLAGS_NONE;
@@ -860,63 +888,6 @@ nsLocation::Reload(PRBool aForceget)
   }
 
   return rv;
-}
-
-NS_IMETHODIMP
-nsLocation::Reload()
-{
-  nsCOMPtr<nsIXPCNativeCallContext> ncc;
-  nsresult rv = nsContentUtils::XPConnect()->
-    GetCurrentNativeCallContext(getter_AddRefs(ncc));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  if (!ncc)
-    return NS_ERROR_NOT_AVAILABLE;
-
-  nsCOMPtr<nsIDocShell> docShell(do_QueryReferent(mDocShell));
-  nsCOMPtr<nsPIDOMWindow> window(do_GetInterface(docShell));
-
-  if (window && window->IsHandlingResizeEvent()) {
-    // location.reload() was called on a window that is handling a
-    // resize event. Sites do this since Netscape 4.x needed it, but
-    // we don't, and it's a horrible experience for nothing. In stead
-    // of reloading the page, just clear style data and reflow the
-    // page since some sites may use this trick to work around gecko
-    // reflow bugs, and this should have the same effect.
-
-    nsCOMPtr<nsIDocument> doc(do_QueryInterface(window->GetExtantDocument()));
-
-    nsIPresShell *shell;
-    nsPresContext *pcx;
-    if (doc && (shell = doc->GetShellAt(0)) &&
-        (pcx = shell->GetPresContext())) {
-      pcx->ClearStyleDataAndReflow();
-    }
-
-    return NS_OK;
-  }
-
-  PRBool force_get = PR_FALSE;
-
-  PRUint32 argc;
-
-  ncc->GetArgc(&argc);
-
-  if (argc > 0) {
-    jsval *argv = nsnull;
-
-    ncc->GetArgvPtr(&argv);
-    NS_ENSURE_TRUE(argv, NS_ERROR_UNEXPECTED);
-
-    JSContext *cx = nsnull;
-
-    rv = ncc->GetJSContext(&cx);
-    NS_ENSURE_SUCCESS(rv, rv);
-
-    JS_ValueToBoolean(cx, argv[0], &force_get);
-  }
-
-  return Reload(force_get);
 }
 
 NS_IMETHODIMP
@@ -1018,20 +989,6 @@ nsLocation::GetSourceBaseURL(JSContext* cx, nsIURI** sourceURL)
   nsresult rv = GetSourceDocument(cx, getter_AddRefs(doc));
   if (doc) {
     NS_IF_ADDREF(*sourceURL = doc->GetBaseURI());
-  } else {
-    *sourceURL = nsnull;
-  }
-
-  return rv;
-}
-
-nsresult
-nsLocation::GetSourceURL(JSContext* cx, nsIURI** sourceURL)
-{
-  nsCOMPtr<nsIDocument> doc;
-  nsresult rv = GetSourceDocument(cx, getter_AddRefs(doc));
-  if (doc) {
-    NS_IF_ADDREF(*sourceURL = doc->GetDocumentURI());
   } else {
     *sourceURL = nsnull;
   }

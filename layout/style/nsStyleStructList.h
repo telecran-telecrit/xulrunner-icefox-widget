@@ -38,6 +38,11 @@
  * ***** END LICENSE BLOCK ***** */
 
 /*
+ * list of structs that contain the data provided by nsStyleContext, the
+ * internal API for computed style data for an element
+ */
+
+/*
  * This file is intended to be used by different parts of the code, with
  * the STYLE_STRUCT macro (or the STYLE_STRUCT_INHERITED and
  * STYLE_STRUCT_RESET pair of macros) defined in different ways.
@@ -67,11 +72,11 @@
   STYLE_STRUCT_TEST_CODE(      if (STYLE_STRUCT_TEST == 0) {)
 STYLE_STRUCT_INHERITED(Font, CheckFontCallback, (SSARG_PRESCONTEXT))
   STYLE_STRUCT_TEST_CODE(      } else {)
-STYLE_STRUCT_INHERITED(Color, nsnull, (SSARG_PRESCONTEXT))
+STYLE_STRUCT_INHERITED(Color, CheckColorCallback, (SSARG_PRESCONTEXT))
   STYLE_STRUCT_TEST_CODE(      })
   STYLE_STRUCT_TEST_CODE(    } else {)
   STYLE_STRUCT_TEST_CODE(      if (STYLE_STRUCT_TEST == 2) {)
-STYLE_STRUCT_RESET(Background, nsnull, (SSARG_PRESCONTEXT))
+STYLE_STRUCT_RESET(Background, nsnull, ())
   STYLE_STRUCT_TEST_CODE(      } else {)
 STYLE_STRUCT_INHERITED(List, nsnull, ())
   STYLE_STRUCT_TEST_CODE(      })
@@ -126,7 +131,7 @@ STYLE_STRUCT_RESET(Margin, nsnull, ())
   STYLE_STRUCT_TEST_CODE(    if (STYLE_STRUCT_TEST == 16) {)
 STYLE_STRUCT_RESET(Padding, nsnull, ())
   STYLE_STRUCT_TEST_CODE(    } else {)
-STYLE_STRUCT_RESET(Border, nsnull, ())
+STYLE_STRUCT_RESET(Border, nsnull, (SSARG_PRESCONTEXT))
   STYLE_STRUCT_TEST_CODE(    })
   STYLE_STRUCT_TEST_CODE(  } else {)
   STYLE_STRUCT_TEST_CODE(    if (STYLE_STRUCT_TEST == 18) {)
@@ -148,7 +153,7 @@ STYLE_STRUCT_RESET(SVGReset,nsnull, ())
   STYLE_STRUCT_TEST_CODE(} else {)
   STYLE_STRUCT_TEST_CODE(  NS_ASSERTION(STYLE_STRUCT_TEST == 22, "out of range");)
 #endif
-  STYLE_STRUCT_RESET(Column, nsnull, ())
+  STYLE_STRUCT_RESET(Column, nsnull, (SSARG_PRESCONTEXT))
 STYLE_STRUCT_TEST_CODE(})
       
 #ifdef UNDEF_STYLE_STRUCT_INHERITED

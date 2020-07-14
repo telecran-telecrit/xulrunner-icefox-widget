@@ -174,18 +174,6 @@ ifndef PACKAGE
     PACKAGE = .
 endif
 
-ALL_TRASH =	$(TARGETS) $(OBJS) $(OBJDIR) LOGS TAGS $(GARBAGE) \
-		$(NOSUCHFILE) $(JDK_HEADER_CFILES) $(JDK_STUB_CFILES) \
-		$(JRI_HEADER_CFILES) $(JRI_STUB_CFILES) $(JNI_HEADERS) \
-		$(JMC_STUBS) $(JMC_HEADERS) $(JMC_EXPORT_FILES) \
-		so_locations _gen _jmc _jri _jni _stubs \
-		$(wildcard $(JAVA_DESTPATH)/$(PACKAGE)/*.class) \
-		$(BUILT_SRCS)
-
-ifdef JDIRS
-    ALL_TRASH += $(addprefix $(JAVA_DESTPATH)/,$(JDIRS))
-endif
-
 ifdef NSBUILDROOT
     JDK_GEN_DIR  = $(SOURCE_XP_DIR)/_gen
     JMC_GEN_DIR  = $(SOURCE_XP_DIR)/_jmc
@@ -200,12 +188,30 @@ else
     JDK_STUB_DIR = _stubs
 endif
 
-#
-# If this is an "official" build, try to build everything.
-# I.e., don't exit on errors.
-#
+ALL_TRASH =	$(TARGETS) $(OBJS) $(OBJDIR) LOGS TAGS $(GARBAGE) \
+		so_locations $(BUILT_SRCS) $(NOSUCHFILE)
 
-ifdef BUILD_OFFICIAL
+ifdef NS_USE_JDK
+    ALL_TRASH += $(JDK_HEADER_CFILES) $(JDK_STUB_CFILES) \
+		 $(JMC_HEADERS) $(JMC_STUBS) $(JMC_EXPORT_FILES) \
+		 $(JNI_HEADERS) \
+		 $(JRI_HEADER_CFILES) $(JRI_STUB_CFILES) \
+		 $(JDK_GEN_DIR) $(JMC_GEN_DIR) $(JNI_GEN_DIR) \
+		 $(JRI_GEN_DIR) $(JDK_STUB_DIR)
+
+ifdef JAVA_DESTPATH
+    ALL_TRASH += $(wildcard $(JAVA_DESTPATH)/$(PACKAGE)/*.class)
+ifdef JDIRS
+    ALL_TRASH += $(addprefix $(JAVA_DESTPATH)/,$(JDIRS))
+endif
+else # !JAVA_DESTPATH
+    ALL_TRASH += $(wildcard $(PACKAGE)/*.class) $(JDIRS)
+endif
+
+endif #NS_USE_JDK
+
+ifdef NSS_BUILD_CONTINUE_ON_ERROR
+# Try to build everything. I.e., don't exit on errors.
     EXIT_ON_ERROR		= +e
     CLICK_STOPWATCH		= date
 else

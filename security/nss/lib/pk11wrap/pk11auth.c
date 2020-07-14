@@ -84,6 +84,8 @@ pk11_CheckPassword(PK11SlotInfo *slot,char *pw)
     CK_RV crv;
     SECStatus rv;
     int64 currtime = PR_Now();
+    PRBool mustRetry;
+    int retry = 0;
 
     if (slot->protectedAuthPath) {
 	len = 0;
@@ -95,27 +97,48 @@ pk11_CheckPassword(PK11SlotInfo *slot,char *pw)
 	len = PORT_Strlen(pw);
     }
 
-    PK11_EnterSlotMonitor(slot);
-    crv = PK11_GETTAB(slot)->C_Login(slot->session,CKU_USER,
+    do {
+	PK11_EnterSlotMonitor(slot);
+	crv = PK11_GETTAB(slot)->C_Login(slot->session,CKU_USER,
 						(unsigned char *)pw,len);
-    slot->lastLoginCheck = 0;
-    PK11_ExitSlotMonitor(slot);
-    switch (crv) {
-    /* if we're already logged in, we're good to go */
-    case CKR_OK:
-	slot->authTransact = PK11_Global.transaction;
-    case CKR_USER_ALREADY_LOGGED_IN:
-	slot->authTime = currtime;
-	rv = SECSuccess;
-	break;
-    case CKR_PIN_INCORRECT:
-	PORT_SetError(SEC_ERROR_BAD_PASSWORD);
-	rv = SECWouldBlock; /* everything else is ok, only the pin is bad */
-	break;
-    default:
-	PORT_SetError(PK11_MapError(crv));
-	rv = SECFailure; /* some failure we can't fix by retrying */
-    }
+	slot->lastLoginCheck = 0;
+	mustRetry = PR_FALSE;
+	PK11_ExitSlotMonitor(slot);
+	switch (crv) {
+	/* if we're already logged in, we're good to go */
+	case CKR_OK:
+	    slot->authTransact = PK11_Global.transaction;
+	    /* Fall through */
+	case CKR_USER_ALREADY_LOGGED_IN:
+	    slot->authTime = currtime;
+	    rv = SECSuccess;
+	    break;
+	case CKR_PIN_INCORRECT:
+	    PORT_SetError(SEC_ERROR_BAD_PASSWORD);
+	    rv = SECWouldBlock; /* everything else is ok, only the pin is bad */
+	    break;
+	/* someone called reset while we fetched the password, try again once
+	 * if the token is still there. */
+	case CKR_SESSION_HANDLE_INVALID:
+	case CKR_SESSION_CLOSED:
+	    if (retry++ == 0) {
+		rv = PK11_InitToken(slot,PR_FALSE);
+		if (rv == SECSuccess) {
+		    if (slot->session != CK_INVALID_SESSION) {
+			mustRetry = PR_TRUE;
+		    } else {
+			PORT_SetError(PK11_MapError(crv));
+			rv = SECFailure;
+		    }
+		}
+		break;
+	    }
+	    /* Fall through */
+	default:
+	    PORT_SetError(PK11_MapError(crv));
+	    rv = SECFailure; /* some failure we can't fix by retrying */
+	}
+    } while (mustRetry);
     return rv;
 }
 
@@ -124,7 +147,7 @@ pk11_CheckPassword(PK11SlotInfo *slot,char *pw)
  * we are really checking the password.
  */
 SECStatus
-PK11_CheckUserPassword(PK11SlotInfo *slot,char *pw)
+PK11_CheckUserPassword(PK11SlotInfo *slot, const char *pw)
 {
     int len = 0;
     CK_RV crv;
@@ -139,6 +162,21 @@ PK11_CheckUserPassword(PK11SlotInfo *slot,char *pw)
 	return SECFailure;
     } else {
 	len = PORT_Strlen(pw);
+    }
+
+    /*
+     * If the token does't need a login, don't try to relogin beause the
+     * effect is undefined. It's not clear what it means to check a non-empty
+     * password with such a token, so treat that as an error.
+     */
+    if (!slot->needLogin) {
+        if (len == 0) {
+            rv = SECSuccess;
+        } else {
+            PORT_SetError(SEC_ERROR_BAD_PASSWORD);
+            rv = SECFailure;
+        }
+        return rv;
     }
 
     /* force a logout */
@@ -385,7 +423,7 @@ PK11_VerifyPW(PK11SlotInfo *slot,char *pw)
  * initialize a user PIN Value
  */
 SECStatus
-PK11_InitPin(PK11SlotInfo *slot,char *ssopw, char *userpw)
+PK11_InitPin(PK11SlotInfo *slot, const char *ssopw, const char *userpw)
 {
     CK_SESSION_HANDLE rwsession = CK_INVALID_SESSION;
     CK_RV crv;
@@ -437,11 +475,13 @@ done:
     if (rv == SECSuccess) {
         /* update our view of the world */
         PK11_InitToken(slot,PR_TRUE);
-	PK11_EnterSlotMonitor(slot);
-    	PK11_GETTAB(slot)->C_Login(slot->session,CKU_USER,
+	if (slot->needLogin) {
+	    PK11_EnterSlotMonitor(slot);
+	    PK11_GETTAB(slot)->C_Login(slot->session,CKU_USER,
 						(unsigned char *)userpw,len);
-	slot->lastLoginCheck = 0;
-	PK11_ExitSlotMonitor(slot);
+	    slot->lastLoginCheck = 0;
+	    PK11_ExitSlotMonitor(slot);
+	}
     }
     return rv;
 }
@@ -450,18 +490,21 @@ done:
  * Change an existing user password
  */
 SECStatus
-PK11_ChangePW(PK11SlotInfo *slot,char *oldpw, char *newpw)
+PK11_ChangePW(PK11SlotInfo *slot, const char *oldpw, const char *newpw)
 {
     CK_RV crv;
     SECStatus rv = SECFailure;
-    int newLen;
-    int oldLen;
+    int newLen = 0;
+    int oldLen = 0;
     CK_SESSION_HANDLE rwsession;
 
-    if (newpw == NULL) newpw = "";
-    if (oldpw == NULL) oldpw = "";
-    newLen = PORT_Strlen(newpw);
-    oldLen = PORT_Strlen(oldpw);
+    /* use NULL values to trigger the protected authentication path */
+    if (!slot->protectedAuthPath) {
+	if (newpw == NULL) newpw = "";
+	if (oldpw == NULL) oldpw = "";
+    }
+    if (newpw) newLen = PORT_Strlen(newpw);
+    if (oldpw) oldLen = PORT_Strlen(oldpw);
 
     /* get a rwsession */
     rwsession = PK11_GetRWSession(slot);
@@ -594,7 +637,6 @@ PK11_DoPassword(PK11SlotInfo *slot, PRBool loadCerts, void *wincx)
 	if (rv != SECWouldBlock) break;
     }
     if (rv == SECSuccess) {
-	rv = pk11_CheckVerifyTest(slot);
 	if (!PK11_IsFriendly(slot)) {
 	    nssTrustDomain_UpdateCachedTokenCerts(slot->nssToken->trustDomain,
 	                                      slot->nssToken);
@@ -606,7 +648,7 @@ PK11_DoPassword(PK11SlotInfo *slot, PRBool loadCerts, void *wincx)
 void PK11_LogoutAll(void)
 {
     SECMODListLock *lock = SECMOD_GetDefaultModuleListLock();
-    SECMODModuleList *modList = SECMOD_GetDefaultModuleList();
+    SECMODModuleList *modList;
     SECMODModuleList *mlp = NULL;
     int i;
 
@@ -616,6 +658,7 @@ void PK11_LogoutAll(void)
     }
 
     SECMOD_GetReadLock(lock);
+    modList = SECMOD_GetDefaultModuleList();
     /* find the number of entries */
     for (mlp = modList; mlp != NULL; mlp = mlp->next) {
 	for (i=0; i < mlp->module->slotCount; i++) {

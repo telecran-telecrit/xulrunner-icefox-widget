@@ -49,10 +49,8 @@
 #include "prtypes.h"
 #endif
 
-#if defined(XP_MAC) || defined(XP_MACOSX)
-#   include <Quickdraw.h>
-#   include <Events.h>
-#   include <MacWindows.h>
+#ifdef XP_MACOSX
+#   include <Carbon/Carbon.h>
 #endif
 
 #if defined(XP_UNIX) && defined(MOZ_X11)
@@ -116,9 +114,11 @@ RCDATA NS_INFO_ProductName       { "NPAVI32 Dynamic Link Library\0" }
 ////////////////////////////////////////////////////////////////////////////////
 // Structures and definitions
 
-#ifdef XP_MAC
+#if !defined(__LP64__)
+#if defined(XP_MAC) || defined(XP_MACOSX)
 #pragma options align=mac68k
 #endif
+#endif /* __LP64__ */
 
 typedef const char*     nsMIMEType;
 
@@ -205,7 +205,11 @@ enum nsPluginInstanceVariable {
     nsPluginInstanceVariable_CallSetWindowAfterDestroyBool = 6,
     nsPluginInstanceVariable_ScriptableInstance      = 10,
     nsPluginInstanceVariable_ScriptableIID           = 11,
-    nsPluginInstanceVariable_NeedsXEmbed             = 14
+    nsPluginInstanceVariable_NeedsXEmbed             = 14,
+    nsPluginInstanceVariable_WantsAllNetworkStreams  = 18
+#ifdef XP_MACOSX
+    , nsPluginInstanceVariable_DrawingModel          = 20
+#endif
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -232,15 +236,35 @@ enum nsPluginWindowType {
     nsPluginWindowType_Drawable
 };
 
-#if defined(XP_MAC) || defined(XP_MACOSX)
+#ifdef XP_MACOSX
 
-struct nsPluginPort {
+typedef WindowRef       nsPluginPlatformWindowRef;
+
+#ifndef NP_NO_QUICKDRAW
+struct nsPluginPortQD {
     CGrafPtr     port;   /* Grafport */
     PRInt32     portx;  /* position inside the topmost window */
     PRInt32     porty;
 };
-typedef RgnHandle       nsPluginRegion;
-typedef WindowRef       nsPluginPlatformWindowRef;
+
+typedef RgnHandle       nsPluginRegionQD;
+#endif
+
+struct nsPluginPortCG {
+    CGContextRef context;
+    WindowRef window;
+};
+
+typedef CGPathRef       nsPluginRegionCG;
+
+typedef union nsPluginPort {
+#ifndef NP_NO_QUICKDRAW
+  nsPluginPortQD qdPort;
+#endif
+  nsPluginPortCG cgPort;
+} nsPluginPort;
+
+typedef void* nsPluginRegion;
 
 #elif defined(XP_WIN) || defined(XP_OS2)
 
@@ -271,7 +295,7 @@ struct nsPluginWindow {
     PRUint32      width;        /* Maximum window size */
     PRUint32      height;
     nsPluginRect  clipRect;     /* Clipping rectangle in port coordinates */
-                                /* Used by MAC only.			  */
+                                /* Used by Mac OS X only.			  */
 #if defined(XP_UNIX) && !defined(XP_MACOSX)
     void*         ws_info;      /* Platform-dependent additonal data */
 #endif /* XP_UNIX */
@@ -302,7 +326,7 @@ struct nsPluginPrint {
 
 struct nsPluginEvent {
 
-#if defined(XP_MAC) || defined(XP_MACOSX)
+#ifdef XP_MACOSX
     EventRecord*                event;
     nsPluginPlatformWindowRef   window;
 
@@ -328,7 +352,7 @@ struct nsPluginEvent {
  *  (These need to be kept in sync with the events defined in npapi.h.)
  */
 enum nsPluginEventType {
-#if defined(XP_MAC) || defined(XP_MACOSX)
+#ifdef XP_MACOSX
     nsPluginEventType_GetFocusEvent = (osEvt + 16),
     nsPluginEventType_LoseFocusEvent,
     nsPluginEventType_AdjustCursorEvent,
@@ -336,7 +360,7 @@ enum nsPluginEventType {
     nsPluginEventType_ClippingChangedEvent,
     nsPluginEventType_ScrollingBeginsEvent,
     nsPluginEventType_ScrollingEndsEvent,
-#endif /* XP_MAC || XP_MACOSX */
+#endif /* XP_MACOSX */
     nsPluginEventType_Idle                 = 0
 };
 
@@ -384,9 +408,11 @@ class nsIWindowlessPluginInstancePeer;  // subclass of nsIPluginInstancePeer for
 class nsIPluginTagInfo;                 // describes html tag (accessible from nsIPluginInstancePeer)
 ////////////////////////////////////////////////////////////////////////////////
 
-#ifdef XP_MAC
+#if !defined(__LP64__)
+#if defined(XP_MAC) || defined(XP_MACOSX)
 #pragma options align=reset
 #endif
+#endif /* __LP64__ */
 
 #endif /* RC_INVOKED */
 #ifdef __OS2__

@@ -78,7 +78,7 @@ protected:
                        modificationType aModType);
   PRInt32 GetModifyNestCount() { return mModifyNestCount; }
 private:
-  virtual void OnDidModify(){}; // hook that will be called before observers are notified
+  virtual void OnDidModify(){} // hook that will be called before observers are notified
   
   nsSmallVoidArray mObservers;
   PRInt32 mModifyNestCount;
@@ -87,7 +87,7 @@ private:
 // Class that will automatically call WillModify and DidModify in its ctor
 // and dtor respectively (for functions that have multiple exit points).
 
-class nsSVGValueAutoNotifier
+class NS_STACK_CLASS nsSVGValueAutoNotifier
 {
 public:
   nsSVGValueAutoNotifier(nsSVGValue* aVal,

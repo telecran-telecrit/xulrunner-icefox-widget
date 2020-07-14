@@ -163,10 +163,6 @@ static void _pr_SetNativeThreadsOnlyMode(void)
 }
 #endif
 
-#if !defined(_PR_INET6) || defined(_PR_INET6_PROBE)
-extern PRStatus _pr_init_ipv6(void);
-#endif
-
 static void _PR_InitStuff(void)
 {
 
@@ -237,20 +233,16 @@ static void _PR_InitStuff(void)
     _PR_InitCMon();
     _PR_InitIO();
     _PR_InitNet();
+    _PR_InitTime();
     _PR_InitLog();
     _PR_InitLinker();
     _PR_InitCallOnce();
     _PR_InitDtoa();
-    _PR_InitTime();
     _PR_InitMW();
     _PR_InitRWLocks();
 
     nspr_InitializePRErrorTable();
 
-#if !defined(_PR_INET6) || defined(_PR_INET6_PROBE)
-	_pr_init_ipv6();
-#endif
-	
     _PR_MD_FINAL_INIT();
 }
 
@@ -303,20 +295,12 @@ PR_IMPLEMENT(void) PR_UnblockClockInterrupts(void)
 PR_IMPLEMENT(void) PR_Init(
     PRThreadType type, PRThreadPriority priority, PRUintn maxPTDs)
 {
-#if defined(XP_MAC)
-#pragma unused (type, priority, maxPTDs)
-#endif
-
     _PR_ImplicitInitialization();
 }
 
 PR_IMPLEMENT(PRIntn) PR_Initialize(
     PRPrimordialFn prmain, PRIntn argc, char **argv, PRUintn maxPTDs)
 {
-#if defined(XP_MAC)
-#pragma unused (maxPTDs)
-#endif
-
     PRIntn rv;
     _PR_ImplicitInitialization();
     rv = prmain(argc, argv);
@@ -410,6 +394,11 @@ PR_IMPLEMENT(PRStatus) PR_Cleanup()
         while (_pr_userActive > _pr_primordialExitCount) {
             PR_WaitCondVar(_pr_primordialExitCVar, PR_INTERVAL_NO_TIMEOUT);
         }
+        if (me->flags & _PR_SYSTEM) {
+            _pr_systemActive--;
+        } else {
+            _pr_userActive--;
+        }
         PR_Unlock(_pr_activeLock);
 
 #ifdef IRIX
@@ -420,11 +409,15 @@ PR_IMPLEMENT(PRStatus) PR_Cleanup()
     	PR_ASSERT((_PR_IS_NATIVE_THREAD(me)) || (me->cpu->id == 0));
 #endif
 
+        _PR_MD_EARLY_CLEANUP();
+
         _PR_CleanupMW();
         _PR_CleanupTime();
         _PR_CleanupDtoa();
         _PR_CleanupCallOnce();
 		_PR_ShutdownLinker();
+        _PR_CleanupNet();
+        _PR_CleanupIO();
         /* Release the primordial thread's private data, etc. */
         _PR_CleanupThread(me);
 
@@ -454,12 +447,11 @@ PR_IMPLEMENT(PRStatus) PR_Cleanup()
          * Ideally, for each _PR_InitXXX(), there should be a corresponding
          * _PR_XXXCleanup() that we can call here.
          */
-        _PR_CleanupNet();
-        _PR_CleanupIO();
 #ifdef WINNT
         _PR_CleanupCPUs();
 #endif
         _PR_CleanupThreads();
+        _PR_CleanupCMon();
         PR_DestroyLock(_pr_sleeplock);
         _pr_sleeplock = NULL;
         _PR_CleanupLayerCache();
@@ -589,8 +581,12 @@ PR_ProcessAttrSetInheritableFD(
 #define FD_INHERIT_BUFFER_INCR 128
     /* The length of "NSPR_INHERIT_FDS=" */
 #define NSPR_INHERIT_FDS_STRLEN 17
-    /* The length of osfd (PRInt32) printed in hexadecimal with 0x prefix */
+    /* The length of osfd (PROsfd) printed in hexadecimal with 0x prefix */
+#ifdef _WIN64
+#define OSFD_STRLEN 18
+#else
 #define OSFD_STRLEN 10
+#endif
     /* The length of fd type (PRDescType) printed in decimal */
 #define FD_TYPE_STRLEN 1
     PRSize newSize;
@@ -647,10 +643,10 @@ PR_ProcessAttrSetInheritableFD(
     freeSize = attr->fdInheritBufferSize - attr->fdInheritBufferUsed;
     if (0 == attr->fdInheritBufferUsed) {
         nwritten = PR_snprintf(cur, freeSize,
-                "NSPR_INHERIT_FDS=%s:%d:0x%lx",
+                "NSPR_INHERIT_FDS=%s:%d:0x%" PR_PRIxOSFD,
                 name, (PRIntn)fd->methods->file_type, fd->secret->md.osfd);
     } else {
-        nwritten = PR_snprintf(cur, freeSize, ":%s:%d:0x%lx",
+        nwritten = PR_snprintf(cur, freeSize, ":%s:%d:0x%" PR_PRIxOSFD,
                 name, (PRIntn)fd->methods->file_type, fd->secret->md.osfd);
     }
     attr->fdInheritBufferUsed += nwritten; 
@@ -664,7 +660,7 @@ PR_IMPLEMENT(PRFileDesc *) PR_GetInheritedFD(
     const char *envVar;
     const char *ptr;
     int len = strlen(name);
-    PRInt32 osfd;
+    PROsfd osfd;
     int nColons;
     PRIntn fileType;
 
@@ -678,7 +674,7 @@ PR_IMPLEMENT(PRFileDesc *) PR_GetInheritedFD(
     while (1) {
         if ((ptr[len] == ':') && (strncmp(ptr, name, len) == 0)) {
             ptr += len + 1;
-            PR_sscanf(ptr, "%d:0x%lx", &fileType, &osfd);
+            PR_sscanf(ptr, "%d:0x%" PR_SCNxOSFD, &fileType, &osfd);
             switch ((PRDescType)fileType) {
                 case PR_DESC_FILE:
                     fd = PR_ImportFile(osfd);
@@ -807,7 +803,7 @@ PR_IMPLEMENT(PRStatus) PR_CallOnce(
     if (!_pr_initialized) _PR_ImplicitInitialization();
 
     if (!once->initialized) {
-	if (PR_AtomicSet(&once->inProgress, 1) == 0) {
+	if (PR_ATOMIC_SET(&once->inProgress, 1) == 0) {
 	    once->status = (*func)();
 	    PR_Lock(mod_init.ml);
 	    once->initialized = 1;
@@ -820,6 +816,10 @@ PR_IMPLEMENT(PRStatus) PR_CallOnce(
             }
 	    PR_Unlock(mod_init.ml);
 	}
+    } else {
+        if (PR_SUCCESS != once->status) {
+            PR_SetError(PR_CALL_ONCE_ERROR, 0);
+        }
     }
     return once->status;
 }
@@ -832,7 +832,7 @@ PR_IMPLEMENT(PRStatus) PR_CallOnceWithArg(
     if (!_pr_initialized) _PR_ImplicitInitialization();
 
     if (!once->initialized) {
-	if (PR_AtomicSet(&once->inProgress, 1) == 0) {
+	if (PR_ATOMIC_SET(&once->inProgress, 1) == 0) {
 	    once->status = (*func)(arg);
 	    PR_Lock(mod_init.ml);
 	    once->initialized = 1;
@@ -845,6 +845,10 @@ PR_IMPLEMENT(PRStatus) PR_CallOnceWithArg(
             }
 	    PR_Unlock(mod_init.ml);
 	}
+    } else {
+        if (PR_SUCCESS != once->status) {
+            PR_SetError(PR_CALL_ONCE_ERROR, 0);
+        }
     }
     return once->status;
 }
@@ -852,13 +856,9 @@ PR_IMPLEMENT(PRStatus) PR_CallOnceWithArg(
 PRBool _PR_Obsolete(const char *obsolete, const char *preferred)
 {
 #if defined(DEBUG)
-#ifndef XP_MAC
     PR_fprintf(
         PR_STDERR, "'%s' is obsolete. Use '%s' instead.\n",
         obsolete, (NULL == preferred) ? "something else" : preferred);
-#else
-#pragma unused (obsolete, preferred)
-#endif
 #endif
     return PR_FALSE;
 }  /* _PR_Obsolete */

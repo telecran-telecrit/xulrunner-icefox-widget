@@ -20,8 +20,6 @@
  * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
- *   Lars Knoll <knoll@kde.org>
- *   Stuart Parmenter <pavlov@netscape.com>
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -43,15 +41,23 @@
 #include "nsISound.h"
 #include "nsIStreamLoader.h"
 
-class nsSound : public nsISound
+class nsSound : public nsISound,
+                public nsIStreamLoaderObserver
 {
  public:
 
   nsSound();
   virtual ~nsSound();
 
+  static void Shutdown();
+
   NS_DECL_ISUPPORTS
   NS_DECL_NSISOUND
+  NS_DECL_NSISTREAMLOADEROBSERVER
+
+private:
+  PRBool mInited;
+
 };
 
 #endif /* __nsSound_h__ */

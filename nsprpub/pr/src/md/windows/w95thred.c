@@ -38,6 +38,14 @@
 #include "primpl.h"
 #include <process.h>  /* for _beginthreadex() */
 
+#if defined(_MSC_VER) && _MSC_VER <= 1200
+/*
+ * VC++ 6.0 doesn't have DWORD_PTR.
+ */
+
+typedef DWORD DWORD_PTR;
+#endif /* _MSC_VER <= 1200 */
+
 /* --- globals ------------------------------------------------ */
 #ifdef _PR_USE_STATIC_TLS
 __declspec(thread) struct PRThread  *_pr_thread_last_run;
@@ -64,6 +72,8 @@ _PR_MD_EARLY_INIT()
 void _PR_MD_CLEANUP_BEFORE_EXIT(void)
 {
     _PR_NT_FreeSids();
+
+    _PR_MD_CleanupSockets();
 
     WSACleanup();
 
@@ -224,20 +234,35 @@ _PR_MD_EXIT(PRIntn status)
 
 PRInt32 _PR_MD_SETTHREADAFFINITYMASK(PRThread *thread, PRUint32 mask )
 {
-    int rv;
+#ifdef WINCE
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return -1;
+#else
+    DWORD_PTR rv;
 
     rv = SetThreadAffinityMask(thread->md.handle, mask);
 
     return rv?0:-1;
+#endif
 }
 
 PRInt32 _PR_MD_GETTHREADAFFINITYMASK(PRThread *thread, PRUint32 *mask)
 {
-    PRInt32 rv, system_mask;
+#ifdef WINCE
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
+    return -1;
+#else
+    BOOL rv;
+    DWORD_PTR process_mask;
+    DWORD_PTR system_mask;
 
-    rv = GetProcessAffinityMask(GetCurrentProcess(), mask, &system_mask);
-    
+    rv = GetProcessAffinityMask(GetCurrentProcess(),
+            &process_mask, &system_mask);
+    if (rv)
+        *mask = (PRUint32)process_mask;
+
     return rv?0:-1;
+#endif
 }
 
 void 

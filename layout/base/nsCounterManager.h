@@ -35,6 +35,9 @@
  * the terms of any one of the MPL, the GPL or the LGPL.
  *
  * ***** END LICENSE BLOCK ***** */
+
+/* implementation of CSS counters (for numbering things) */
+
 #ifndef nsCounterManager_h_
 #define nsCounterManager_h_
 
@@ -89,8 +92,8 @@ struct nsCounterNode : public nsGenConNode {
     // the 'content' property but offset to ensure that (reset,
     // increment, use) sort in that order.  (This slight weirdness
     // allows sharing a lot of code with 'quotes'.)
-    nsCounterNode(nsIFrame* aPseudoFrame, PRInt32 aContentIndex, Type aType)
-        : nsGenConNode(aPseudoFrame, aContentIndex)
+    nsCounterNode(PRInt32 aContentIndex, Type aType)
+        : nsGenConNode(aContentIndex)
         , mType(aType)
         , mValueAfter(0)
         , mScopeStart(nsnull)
@@ -112,14 +115,17 @@ struct nsCounterUseNode : public nsCounterNode {
     PRBool mAllCounters;
 
     // args go directly to member variables here and of nsGenConNode
-    nsCounterUseNode(nsCSSValue::Array* aCounterStyle, nsIFrame* aPseudoFrame,
+    nsCounterUseNode(nsCSSValue::Array* aCounterStyle,
                      PRUint32 aContentIndex, PRBool aAllCounters)
-        : nsCounterNode(aPseudoFrame, aContentIndex, USE)
+        : nsCounterNode(aContentIndex, USE)
         , mCounterStyle(aCounterStyle)
         , mAllCounters(aAllCounters)
     {
         NS_ASSERTION(aContentIndex >= 0, "out of range");
     }
+    
+    virtual PRBool InitTextFrame(nsGenConList* aList,
+            nsIFrame* aPseudoFrame, nsIFrame* aTextFrame);
 
     // assign the correct |mValueAfter| value to a node that has been inserted
     // Should be called immediately after calling |Insert|.
@@ -141,8 +147,7 @@ struct nsCounterChangeNode : public nsCounterNode {
                         nsCounterNode::Type aChangeType,
                         PRInt32 aChangeValue,
                         PRInt32 aPropIndex)
-        : nsCounterNode(aPseudoFrame,
-                        // Fake a content index for resets and increments
+        : nsCounterNode(// Fake a content index for resets and increments
                         // that comes before all the real content, with
                         // the resets first, in order, and then the increments.
                         aPropIndex + (aChangeType == RESET
@@ -154,6 +159,8 @@ struct nsCounterChangeNode : public nsCounterNode {
         NS_ASSERTION(aPropIndex >= 0, "out of range");
         NS_ASSERTION(aChangeType == INCREMENT || aChangeType == RESET,
                      "bad type");
+        mPseudoFrame = aPseudoFrame;
+        CheckFrameAssertions();
     }
 
     // assign the correct |mValueAfter| value to a node that has been inserted
@@ -164,13 +171,13 @@ struct nsCounterChangeNode : public nsCounterNode {
 inline nsCounterUseNode* nsCounterNode::UseNode()
 {
     NS_ASSERTION(mType == USE, "wrong type");
-    return NS_STATIC_CAST(nsCounterUseNode*, this);
+    return static_cast<nsCounterUseNode*>(this);
 }
 
 inline nsCounterChangeNode* nsCounterNode::ChangeNode()
 {
     NS_ASSERTION(mType == INCREMENT || mType == RESET, "wrong type");
-    return NS_STATIC_CAST(nsCounterChangeNode*, this);
+    return static_cast<nsCounterChangeNode*>(this);
 }
 
 inline void nsCounterNode::Calc(nsCounterList* aList)
@@ -197,14 +204,14 @@ public:
     }
 
     nsCounterNode* First() {
-        return NS_STATIC_CAST(nsCounterNode*, mFirstNode);
+        return static_cast<nsCounterNode*>(mFirstNode);
     }
 
     static nsCounterNode* Next(nsCounterNode* aNode) {
-        return NS_STATIC_CAST(nsCounterNode*, nsGenConList::Next(aNode));
+        return static_cast<nsCounterNode*>(nsGenConList::Next(aNode));
     }
     static nsCounterNode* Prev(nsCounterNode* aNode) {
-        return NS_STATIC_CAST(nsCounterNode*, nsGenConList::Prev(aNode));
+        return static_cast<nsCounterNode*>(nsGenConList::Prev(aNode));
     }
 
     static PRInt32 ValueBefore(nsCounterNode* aNode) {

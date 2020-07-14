@@ -38,8 +38,8 @@
 /**
  * MODULE NOTES:
  * @update  gess 4/8/98
- * 
- *         
+ *
+ *
  */
 
 #ifndef __NS_VIEWSOURCE_HTML_
@@ -52,15 +52,28 @@
 #include "nsDTDUtils.h"
 #include "nsParserNode.h"
 
-#define NS_VIEWSOURCE_HTML_IID      \
-  {0xb6003010, 0x7932, 0x11d2, \
-  {0x80, 0x1b, 0x0, 0x60, 0x8, 0xbf, 0xc4, 0x89 }}
-
-
 class nsIParserNode;
 class nsParser;
 class nsITokenizer;
 class nsCParserNode;
+
+class CIndirectTextToken : public CTextToken {
+public:
+  CIndirectTextToken() : CTextToken() {
+    mIndirectString=0;
+  }
+
+  void SetIndirectString(const nsSubstring& aString) {
+    mIndirectString=&aString;
+  }
+
+  virtual const nsSubstring& GetStringValue(void){
+    return (const nsSubstring&)*mIndirectString;
+  }
+
+  const nsSubstring* mIndirectString;
+};
+
 
 class CViewSourceHTML: public nsIDTD
 {
@@ -68,15 +81,15 @@ public:
 
     NS_DECL_ISUPPORTS
     NS_DECL_NSIDTD
-    
+
     CViewSourceHTML();
     virtual ~CViewSourceHTML();
 
     /**
      * Set this to TRUE if you want the DTD to verify its
      * context stack.
-     * @update	gess 7/23/98
-     * @param 
+     * @update  gess 7/23/98
+     * @param
      * @return
      */
     virtual void SetVerification(PRBool aEnable);
@@ -86,15 +99,38 @@ private:
                       const nsSubstring &aText,
                       PRInt32 attrCount,
                       PRBool aTagInError);
-    
-    nsresult WriteAttributes(PRInt32 attrCount, PRBool aOwnerInError);
-    nsresult GenerateSummary();
+
+    nsresult WriteAttributes(const nsAString& tagName, 
+        nsTokenAllocator* allocator, PRInt32 attrCount, PRBool aOwnerInError);
     void StartNewPreBlock(void);
     // Utility method for adding attributes to the nodes we generate
     void AddAttrToNode(nsCParserStartNode& aNode,
                        nsTokenAllocator* aAllocator,
                        const nsAString& aAttrName,
                        const nsAString& aAttrValue);
+
+    PRBool IsUrlAttribute(const nsAString& tagName,
+                          const nsAString& attrName, const nsAString& attrValue);
+    void WriteHrefAttribute(nsTokenAllocator* allocator, const nsAString& href);
+    nsresult CreateViewSourceURL(const nsAString& linkUrl, nsString& viewSourceUrl);
+    void WriteTextInSpan(const nsAString& text, nsTokenAllocator* allocator,
+                         const nsAString& attrName, const nsAString& attrValue);
+    void WriteTextInAnchor(const nsAString& text, nsTokenAllocator* allocator,
+                           const nsAString& attrName, const nsAString &attrValue);
+    void WriteTextInElement(const nsAString& tagName, eHTMLTags tagType,
+                            const nsAString& text, nsTokenAllocator* allocator,
+                            const nsAString& attrName, const nsAString& attrValue);
+    const nsDependentSubstring TrimTokenValue(const nsAString& tokenValue);
+    void TrimTokenValue(nsAString::const_iterator& start, 
+                        nsAString::const_iterator& end);
+    PRBool IsTokenValueTrimmableCharacter(PRUnichar ch);
+    nsresult GetBaseURI(nsIURI **result);
+    nsresult SetBaseURI(const nsAString& baseSpec);
+    static void ExpandEntities(const nsAString& textIn, nsString& textOut);
+    static void CopyPossibleEntity(nsAString::const_iterator& iter,
+                                   const nsAString::const_iterator& end,
+                                   nsAString& textBuffer);
+    static PRInt32 ToUnicode(const nsString &strNum, PRInt32 radix, PRInt32 fallback);
 
 protected:
 
@@ -103,19 +139,6 @@ protected:
     PRInt32             mLineNumber;
     nsITokenizer*       mTokenizer; // weak
 
-    PRInt32             mStartTag;
-    PRInt32             mEndTag;
-    PRInt32             mCommentTag;
-    PRInt32             mCDATATag;
-    PRInt32             mMarkupDeclaration;
-    PRInt32             mDocTypeTag;
-    PRInt32             mPITag;
-    PRInt32             mEntityTag;
-    PRInt32             mText;
-    PRInt32             mKey;
-    PRInt32             mValue;
-    PRInt32             mPopupTag;
-    PRInt32             mSummaryTag;
     PRPackedBool        mSyntaxHighlight;
     PRPackedBool        mWrapLongLines;
     PRPackedBool        mHasOpenRoot;
@@ -124,20 +147,17 @@ protected:
     nsDTDMode           mDTDMode;
     eParserCommands     mParserCommand;   //tells us to viewcontent/viewsource/viewerrors...
     eParserDocType      mDocType;
-    nsCString           mMimeType;  
-    PRInt32             mErrorCount;
-    PRInt32             mTagCount;
+    nsCString           mMimeType;
 
     nsString            mFilename;
-    nsString            mTags;
-    nsString            mErrors;
+    nsCOMPtr<nsIURI>    mBaseURI; // lazy -- always use GetBaseURI().
 
     PRUint32            mTokenCount;
+
+    nsCParserStartNode  mStartNode;
+    nsCParserStartNode  mTokenNode;
+    CIndirectTextToken  mITextToken;
+    nsCParserStartNode  mErrorNode;
 };
 
-extern nsresult NS_NewViewSourceHTML(nsIDTD** aInstancePtrResult);
-
-#endif 
-
-
-
+#endif
