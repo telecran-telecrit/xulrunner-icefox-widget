@@ -1,5 +1,5 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- * vim: set ts=8 sw=4 et tw=78:
+ * vim: set ts=8 sw=4 et tw=99:
  *
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -120,10 +120,10 @@ extern JSPropertyOp
 js_GetWatchedSetter(JSRuntime *rt, JSScope *scope,
                     const JSScopeProperty *sprop);
 
-extern JS_REQUIRES_STACK JSBool
+extern JSBool
 js_watch_set(JSContext *cx, JSObject *obj, jsval id, jsval *vp);
 
-extern JS_REQUIRES_STACK JSBool
+extern JSBool
 js_watch_set_wrapper(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
                      jsval *rval);
 
@@ -336,6 +336,20 @@ JS_PutPropertyDescArray(JSContext *cx, JSPropertyDescArray *pda);
 extern JS_PUBLIC_API(JSBool)
 JS_SetDebuggerHandler(JSRuntime *rt, JSTrapHandler handler, void *closure);
 
+extern JS_FRIEND_API(JSBool)
+js_GetPropertyByIdWithFakeFrame(JSContext *cx, JSObject *obj, JSObject *scopeobj, jsid id,
+                                jsval *vp);
+
+extern JS_FRIEND_API(JSBool)
+js_SetPropertyByIdWithFakeFrame(JSContext *cx, JSObject *obj, JSObject *scopeobj, jsid id,
+                                jsval *vp);
+
+extern JS_FRIEND_API(JSBool)
+js_CallFunctionValueWithFakeFrame(JSContext *cx, JSObject *obj, JSObject *scopeobj, jsval funval,
+                                  uintN argc, jsval *argv, jsval *rval);
+
+/************************************************************************/
+
 extern JS_PUBLIC_API(JSBool)
 JS_SetSourceHandler(JSRuntime *rt, JSSourceHandler handler, void *closure);
 
@@ -421,11 +435,15 @@ JS_NewSystemObject(JSContext *cx, JSClass *clasp, JSObject *proto,
 
 /************************************************************************/
 
-extern JS_PUBLIC_API(JSDebugHooks *)
+extern JS_PUBLIC_API(const JSDebugHooks *)
 JS_GetGlobalDebugHooks(JSRuntime *rt);
 
 extern JS_PUBLIC_API(JSDebugHooks *)
-JS_SetContextDebugHooks(JSContext *cx, JSDebugHooks *hooks);
+JS_SetContextDebugHooks(JSContext *cx, const JSDebugHooks *hooks);
+
+/* Disable debug hooks for this context. */
+extern JS_PUBLIC_API(JSDebugHooks *)
+JS_ClearContextDebugHooks(JSContext *cx);
 
 #ifdef MOZ_SHARK
 
@@ -494,6 +512,15 @@ js_ResumeVtune(JSContext *cx, JSObject *obj, uintN argc, jsval *argv,
                jsval *rval);
 
 #endif /* MOZ_VTUNE */
+
+#ifdef MOZ_TRACEVIS
+extern JS_FRIEND_API(JSBool)
+js_InitEthogram(JSContext *cx, JSObject *obj,
+                uintN argc, jsval *argv, jsval *rval);
+extern JS_FRIEND_API(JSBool)
+js_ShutdownEthogram(JSContext *cx, JSObject *obj,
+                    uintN argc, jsval *argv, jsval *rval);
+#endif /* MOZ_TRACEVIS */
 
 JS_END_EXTERN_C
 

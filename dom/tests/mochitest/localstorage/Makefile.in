@@ -68,6 +68,7 @@ _TEST_FILES	= \
     test_localStorageBase.html \
     test_localStorageBasePrivateBrowsing.html \
     test_localStorageBaseSessionOnly.html \
+    test_localStorageEnablePref.html \
     test_localStorageOriginsEquals.html \
     test_localStorageOriginsDiff.html \
     test_localStorageOriginsPortDiffs.html \
@@ -82,7 +83,7 @@ _TEST_FILES	= \
     test_removeOwnersAPISessionOnly.html \
     test_storageConstructor.html \
     $(NULL)
-
+    
 _CHROME_FILES = \
     test_localStorageFromChrome.xhtml \
     $(NULL)

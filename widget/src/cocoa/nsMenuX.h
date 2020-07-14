@@ -53,7 +53,6 @@ class nsMenuItemIconX;
 class nsMenuItemX;
 class nsIWidget;
 
-
 // MenuDelegate is used to receive Cocoa notifications for
 // setting up carbon events
 @interface MenuDelegate : NSObject
@@ -64,7 +63,6 @@ class nsIWidget;
 }
 - (id)initWithGeckoMenu:(nsMenuX*)geckoMenu;
 @end
-
 
 // Once instantiated, this object lives until its DOM node or its parent window is destroyed.
 // Do not hold references to this, they can become invalid any time the DOM node can be destroyed.
@@ -97,6 +95,8 @@ public:
   void           SetRebuild(PRBool aMenuEvent);
   NSMenuItem*    NativeMenuItem();
 
+  static PRBool  IsXULHelpMenu(nsIContent* aMenuContent);
+
 protected:
   void           MenuConstruct();
   nsresult       RemoveAll();
@@ -119,9 +119,11 @@ protected:
   PRUint32                  mVisibleItemsCount; // cache
   nsMenuObjectX*            mParent; // [weak]
   nsMenuBarX*               mMenuBar; // [weak]
+  // The icon object should never outlive its creating nsMenuX object.
   nsRefPtr<nsMenuItemIconX> mIcon;
   GeckoNSMenu*              mNativeMenu; // [strong]
   MenuDelegate*             mMenuDelegate; // [strong]
+  // nsMenuX objects should always have a valid native menu item.
   NSMenuItem*               mNativeMenuItem; // [strong]
   PRPackedBool              mIsEnabled;
   PRPackedBool              mDestroyHandlerCalled;

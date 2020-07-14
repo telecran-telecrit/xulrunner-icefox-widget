@@ -74,6 +74,19 @@ public:
                                    CharacterDataChangeInfo* aInfo);
 
   /**
+   * Send AttributeWillChange notifications to nsIMutationObservers.
+   * @param aContent      Node whose data will change
+   * @param aNameSpaceID  Namespace of changing attribute
+   * @param aAttribute    Local-name of changing attribute
+   * @param aModType      Type of change (add/change/removal)
+   * @see nsIMutationObserver::AttributeWillChange
+   */
+  static void AttributeWillChange(nsIContent* aContent,
+                                  PRInt32 aNameSpaceID,
+                                  nsIAtom* aAttribute,
+                                  PRInt32 aModType);
+
+  /**
    * Send AttributeChanged notifications to nsIMutationObservers.
    * @param aContent      Node whose data changed
    * @param aNameSpaceID  Namespace of changed attribute
@@ -117,6 +130,15 @@ public:
   static void ContentRemoved(nsINode* aContainer,
                              nsIContent* aChild,
                              PRInt32 aIndexInContainer);
+
+  /**
+   * Send AttributeChildRemoved notifications to nsIMutationObservers.
+   * @param aAttribute Attribute from which the child has been removed.
+   * @param aChild     Removed child.
+   * @see nsIMutationObserver2::AttributeChildRemoved.
+   */
+  static void AttributeChildRemoved(nsINode* aAttribute, nsIContent* aChild);
+
   /**
    * Send ParentChainChanged notifications to nsIMutationObservers
    * @param aContent  The piece of content that had its parent changed.
@@ -154,8 +176,7 @@ public:
                         nsIDOMNode **aResult)
   {
     return CloneAndAdopt(aNode, PR_TRUE, aDeep, aNewNodeInfoManager, nsnull,
-                         nsnull, nsnull, aNodesWithProperties, nsnull,
-                         aResult);
+                         nsnull, aNodesWithProperties, nsnull, aResult);
   }
 
   /**
@@ -173,20 +194,18 @@ public:
    * @param aCx Context to use for reparenting the wrappers, or null if no
    *            reparenting should be done. Must be null if aNewNodeInfoManager
    *            is null.
-   * @param aOldScope Old scope for the wrappers. May be null if aCx is null.
    * @param aNewScope New scope for the wrappers. May be null if aCx is null.
    * @param aNodesWithProperties All nodes (from amongst aNode and its
    *                             descendants) with properties.
    */
   static nsresult Adopt(nsINode *aNode, nsNodeInfoManager *aNewNodeInfoManager,
-                        JSContext *aCx, JSObject *aOldScope,
-                        JSObject *aNewScope,
+                        JSContext *aCx, JSObject *aNewScope,
                         nsCOMArray<nsINode> &aNodesWithProperties)
   {
     nsCOMPtr<nsIDOMNode> dummy;
     return CloneAndAdopt(aNode, PR_FALSE, PR_TRUE, aNewNodeInfoManager, aCx,
-                         aOldScope, aNewScope, aNodesWithProperties,
-                         nsnull, getter_AddRefs(dummy));
+                         aNewScope, aNodesWithProperties, nsnull,
+                         getter_AddRefs(dummy));
   }
 
   /**
@@ -293,7 +312,6 @@ private:
    * @param aCx Context to use for reparenting the wrappers, or null if no
    *            reparenting should be done. Must be null if aClone is PR_TRUE or
    *            if aNewNodeInfoManager is null.
-   * @param aOldScope Old scope for the wrappers. May be null if aCx is null.
    * @param aNewScope New scope for the wrappers. May be null if aCx is null.
    * @param aNodesWithProperties All nodes (from amongst aNode and its
    *                             descendants) with properties. If aClone is
@@ -306,8 +324,7 @@ private:
    */
   static nsresult CloneAndAdopt(nsINode *aNode, PRBool aClone, PRBool aDeep,
                                 nsNodeInfoManager *aNewNodeInfoManager,
-                                JSContext *aCx, JSObject *aOldScope,
-                                JSObject *aNewScope,
+                                JSContext *aCx, JSObject *aNewScope,
                                 nsCOMArray<nsINode> &aNodesWithProperties,
                                 nsINode *aParent, nsIDOMNode **aResult);
 };

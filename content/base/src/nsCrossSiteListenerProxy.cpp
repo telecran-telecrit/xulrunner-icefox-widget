@@ -109,6 +109,11 @@ nsCrossSiteListenerProxy::nsCrossSiteListenerProxy(nsIStreamListener* aOuter,
   aChannel->SetNotificationCallbacks(this);
 
   *aResult = UpdateChannel(aChannel);
+  if (NS_FAILED(*aResult)) {
+    mOuterListener = nsnull;
+    mRequestingPrincipal = nsnull;
+    mOuterNotificationCallbacks = nsnull;
+  }
 }
 
 
@@ -137,6 +142,11 @@ nsCrossSiteListenerProxy::nsCrossSiteListenerProxy(nsIStreamListener* aOuter,
   aChannel->SetNotificationCallbacks(this);
 
   *aResult = UpdateChannel(aChannel);
+  if (NS_FAILED(*aResult)) {
+    mOuterListener = nsnull;
+    mRequestingPrincipal = nsnull;
+    mOuterNotificationCallbacks = nsnull;
+  }
 }
 
 NS_IMETHODIMP
@@ -249,8 +259,7 @@ nsCrossSiteListenerProxy::CheckRequestApproved(nsIRequest* aRequest,
     rv = nsContentUtils::GetASCIIOrigin(mRequestingPrincipal, origin);
     NS_ENSURE_SUCCESS(rv, rv);
 
-    if (!allowedOriginHeader.Equals(origin) ||
-        origin.EqualsLiteral("null")) {
+    if (!allowedOriginHeader.Equals(origin)) {
       return NS_ERROR_DOM_BAD_URI;
     }
   }

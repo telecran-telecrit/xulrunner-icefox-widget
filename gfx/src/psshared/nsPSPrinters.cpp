@@ -56,6 +56,8 @@
 /* dummy printer name for the gfx/src/ps driver */
 #define NS_POSTSCRIPT_DRIVER_NAME "PostScript/"
 
+nsCUPSShim gCupsShim;
+
 /* Initialize the printer manager object */
 nsresult
 nsPSPrinterList::Init()
@@ -70,8 +72,8 @@ nsPSPrinterList::Init()
     // Should we try cups?
     PRBool useCups = PR_TRUE;
     rv = mPref->GetBoolPref("postscript.cups.enabled", &useCups);
-    if (useCups)
-        mCups.Init();
+    if (useCups && !gCupsShim.IsInitialized())
+        gCupsShim.Init();
     return NS_OK;
 }
 
@@ -93,16 +95,16 @@ nsPSPrinterList::Enabled()
 
 /* Fetch a list of printers handled by the PostsScript module */
 void
-nsPSPrinterList::GetPrinterList(nsCStringArray& aList)
+nsPSPrinterList::GetPrinterList(nsTArray<nsCString>& aList)
 {
     aList.Clear();
 
     // Query CUPS for a printer list. The default printer goes to the
     // head of the output list; others are appended.
-    if (mCups.IsInitialized()) {
+    if (gCupsShim.IsInitialized()) {
         cups_dest_t *dests;
 
-        int num_dests = (mCups.mCupsGetDests)(&dests);
+        int num_dests = (gCupsShim.mCupsGetDests)(&dests);
         if (num_dests) {
             for (int i = 0; i < num_dests; i++) {
                 nsCAutoString fullName(NS_CUPS_PRINTER);
@@ -112,12 +114,12 @@ nsPSPrinterList::GetPrinterList(nsCStringArray& aList)
                     fullName.Append(dests[i].instance);
                 }
                 if (dests[i].is_default)
-                    aList.InsertCStringAt(fullName, 0);
+                    aList.InsertElementAt(0, fullName);
                 else
-                    aList.AppendCString(fullName);
+                    aList.AppendElement(fullName);
             }
         }
-        (mCups.mCupsFreeDests)(num_dests, dests);
+        (gCupsShim.mCupsFreeDests)(num_dests, dests);
     }
 
     // Build the "classic" list of printers -- those accessed by running
@@ -126,7 +128,7 @@ nsPSPrinterList::GetPrinterList(nsCStringArray& aList)
     // MOZILLA_POSTSCRIPT_PRINTER_LIST or a preference setting
     // print.printer_list, which contains a space-separated list of printer
     // names.
-    aList.AppendCString(
+    aList.AppendElement(
             NS_LITERAL_CSTRING(NS_POSTSCRIPT_DRIVER_NAME "default"));
 
     nsXPIDLCString list;
@@ -145,7 +147,7 @@ nsPSPrinterList::GetPrinterList(nsCStringArray& aList)
             if (0 != strcmp(name, "default")) {
                 nsCAutoString fullName(NS_POSTSCRIPT_DRIVER_NAME);
                 fullName.Append(name);
-                aList.AppendCString(fullName);
+                aList.AppendElement(fullName);
             }
         }
     }

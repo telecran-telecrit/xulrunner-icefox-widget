@@ -44,7 +44,7 @@
 #include "nsAHttpTransaction.h"
 #include "nsIInputStream.h"
 #include "nsIOutputStream.h"
-#include "nsVoidArray.h"
+#include "nsTArray.h"
 #include "nsCOMPtr.h"
 
 class nsHttpPipeline : public nsAHttpConnection
@@ -71,23 +71,23 @@ private:
     // convenience functions
     nsAHttpTransaction *Request(PRInt32 i)
     {
-        if (mRequestQ.Count() == 0)
+        if (mRequestQ.Length() == 0)
             return nsnull;
 
-        return (nsAHttpTransaction *) mRequestQ[i];
+        return mRequestQ[i];
     }
     nsAHttpTransaction *Response(PRInt32 i)
     {
-        if (mResponseQ.Count() == 0)
+        if (mResponseQ.Length() == 0)
             return nsnull;
 
-        return (nsAHttpTransaction *) mResponseQ[i];
+        return mResponseQ[i];
     }
 
-    nsAHttpConnection *mConnection;
-    nsVoidArray        mRequestQ;  // array of transactions
-    nsVoidArray        mResponseQ; // array of transactions
-    nsresult           mStatus;
+    nsAHttpConnection            *mConnection;
+    nsTArray<nsAHttpTransaction*> mRequestQ;  // array of transactions
+    nsTArray<nsAHttpTransaction*> mResponseQ; // array of transactions
+    nsresult                      mStatus;
 
     // these flags indicate whether or not the first request or response
     // is partial.  a partial request means that Request(0) has been 
@@ -107,7 +107,7 @@ private:
     nsCOMPtr<nsIInputStream>  mSendBufIn;
     nsCOMPtr<nsIOutputStream> mSendBufOut;
 
-    // the push back buffer.  not exceeding NS_HTTP_SEGMENT_SIZE bytes.
+    // the push back buffer.  not exceeding nsIOService::gDefaultSegmentSize bytes.
     char     *mPushBackBuf;
     PRUint32  mPushBackLen;
     PRUint32  mPushBackMax;

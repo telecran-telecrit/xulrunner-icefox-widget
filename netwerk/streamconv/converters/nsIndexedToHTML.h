@@ -39,7 +39,6 @@
 #define ____nsindexedtohtml___h___
 
 #include "nsCOMPtr.h"
-#include "nsVoidArray.h"
 #include "nsIFactory.h"
 #include "nsString.h"
 #include "nsIStreamConverter.h"
@@ -76,7 +75,10 @@ public:
 protected:
     
     void FormatSizeString(PRInt64 inSize, nsString& outSizeString);
-    nsresult FormatInputStream(nsIRequest* aRequest, nsISupports *aContext, const nsAString &aBuffer); 
+    nsresult FormatInputStream(nsIRequest* aRequest, nsISupports *aContext, const nsAString &aBuffer);
+    // Helper to properly implement OnStartRequest
+    nsresult DoOnStartRequest(nsIRequest* request, nsISupports *aContext,
+                              nsString& aBuffer);
 
 protected:
     nsCOMPtr<nsIDirIndexParser>     mParser;

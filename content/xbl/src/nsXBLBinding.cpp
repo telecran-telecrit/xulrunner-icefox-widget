@@ -79,8 +79,6 @@
 #include "nsIDOMFocusListener.h"
 #include "nsIDOMKeyListener.h"
 #include "nsIDOMFormListener.h"
-#include "nsIDOMXULListener.h"
-#include "nsIDOMDragListener.h"
 #include "nsIDOMContextMenuListener.h"
 #include "nsIDOMEventGroup.h"
 #include "nsAttrName.h"
@@ -834,14 +832,15 @@ nsXBLBinding::InstallEventHandlers()
     nsXBLPrototypeHandler* handlerChain = mPrototypeBinding->GetPrototypeHandlers();
 
     if (handlerChain) {
-      nsCOMPtr<nsIEventListenerManager> manager;
-      mBoundElement->GetListenerManager(PR_TRUE, getter_AddRefs(manager));
+      nsIEventListenerManager* manager =
+        mBoundElement->GetListenerManager(PR_TRUE);
       if (!manager)
         return;
 
       nsCOMPtr<nsIDOMEventGroup> systemEventGroup;
       PRBool isChromeDoc =
         nsContentUtils::IsChromeDoc(mBoundElement->GetOwnerDoc());
+      PRBool isChromeBinding = mPrototypeBinding->IsChrome();
       nsXBLPrototypeHandler* curr;
       for (curr = handlerChain; curr; curr = curr->GetNextHandler()) {
         // Fetch the event type.
@@ -861,7 +860,8 @@ nsXBLBinding::InstallEventHandlers()
         // This is a weak ref. systemEventGroup above is already a
         // strong ref, so we are guaranteed it will not go away.
         nsIDOMEventGroup* eventGroup = nsnull;
-        if (curr->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) {
+        if ((curr->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) &&
+            (isChromeBinding || mBoundElement->IsInNativeAnonymousSubtree())) {
           if (!systemEventGroup)
             manager->GetSystemEventGroupLM(getter_AddRefs(systemEventGroup));
           eventGroup = systemEventGroup;
@@ -899,7 +899,8 @@ nsXBLBinding::InstallEventHandlers()
         // This is a weak ref. systemEventGroup above is already a
         // strong ref, so we are guaranteed it will not go away.
         nsIDOMEventGroup* eventGroup = nsnull;
-        if (handler->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) {
+        if ((handler->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) &&
+            (isChromeBinding || mBoundElement->IsInNativeAnonymousSubtree())) {
           if (!systemEventGroup)
             manager->GetSystemEventGroupLM(getter_AddRefs(systemEventGroup));
           eventGroup = systemEventGroup;
@@ -972,9 +973,7 @@ nsXBLBinding::ExecuteAttachedHandler()
   if (mNextBinding)
     mNextBinding->ExecuteAttachedHandler();
 
-  // Executing mNextBindings constructor might have caused us to loose our
-  // bound element
-  if (mBoundElement && AllowScripts())
+  if (AllowScripts())
     mPrototypeBinding->BindingAttached(mBoundElement);
 }
 
@@ -994,12 +993,13 @@ nsXBLBinding::UnhookEventHandlers()
   nsXBLPrototypeHandler* handlerChain = mPrototypeBinding->GetPrototypeHandlers();
 
   if (handlerChain) {
-    nsCOMPtr<nsIEventListenerManager> manager;
-    mBoundElement->GetListenerManager(PR_FALSE, getter_AddRefs(manager));
+    nsCOMPtr<nsIEventListenerManager> manager =
+      mBoundElement->GetListenerManager(PR_FALSE);
     if (!manager) {
       return;
     }
                                       
+    PRBool isChromeBinding = mPrototypeBinding->IsChrome();
     nsCOMPtr<nsIDOMEventGroup> systemEventGroup;
     nsXBLPrototypeHandler* curr;
     for (curr = handlerChain; curr; curr = curr->GetNextHandler()) {
@@ -1028,7 +1028,8 @@ nsXBLBinding::UnhookEventHandlers()
       // This is a weak ref. systemEventGroup above is already a
       // strong ref, so we are guaranteed it will not go away.
       nsIDOMEventGroup* eventGroup = nsnull;
-      if (curr->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) {
+      if ((curr->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) &&
+          (isChromeBinding || mBoundElement->IsInNativeAnonymousSubtree())) {
         if (!systemEventGroup)
           manager->GetSystemEventGroupLM(getter_AddRefs(systemEventGroup));
         eventGroup = systemEventGroup;
@@ -1056,7 +1057,8 @@ nsXBLBinding::UnhookEventHandlers()
       // This is a weak ref. systemEventGroup above is already a
       // strong ref, so we are guaranteed it will not go away.
       nsIDOMEventGroup* eventGroup = nsnull;
-      if (handler->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) {
+      if ((handler->GetType() & (NS_HANDLER_TYPE_XBL_COMMAND | NS_HANDLER_TYPE_SYSTEM)) &&
+          (isChromeBinding || mBoundElement->IsInNativeAnonymousSubtree())) {
         if (!systemEventGroup)
           manager->GetSystemEventGroupLM(getter_AddRefs(systemEventGroup));
         eventGroup = systemEventGroup;
@@ -1387,7 +1389,7 @@ nsXBLBinding::AllowScripts()
     return PR_FALSE;
   }
 
-  nsIDocument* doc = mBoundElement->GetOwnerDoc();
+  nsIDocument* doc = mBoundElement ? mBoundElement->GetOwnerDoc() : nsnull;
   if (!doc) {
     return PR_FALSE;
   }
@@ -1585,30 +1587,15 @@ nsXBLBinding::ImplementsInterface(REFNSIID aIID) const
     (mNextBinding && mNextBinding->ImplementsInterface(aIID));
 }
 
-already_AddRefed<nsIDOMNodeList>
+nsINodeList*
 nsXBLBinding::GetAnonymousNodes()
 {
   if (mContent) {
-    nsCOMPtr<nsIDOMElement> elt(do_QueryInterface(mContent));
-    nsIDOMNodeList *nodeList = nsnull;
-    elt->GetChildNodes(&nodeList);
-    return nodeList;
+    return mContent->GetChildNodesList();
   }
 
   if (mNextBinding)
     return mNextBinding->GetAnonymousNodes();
 
   return nsnull;
-}
-
-PRBool
-nsXBLBinding::ShouldBuildChildFrames() const
-{
-  if (mContent)
-    return mPrototypeBinding->ShouldBuildChildFrames();
-
-  if (mNextBinding) 
-    return mNextBinding->ShouldBuildChildFrames();
-
-  return PR_TRUE;
 }

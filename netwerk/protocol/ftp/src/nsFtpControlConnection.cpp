@@ -35,9 +35,10 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-
+#include "nsIOService.h"
 #include "nsFTPChannel.h"
 #include "nsFtpControlConnection.h"
+#include "nsFtpProtocolHandler.h"
 #include "prlog.h"
 #include "nsIPipe.h"
 #include "nsIInputStream.h"
@@ -95,8 +96,10 @@ nsFtpControlConnection::OnInputStreamReady(nsIAsyncInputStream *stream)
     return NS_OK;
 }
 
-nsFtpControlConnection::nsFtpControlConnection(const nsCSubstring& host, PRUint32 port)
-    : mServerType(0), mHost(host), mPort(port)
+nsFtpControlConnection::nsFtpControlConnection(const nsCSubstring& host,
+                                               PRUint32 port)
+    : mServerType(0), mSessionId(gFtpHandler->GetSessionId()), mHost(host)
+    , mPort(port)
 {
     LOG_ALWAYS(("FTP:CC created @%p", this));
 }
@@ -150,8 +153,8 @@ nsFtpControlConnection::Connect(nsIProxyInfo* proxyInfo,
     // open buffered, non-blocking/asynchronous input stream to socket.
     nsCOMPtr<nsIInputStream> inStream;
     rv = mSocket->OpenInputStream(0,
-                                  FTP_COMMAND_CHANNEL_SEG_SIZE, 
-                                  FTP_COMMAND_CHANNEL_SEG_COUNT,
+                                  nsIOService::gDefaultSegmentSize,
+                                  nsIOService::gDefaultSegmentCount,
                                   getter_AddRefs(inStream));
     if (NS_SUCCEEDED(rv))
         mSocketInput = do_QueryInterface(inStream);

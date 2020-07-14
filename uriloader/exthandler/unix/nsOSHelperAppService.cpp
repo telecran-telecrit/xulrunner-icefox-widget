@@ -1211,6 +1211,9 @@ nsresult nsOSHelperAppService::OSProtocolHandlerExists(const char * aProtocolSch
 #ifdef MOZ_WIDGET_GTK2
   // Check the GConf registry for a protocol handler
   *aHandlerExists = nsGNOMERegistry::HandlerExists(aProtocolScheme);
+#ifdef MOZ_PLATFORM_MAEMO
+  *aHandlerExists = nsMIMEInfoUnix::HandlerExists(aProtocolScheme);
+#endif
 #endif
 
   return NS_OK;
@@ -1577,7 +1580,12 @@ nsOSHelperAppService::GetMIMEInfoFromOS(const nsACString& aType,
       return retval;
     }
 
-    // Copy the attributes of retval onto miByExt, to return it
+    // Copy the attributes of retval (mimeinfo from type) onto miByExt, to
+    // return it
+    // but reset to just collected mDefaultAppDescription (from ext)
+    nsAutoString byExtDefault;
+    miByExt->GetDefaultDescription(byExtDefault);
+    retval->SetDefaultDescription(byExtDefault);
     retval->CopyBasicDataTo(miByExt);
 
     miByExt.swap(retval);

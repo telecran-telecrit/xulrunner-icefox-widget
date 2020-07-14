@@ -42,6 +42,7 @@
 #include "nsHttpRequestHead.h"
 #include "nsHttpResponseHead.h"
 #include "nsHttpHandler.h"
+#include "nsIOService.h"
 #include "nsISocketTransportService.h"
 #include "nsISocketTransport.h"
 #include "nsIServiceManager.h"
@@ -431,7 +432,7 @@ nsHttpConnection::CreateTransport(PRUint8 caps)
     NS_PRECONDITION(!mSocketTransport, "unexpected");
 
     nsCOMPtr<nsISocketTransportService> sts =
-            do_GetService(kSocketTransportServiceCID, &rv);
+            do_GetService(NS_SOCKETTRANSPORTSERVICE_CONTRACTID, &rv);
     if (NS_FAILED(rv)) return rv;
 
     // configure the socket type based on the connection type requested.
@@ -567,11 +568,12 @@ nsHttpConnection::OnSocketWritable()
         if (mSSLProxyConnectStream) {
             LOG(("  writing CONNECT request stream\n"));
             rv = mSSLProxyConnectStream->ReadSegments(ReadFromStream, this,
-                                                      NS_HTTP_SEGMENT_SIZE, &n);
+                                                      nsIOService::gDefaultSegmentSize,
+                                                      &n);
         }
         else {
             LOG(("  writing transaction request stream\n"));
-            rv = mTransaction->ReadSegments(this, NS_HTTP_SEGMENT_SIZE, &n);
+            rv = mTransaction->ReadSegments(this, nsIOService::gDefaultSegmentSize, &n);
         }
 
         LOG(("  ReadSegments returned [rv=%x read=%u sock-cond=%x]\n",
@@ -661,7 +663,7 @@ nsHttpConnection::OnSocketReadable()
     PRBool again = PR_TRUE;
 
     do {
-        rv = mTransaction->WriteSegments(this, NS_HTTP_SEGMENT_SIZE, &n);
+        rv = mTransaction->WriteSegments(this, nsIOService::gDefaultSegmentSize, &n);
         if (NS_FAILED(rv)) {
             // if the transaction didn't want to take any more data, then
             // wait for the transaction to call ResumeRecv.

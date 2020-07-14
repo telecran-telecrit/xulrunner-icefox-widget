@@ -57,6 +57,7 @@ nsIContentUtils.h \
 nsIDocument.h \
 nsIDocumentObserver.h \
 nsIMutationObserver.h \
+nsIMutationObserver2.h \
 nsINameSpaceManager.h \
 nsINode.h \
 nsINodeInfo.h \
@@ -94,8 +95,11 @@ XPIDLSRCS	= \
 		nsIContentPolicy.idl        \
 		nsIDocumentEncoder.idl      \
 		nsIDOMFile.idl \
+		nsIDOMFileReader.idl \
+		nsIDOMFileInternal.idl \
 		nsIDOMFileList.idl \
 		nsIDOMFileException.idl \
+		nsIDOMFileError.idl \
 		nsIDOMParser.idl \
 		nsIDOMSerializer.idl \
 		nsISelection2.idl \

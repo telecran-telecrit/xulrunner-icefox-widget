@@ -118,9 +118,9 @@ addLoadEvent(function() {
         dst.contentDocument.designMode = "on";
         dst.focus();
         dst.contentDocument.body.focus();
-        dst.contentDocument.execCommand("paste", null, false);
-        is(dst.contentDocument.getElementsByTagName("img")[0].src,
-           document.getElementsByTagName("img")[0].src,
+        synthesizeKey("v", {accelKey: true});
+        is(dst.contentDocument.querySelector("img").src,
+           document.querySelector("img").src,
            "The source should be correctly set based on the base URI");
         SimpleTest.finish();
       },

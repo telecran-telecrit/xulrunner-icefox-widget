@@ -159,46 +159,6 @@ NS_IMPL_CYCLE_COLLECTION_7(nsTextServicesDocument,
                            mTxtSvcFilter)
 
 NS_IMETHODIMP
-nsTextServicesDocument::InitWithDocument(nsIDOMDocument *aDOMDocument, nsIPresShell *aPresShell)
-{
-  nsresult result = NS_OK;
-
-  if (!aDOMDocument || !aPresShell)
-    return NS_ERROR_NULL_POINTER;
-
-  NS_ASSERTION(!mSelCon, "mSelCon already initialized!");
-
-  if (mSelCon)
-    return NS_ERROR_FAILURE;
-
-  NS_ASSERTION(!mDOMDocument, "mDOMDocument already initialized!");
-
-  if (mDOMDocument)
-    return NS_ERROR_FAILURE;
-
-  LOCK_DOC(this);
-
-  mSelCon   = do_QueryInterface(aPresShell);
-  mDOMDocument = do_QueryInterface(aDOMDocument);
-
-  result = CreateDocumentContentIterator(getter_AddRefs(mIterator));
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  mIteratorStatus = nsTextServicesDocument::eIsDone;
-
-  result = FirstBlock();
-
-  UNLOCK_DOC(this);
-
-  return result;
-}
-
-NS_IMETHODIMP
 nsTextServicesDocument::InitWithEditor(nsIEditor *aEditor)
 {
   nsresult result = NS_OK;
@@ -337,27 +297,6 @@ nsTextServicesDocument::SetExtent(nsIDOMRange* aDOMRange)
 }
 
 NS_IMETHODIMP
-nsTextServicesDocument::GetExtent(nsIDOMRange** aDOMRange)
-{
-  NS_ENSURE_ARG_POINTER(aDOMRange);
-
-  *aDOMRange = nsnull;
-
-  if (mExtent)
-  {
-    // We have an extent range, so just return a
-    // copy of it.
-
-    return mExtent->CloneRange(aDOMRange);
-  }
-
-  // We don't have an extent range, so we must be
-  // iterating over the entire document.
-
-  return CreateDocumentContentRange(aDOMRange);
-}
-
-NS_IMETHODIMP
 nsTextServicesDocument::ExpandRangeToWordBoundaries(nsIDOMRange *aRange)
 {
   NS_ENSURE_ARG_POINTER(aRange);
@@ -453,7 +392,7 @@ nsTextServicesDocument::ExpandRangeToWordBoundaries(nsIDOMRange *aRange)
 
   iterStatus = nsTextServicesDocument::eValid;
 
-  nsVoidArray offsetTable;
+  nsTArray<OffsetEntry*> offsetTable;
   nsAutoString blockStr;
 
   result = CreateOffsetTable(&offsetTable, docIter, &iterStatus,
@@ -534,19 +473,6 @@ nsTextServicesDocument::SetFilter(nsITextServicesFilter *aFilter)
 }
 
 NS_IMETHODIMP
-nsTextServicesDocument::CanEdit(PRBool *aCanEdit)
-{
-  if (!aCanEdit)
-    return NS_ERROR_NULL_POINTER;
-
-  nsCOMPtr<nsIEditor> editor (do_QueryReferent(mEditor));
-
-  *aCanEdit = (editor) ? PR_TRUE : PR_FALSE;
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 nsTextServicesDocument::GetCurrentTextBlock(nsString *aStr)
 {
   nsresult result;
@@ -604,532 +530,6 @@ nsTextServicesDocument::FirstBlock()
 
   return result;
 }
-
-NS_IMETHODIMP
-nsTextServicesDocument::LastBlock()
-{
-  NS_ENSURE_TRUE(mIterator, NS_ERROR_FAILURE);
-
-  LOCK_DOC(this);
-
-  // Position the iterator on the last text node
-  // in the tree, then walk backwards over adjacent
-  // text nodes until we hit a block boundary:
-
-  nsresult result = LastTextNode(mIterator, &mIteratorStatus);
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  result = FirstTextNodeInCurrentBlock(mIterator);
-
-  if (NS_FAILED(result))
-    mIteratorStatus = nsTextServicesDocument::eIsDone;
-
-  // Keep track of prev and next blocks, just in case
-  // the text service blows away the current block.
-
-  if (mIteratorStatus == nsTextServicesDocument::eValid)
-  {
-    result = GetFirstTextNodeInPrevBlock(getter_AddRefs(mPrevTextBlock));
-    mNextTextBlock = nsnull;
-  }
-  else
-  {
-    // There's no text block in the document!
-
-    mPrevTextBlock = nsnull;
-    mNextTextBlock = nsnull;
-  }
-
-  UNLOCK_DOC(this);
-
-  return result;
-}
-
-// XXX: CODE BLOAT ALERT. FirstSelectedBlock() and LastSelectedBlock()
-//      are almost identical! Later, when we have time, we should try
-//      and combine them into one method.
-
-NS_IMETHODIMP
-nsTextServicesDocument::FirstSelectedBlock(TSDBlockSelectionStatus *aSelStatus, PRInt32 *aSelOffset, PRInt32 *aSelLength)
-{
-  nsresult result = NS_OK;
-
-  if (!aSelStatus || !aSelOffset || !aSelLength)
-    return NS_ERROR_NULL_POINTER;
-
-  LOCK_DOC(this);
-
-  mIteratorStatus = nsTextServicesDocument::eIsDone;
-
-  *aSelStatus = nsITextServicesDocument::eBlockNotFound;
-  *aSelOffset = *aSelLength = -1;
-
-  if (!mSelCon || !mIterator)
-  {
-    UNLOCK_DOC(this);
-    return NS_ERROR_FAILURE;
-  }
-
-  nsCOMPtr<nsISelection> selection;
-  PRBool isCollapsed = PR_FALSE;
-
-  result = mSelCon->GetSelection(nsISelectionController::SELECTION_NORMAL, getter_AddRefs(selection));
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  result = selection->GetIsCollapsed( &isCollapsed);
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  nsCOMPtr<nsIContentIterator> iter;
-  nsCOMPtr<nsIDOMRange>        range;
-  nsCOMPtr<nsIDOMNode>         parent;
-  PRInt32                      i, rangeCount, offset;
-
-  if (isCollapsed)
-  {
-    // We have a caret. Check if the caret is in a text node.
-    // If it is, make the text node's block the current block.
-    // If the caret isn't in a text node, search backwards in
-    // the document, till we find a text node.
-
-    result = selection->GetRangeAt(0, getter_AddRefs(range));
-
-    if (NS_FAILED(result))
-    {
-      UNLOCK_DOC(this);
-      return result;
-    }
-
-    if (!range)
-    {
-      UNLOCK_DOC(this);
-      return NS_ERROR_FAILURE;
-    }
-
-    result = range->GetStartContainer(getter_AddRefs(parent));
-
-    if (NS_FAILED(result))
-    {
-      UNLOCK_DOC(this);
-      return result;
-    }
-
-    if (!parent)
-    {
-      UNLOCK_DOC(this);
-      return NS_ERROR_FAILURE;
-    }
-
-    result = range->GetStartOffset(&offset);
-
-    if (NS_FAILED(result))
-    {
-      UNLOCK_DOC(this);
-      return result;
-    }
-
-    if (IsTextNode(parent))
-    {
-      // The caret is in a text node. Find the beginning
-      // of the text block containing this text node and
-      // return.
-
-      nsCOMPtr<nsIContent> content = do_QueryInterface(parent);
-
-      if (!content)
-      {
-        UNLOCK_DOC(this);
-        return NS_ERROR_FAILURE;
-      }
-
-      result = mIterator->PositionAt(content);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = FirstTextNodeInCurrentBlock(mIterator);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      mIteratorStatus = nsTextServicesDocument::eValid;
-
-      result = CreateOffsetTable(&mOffsetTable, mIterator, &mIteratorStatus,
-                                 mExtent, nsnull);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = GetSelection(aSelStatus, aSelOffset, aSelLength);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      if (*aSelStatus == nsITextServicesDocument::eBlockContains)
-        result = SetSelectionInternal(*aSelOffset, *aSelLength, PR_FALSE);
-    }
-    else
-    {
-      // The caret isn't in a text node. Create an iterator
-      // based on a range that extends from the beginning of
-      // the document, to the current caret position, then
-      // walk backwards till you find a text node, then find
-      // the beginning of the block.
-
-      result = CreateDocumentContentRootToNodeOffsetRange(parent, offset, PR_TRUE, getter_AddRefs(range));
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = range->GetCollapsed(&isCollapsed);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      if (isCollapsed)
-      {
-        // If we get here, the range is collapsed because there is nothing before
-        // the caret! Just return NS_OK;
-
-        UNLOCK_DOC(this);
-        return NS_OK;
-      }
-
-      result = CreateContentIterator(range, getter_AddRefs(iter));
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      iter->Last();
-
-      nsCOMPtr<nsIContent> content;
-      while (!iter->IsDone())
-      {
-        content = do_QueryInterface(iter->GetCurrentNode());
-
-        if (IsTextNode(content))
-          break;
-
-        content = nsnull;
-
-        iter->Prev();
-      }
-
-      if (!content)
-      {
-        UNLOCK_DOC(this);
-        return NS_OK;
-      }
-
-      result = mIterator->PositionAt(content);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = FirstTextNodeInCurrentBlock(mIterator);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      mIteratorStatus = nsTextServicesDocument::eValid;
-
-      result = CreateOffsetTable(&mOffsetTable, mIterator, &mIteratorStatus,
-                                 mExtent, nsnull);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = GetSelection(aSelStatus, aSelOffset, aSelLength);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-    }
-
-    UNLOCK_DOC(this);
-
-    return result;
-  }
-
-  // If we get here, we have an uncollapsed selection!
-  // Look through each range in the selection till you
-  // find the first text node. If you find one, find the
-  // beginning of it's text block, and make it the current
-  // block.
-
-  result = selection->GetRangeCount(&rangeCount);
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  NS_ASSERTION(rangeCount > 0, "Unexpected range count!");
-
-  if (rangeCount <= 0)
-  {
-    UNLOCK_DOC(this);
-    return NS_OK;
-  }
-
-  // XXX: We may need to add some code here to make sure
-  //      the ranges are sorted in document appearance order!
-
-  for (i = 0; i < rangeCount; i++)
-  {
-    // Get the i'th range from the selection.
-
-    result = selection->GetRangeAt(i, getter_AddRefs(range));
-
-    if (NS_FAILED(result))
-    {
-      UNLOCK_DOC(this);
-      return result;
-    }
-
-    // Create an iterator for the range.
-
-    result = CreateContentIterator(range, getter_AddRefs(iter));
-
-    if (NS_FAILED(result))
-    {
-      UNLOCK_DOC(this);
-      return result;
-    }
-
-    iter->First();
-
-    // Now walk through the range till we find a text node.
-
-    while (!iter->IsDone())
-    {
-      nsCOMPtr<nsIContent> content = do_QueryInterface(iter->GetCurrentNode());
-
-      if (IsTextNode(content))
-      {
-        // We found a text node, so position the document's
-        // iterator at the beginning of the block, then get
-        // the selection in terms of the string offset.
-
-        result = mIterator->PositionAt(content);
-
-        if (NS_FAILED(result))
-        {
-          UNLOCK_DOC(this);
-          return result;
-        }
-
-        result = FirstTextNodeInCurrentBlock(mIterator);
-
-        if (NS_FAILED(result))
-        {
-          UNLOCK_DOC(this);
-          return result;
-        }
-
-        mIteratorStatus = nsTextServicesDocument::eValid;
-
-        result = CreateOffsetTable(&mOffsetTable, mIterator, &mIteratorStatus,
-                                   mExtent, nsnull);
-
-        if (NS_FAILED(result))
-        {
-          UNLOCK_DOC(this);
-          return result;
-        }
-
-        result = GetSelection(aSelStatus, aSelOffset, aSelLength);
-
-        UNLOCK_DOC(this);
-
-        return result;
-
-      }
-
-      iter->Next();
-    }
-  }
-
-  // If we get here, we didn't find any text node in the selection!
-  // Create a range that extends from the beginning of the selection,
-  // to the beginning of the document, then iterate backwards through
-  // it till you find a text node!
-
-  result = selection->GetRangeAt(0, getter_AddRefs(range));
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  if (!range)
-  {
-    UNLOCK_DOC(this);
-    return NS_ERROR_FAILURE;
-  }
-
-  result = range->GetStartContainer(getter_AddRefs(parent));
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  if (!parent)
-  {
-    UNLOCK_DOC(this);
-    return NS_ERROR_FAILURE;
-  }
-
-  result = range->GetStartOffset(&offset);
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  result = CreateDocumentContentRootToNodeOffsetRange(parent, offset, PR_TRUE, getter_AddRefs(range));
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  result = range->GetCollapsed(&isCollapsed);
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  if (isCollapsed)
-  {
-    // If we get here, the range is collapsed because there is nothing before
-    // the current selection! Just return NS_OK;
-
-    UNLOCK_DOC(this);
-    return NS_OK;
-  }
-
-  result = CreateContentIterator(range, getter_AddRefs(iter));
-
-  if (NS_FAILED(result))
-  {
-    UNLOCK_DOC(this);
-    return result;
-  }
-
-  iter->Last();
-
-  while (!iter->IsDone())
-  {
-    nsCOMPtr<nsIContent> content = do_QueryInterface(iter->GetCurrentNode());
-
-    if (IsTextNode(content))
-    {
-      // We found a text node! Adjust the document's iterator to point
-      // to the beginning of it's text block, then get the current selection.
-
-      result = mIterator->PositionAt(content);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = FirstTextNodeInCurrentBlock(mIterator);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      mIteratorStatus = nsTextServicesDocument::eValid;
-
-      result = CreateOffsetTable(&mOffsetTable, mIterator, &mIteratorStatus,
-                                 mExtent, nsnull);
-
-      if (NS_FAILED(result))
-      {
-        UNLOCK_DOC(this);
-        return result;
-      }
-
-      result = GetSelection(aSelStatus, aSelOffset, aSelLength);
-
-      UNLOCK_DOC(this);
-
-      return result;
-    }
-
-    iter->Prev();
-  }
-
-  // If we get here, we didn't find any block before or inside
-  // the selection! Just return OK.
-
-  UNLOCK_DOC(this);
-
-  return NS_OK;
-}
-
-// XXX: CODE BLOAT ALERT. FirstSelectedBlock() and LastSelectedBlock()
-//      are almost identical! Later, when we have time, we should try
-//      and combine them into one method.
 
 NS_IMETHODIMP
 nsTextServicesDocument::LastSelectedBlock(TSDBlockSelectionStatus *aSelStatus,
@@ -1867,7 +1267,7 @@ nsTextServicesDocument::DeleteSelection()
 
   for (i = mSelStartIndex; i <= mSelEndIndex; i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (i == mSelStartIndex)
     {
@@ -1908,7 +1308,7 @@ nsTextServicesDocument::DeleteSelection()
         ++mSelEndIndex;
         ++i;
 
-        entry = (OffsetEntry *)mOffsetTable[i];
+        entry = mOffsetTable[i];
       }
 
 
@@ -1961,7 +1361,7 @@ nsTextServicesDocument::DeleteSelection()
 
           // Update the entry fields:
 
-          newEntry = (OffsetEntry *)mOffsetTable[i+1];
+          newEntry = mOffsetTable[i+1];
           newEntry->mNodeOffset = entry->mNodeOffset;
         }
 
@@ -2066,7 +1466,7 @@ nsTextServicesDocument::DeleteSelection()
 
   for (i = mSelStartIndex; !entry && i >= 0; i--)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (!entry->mIsValid)
       entry = 0;
@@ -2080,9 +1480,9 @@ nsTextServicesDocument::DeleteSelection()
   // If we still don't have a valid entry, move the caret
   // to the next valid entry after the selection:
 
-  for (i = mSelEndIndex; !entry && i < mOffsetTable.Count(); i++)
+  for (i = mSelEndIndex; !entry && i < PRInt32(mOffsetTable.Length()); i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (!entry->mIsValid)
       entry = 0;
@@ -2183,11 +1583,12 @@ nsTextServicesDocument::InsertText(const nsString *aText)
   // PrintOffsetTable();
   //**** KDEBUG ****
 
-  PRInt32 i, strLength = aText->Length();
+  PRInt32 strLength = aText->Length();
+  PRUint32 i;
 
   nsCOMPtr<nsISelection> selection;
   OffsetEntry *itEntry;
-  OffsetEntry *entry = (OffsetEntry *)mOffsetTable[mSelStartIndex];
+  OffsetEntry *entry = mOffsetTable[mSelStartIndex];
   void *node         = entry->mNode;
 
   NS_ASSERTION((entry->mIsValid), "Invalid insertion point!");
@@ -2218,7 +1619,7 @@ nsTextServicesDocument::InsertText(const nsString *aText)
       itEntry->mIsInsertedText = PR_TRUE;
       itEntry->mNodeOffset = entry->mNodeOffset;
 
-      if (!mOffsetTable.InsertElementAt(itEntry, mSelStartIndex))
+      if (!mOffsetTable.InsertElementAt(mSelStartIndex, itEntry))
       {
         editor->EndTransaction();
         UNLOCK_DOC(this);
@@ -2236,9 +1637,9 @@ nsTextServicesDocument::InsertText(const nsString *aText)
     i       = mSelStartIndex + 1;
     itEntry = 0;
 
-    if (mOffsetTable.Count() > i)
+    if (mOffsetTable.Length() > i)
     {
-      itEntry = (OffsetEntry *)mOffsetTable[i];
+      itEntry = mOffsetTable[i];
 
       if (!itEntry)
       {
@@ -2271,7 +1672,7 @@ nsTextServicesDocument::InsertText(const nsString *aText)
       itEntry->mNodeOffset = entry->mNodeOffset + entry->mLength;
       itEntry->mIsInsertedText = PR_TRUE;
 
-      if (!mOffsetTable.InsertElementAt(itEntry, i))
+      if (!mOffsetTable.InsertElementAt(i, itEntry))
       {
         delete itEntry;
         return NS_ERROR_FAILURE;
@@ -2333,7 +1734,7 @@ nsTextServicesDocument::InsertText(const nsString *aText)
     itEntry->mIsInsertedText = PR_TRUE;
     itEntry->mNodeOffset     = entry->mNodeOffset + entry->mLength;
 
-    if (!mOffsetTable.InsertElementAt(itEntry, mSelStartIndex + 1))
+    if (!mOffsetTable.InsertElementAt(mSelStartIndex + 1, itEntry))
     {
       editor->EndTransaction();
       UNLOCK_DOC(this);
@@ -2347,9 +1748,9 @@ nsTextServicesDocument::InsertText(const nsString *aText)
   // update all entries with the same mNode pointer that follow
   // it in the table!
 
-  for (i = mSelStartIndex + 1; i < mOffsetTable.Count(); i++)
+  for (i = mSelStartIndex + 1; i < mOffsetTable.Length(); i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (entry->mNode == node)
     {
@@ -2392,75 +1793,6 @@ nsTextServicesDocument::InsertText(const nsString *aText)
   UNLOCK_DOC(this);
 
   return result;
-}
-
-NS_IMETHODIMP
-nsTextServicesDocument::SetDisplayStyle(TSDDisplayStyle aStyle)
-{
-  return NS_ERROR_NOT_IMPLEMENTED;
-}
-
-NS_IMETHODIMP
-nsTextServicesDocument::GetDOMRangeFor(PRInt32 aOffset, PRInt32 aLength, nsIDOMRange** aRange)
-{
-  if (!mSelCon || aOffset < 0 || aLength < 0)
-    return NS_ERROR_FAILURE;
-
-  nsIDOMNode *sNode = 0, *eNode = 0;
-  PRInt32 i, sOffset = 0, eOffset = 0;
-  OffsetEntry *entry;
-
-  // Find the start
-  for (i = 0; !sNode && i < mOffsetTable.Count(); i++)
-  {
-    entry = (OffsetEntry *)mOffsetTable[i];
-    if (entry->mIsValid)
-    {
-      if (entry->mIsInsertedText)
-      {
-        if (entry->mStrOffset == aOffset)
-        {
-          sNode   = entry->mNode;
-          sOffset = entry->mNodeOffset + entry->mLength;
-        }
-      }
-      else if (aOffset >= entry->mStrOffset && aOffset <= entry->mStrOffset + entry->mLength)
-      {
-        sNode   = entry->mNode;
-        sOffset = entry->mNodeOffset + aOffset - entry->mStrOffset;
-      }
-    }
-  }
-
-  if (!sNode)
-    return NS_ERROR_FAILURE;
-
-  // Now find the end
-  PRInt32 endOffset = aOffset + aLength;
-
-  for (i = mOffsetTable.Count() - 1; !eNode && i >= 0; i--)
-  {
-    entry = (OffsetEntry *)mOffsetTable[i];
-    
-    if (entry->mIsValid)
-    {
-      if (entry->mIsInsertedText)
-      {
-        if (entry->mStrOffset == eOffset)
-        {
-          eNode   = entry->mNode;
-          eOffset = entry->mNodeOffset + entry->mLength;
-        }
-      }
-      else if (endOffset >= entry->mStrOffset && endOffset <= entry->mStrOffset + entry->mLength)
-      {
-        eNode   = entry->mNode;
-        eOffset = entry->mNodeOffset + endOffset - entry->mStrOffset;
-      }
-    }
-  }
-
-  return CreateRange(sNode, sOffset, eNode, eOffset, aRange);
 }
 
 NS_IMETHODIMP
@@ -2522,11 +1854,11 @@ nsTextServicesDocument::DidDeleteNode(nsIDOMNode *aChild, nsresult aResult)
     NS_ASSERTION(0, "DeleteNode called for current iterator node."); 
   }
 
-  tcount = mOffsetTable.Count();
+  tcount = mOffsetTable.Length();
 
   while (nodeIndex < tcount)
   {
-    entry = (OffsetEntry *)mOffsetTable[nodeIndex];
+    entry = mOffsetTable[nodeIndex];
 
     if (!entry)
     {
@@ -2642,7 +1974,7 @@ nsTextServicesDocument::DidJoinNodes(nsIDOMNode  *aLeftNode,
 
   LOCK_DOC(this);
 
-  OffsetEntry *entry = (OffsetEntry *)mOffsetTable[rightIndex];
+  OffsetEntry *entry = mOffsetTable[rightIndex];
   NS_ASSERTION(entry->mNodeOffset == 0, "Unexpected offset value for rightIndex.");
 
   // Run through the table and change all entries referring to
@@ -2654,7 +1986,7 @@ nsTextServicesDocument::DidJoinNodes(nsIDOMNode  *aLeftNode,
 
   for (i = leftIndex; i < rightIndex; i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (entry->mNode == aLeftNode)
     {
@@ -2668,9 +2000,9 @@ nsTextServicesDocument::DidJoinNodes(nsIDOMNode  *aLeftNode,
   // Run through the table and adjust the node offsets
   // for all entries referring to the right node.
 
-  for (i = rightIndex; i < mOffsetTable.Count(); i++)
+  for (i = rightIndex; i < PRInt32(mOffsetTable.Length()); i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (entry->mNode == aRightNode)
     {
@@ -2953,7 +2285,7 @@ nsTextServicesDocument::AdjustContentIterator()
     return NS_ERROR_FAILURE;
 
   nsIDOMNode *nodePtr = node.get();
-  PRInt32 tcount      = mOffsetTable.Count();
+  PRInt32 tcount      = mOffsetTable.Length();
 
   nsIDOMNode *prevValidNode = 0;
   nsIDOMNode *nextValidNode = 0;
@@ -2962,7 +2294,7 @@ nsTextServicesDocument::AdjustContentIterator()
 
   for (PRInt32 i = 0; i < tcount && !nextValidNode; i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (!entry)
       return NS_ERROR_FAILURE;
@@ -3182,9 +2514,9 @@ nsTextServicesDocument::SetSelectionInternal(PRInt32 aOffset, PRInt32 aLength, P
 
   // Find start of selection in node offset terms:
 
-  for (i = 0; !sNode && i < mOffsetTable.Count(); i++)
+  for (i = 0; !sNode && i < PRInt32(mOffsetTable.Length()); i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
     if (entry->mIsValid)
     {
       if (entry->mIsInsertedText)
@@ -3213,9 +2545,9 @@ nsTextServicesDocument::SetSelectionInternal(PRInt32 aOffset, PRInt32 aLength, P
           // entry->mNode. If so, we have to place the selection
           // after it!
 
-          if ((i+1) < mOffsetTable.Count())
+          if ((i+1) < PRInt32(mOffsetTable.Length()))
           {
-            OffsetEntry *nextEntry = (OffsetEntry *)mOffsetTable[i+1];
+            OffsetEntry *nextEntry = mOffsetTable[i+1];
 
             if (!nextEntry->mIsValid || nextEntry->mStrOffset != aOffset)
             {
@@ -3280,9 +2612,9 @@ nsTextServicesDocument::SetSelectionInternal(PRInt32 aOffset, PRInt32 aLength, P
 
   PRInt32 endOffset = aOffset + aLength;
 
-  for (i = mOffsetTable.Count() - 1; !eNode && i >= 0; i--)
+  for (i = mOffsetTable.Length() - 1; !eNode && i >= 0; i--)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
     
     if (entry->mIsValid)
     {
@@ -3405,7 +2737,7 @@ nsTextServicesDocument::GetCollapsedSelection(nsITextServicesDocument::TSDBlockS
   *aSelStatus = nsITextServicesDocument::eBlockOutside;
   *aSelOffset = *aSelLength = -1;
 
-  tableCount = mOffsetTable.Count();
+  tableCount = mOffsetTable.Length();
 
   if (tableCount == 0)
     return NS_OK;
@@ -3413,10 +2745,10 @@ nsTextServicesDocument::GetCollapsedSelection(nsITextServicesDocument::TSDBlockS
   // Get pointers to the first and last offset entries
   // in the table.
 
-  eStart = (OffsetEntry *)mOffsetTable[0];
+  eStart = mOffsetTable[0];
 
   if (tableCount > 1)
-    eEnd = (OffsetEntry *)mOffsetTable[tableCount - 1];
+    eEnd = mOffsetTable[tableCount - 1];
   else
     eEnd = eStart;
 
@@ -3464,7 +2796,7 @@ nsTextServicesDocument::GetCollapsedSelection(nsITextServicesDocument::TSDBlockS
 
     for (i = 0; i < tableCount; i++)
     {
-      entry = (OffsetEntry *)mOffsetTable[i];
+      entry = mOffsetTable[i];
 
       if (!entry)
         return NS_ERROR_FAILURE;
@@ -3664,7 +2996,7 @@ nsTextServicesDocument::GetCollapsedSelection(nsITextServicesDocument::TSDBlockS
 
   for (i = 0; i < tableCount; i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (!entry)
       return NS_ERROR_FAILURE;
@@ -3720,15 +3052,15 @@ nsTextServicesDocument::GetUncollapsedSelection(nsITextServicesDocument::TSDBloc
   OffsetEntry *eStart, *eEnd;
   PRInt32 eStartOffset, eEndOffset;
 
-  tableCount = mOffsetTable.Count();
+  tableCount = mOffsetTable.Length();
 
   // Get pointers to the first and last offset entries
   // in the table.
 
-  eStart = (OffsetEntry *)mOffsetTable[0];
+  eStart = mOffsetTable[0];
 
   if (tableCount > 1)
-    eEnd = (OffsetEntry *)mOffsetTable[tableCount - 1];
+    eEnd = mOffsetTable[tableCount - 1];
   else
     eEnd = eStart;
 
@@ -3951,7 +3283,7 @@ nsTextServicesDocument::GetUncollapsedSelection(nsITextServicesDocument::TSDBloc
 
   for (i = 0; i < tableCount; i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (!entry)
       return NS_ERROR_FAILURE;
@@ -4334,7 +3666,7 @@ nsTextServicesDocument::GetFirstTextNodeInNextBlock(nsIContent **aContent)
 }
 
 nsresult
-nsTextServicesDocument::CreateOffsetTable(nsVoidArray *aOffsetTable,
+nsTextServicesDocument::CreateOffsetTable(nsTArray<OffsetEntry*> *aOffsetTable,
                                           nsIContentIterator *aIterator,
                                           TSDIteratorStatus *aIteratorStatus,
                                           nsIDOMRange *aIterRange,
@@ -4411,7 +3743,7 @@ nsTextServicesDocument::CreateOffsetTable(nsVoidArray *aOffsetTable,
           if (!entry)
             return NS_ERROR_OUT_OF_MEMORY;
 
-          aOffsetTable->AppendElement((void *)entry);
+          aOffsetTable->AppendElement(entry);
 
           // If one or both of the endpoints of the iteration range
           // are in the text node for this entry, make sure the entry
@@ -4496,14 +3828,13 @@ nsTextServicesDocument::RemoveInvalidOffsetEntries()
   OffsetEntry *entry;
   PRInt32 i = 0;
 
-  while (i < mOffsetTable.Count())
+  while (PRUint32(i) < mOffsetTable.Length())
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
 
     if (!entry->mIsValid)
     {
-      if (!mOffsetTable.RemoveElementAt(i))
-        return NS_ERROR_FAILURE;
+      mOffsetTable.RemoveElementAt(i);
 
       if (mSelStartIndex >= 0 && mSelStartIndex >= i)
       {
@@ -4525,15 +3856,13 @@ nsTextServicesDocument::RemoveInvalidOffsetEntries()
 }
 
 nsresult
-nsTextServicesDocument::ClearOffsetTable(nsVoidArray *aOffsetTable)
+nsTextServicesDocument::ClearOffsetTable(nsTArray<OffsetEntry*> *aOffsetTable)
 {
-  PRInt32 i;
+  PRUint32 i;
 
-  for (i = 0; i < aOffsetTable->Count(); i++)
+  for (i = 0; i < aOffsetTable->Length(); i++)
   {
-    OffsetEntry *entry = (OffsetEntry *)(*aOffsetTable)[i];
-    if (entry)
-      delete entry;
+    delete aOffsetTable->ElementAt(i);
   }
 
   aOffsetTable->Clear();
@@ -4544,7 +3873,7 @@ nsTextServicesDocument::ClearOffsetTable(nsVoidArray *aOffsetTable)
 nsresult
 nsTextServicesDocument::SplitOffsetEntry(PRInt32 aTableIndex, PRInt32 aNewEntryLength)
 {
-  OffsetEntry *entry = (OffsetEntry *)mOffsetTable[aTableIndex];
+  OffsetEntry *entry = mOffsetTable[aTableIndex];
 
   NS_ASSERTION((aNewEntryLength > 0), "aNewEntryLength <= 0");
   NS_ASSERTION((aNewEntryLength < entry->mLength), "aNewEntryLength >= mLength");
@@ -4561,7 +3890,7 @@ nsTextServicesDocument::SplitOffsetEntry(PRInt32 aTableIndex, PRInt32 aNewEntryL
   if (!newEntry)
     return NS_ERROR_OUT_OF_MEMORY;
 
-  if (!mOffsetTable.InsertElementAt(newEntry, aTableIndex + 1))
+  if (!mOffsetTable.InsertElementAt(aTableIndex + 1, newEntry))
   {
     delete newEntry;
     return NS_ERROR_FAILURE;
@@ -4576,17 +3905,17 @@ nsTextServicesDocument::SplitOffsetEntry(PRInt32 aTableIndex, PRInt32 aNewEntryL
 }
 
 nsresult
-nsTextServicesDocument::NodeHasOffsetEntry(nsVoidArray *aOffsetTable, nsIDOMNode *aNode, PRBool *aHasEntry, PRInt32 *aEntryIndex)
+nsTextServicesDocument::NodeHasOffsetEntry(nsTArray<OffsetEntry*> *aOffsetTable, nsIDOMNode *aNode, PRBool *aHasEntry, PRInt32 *aEntryIndex)
 {
   OffsetEntry *entry;
-  PRInt32 i;
+  PRUint32 i;
 
   if (!aNode || !aHasEntry || !aEntryIndex)
     return NS_ERROR_NULL_POINTER;
 
-  for (i = 0; i < aOffsetTable->Count(); i++)
+  for (i = 0; i < aOffsetTable->Length(); i++)
   {
-    entry = (OffsetEntry *)(*aOffsetTable)[i];
+    entry = (*aOffsetTable)[i];
 
     if (!entry)
       return NS_ERROR_FAILURE;
@@ -4614,7 +3943,7 @@ nsTextServicesDocument::NodeHasOffsetEntry(nsVoidArray *aOffsetTable, nsIDOMNode
 #endif
 
 nsresult
-nsTextServicesDocument::FindWordBounds(nsVoidArray *aOffsetTable,
+nsTextServicesDocument::FindWordBounds(nsTArray<OffsetEntry*> *aOffsetTable,
                                        nsString *aBlockStr,
                                        nsIDOMNode *aNode,
                                        PRInt32 aNodeOffset,
@@ -4647,7 +3976,7 @@ nsTextServicesDocument::FindWordBounds(nsVoidArray *aOffsetTable,
 
   // Next we map aNodeOffset into a string offset.
 
-  OffsetEntry *entry = (OffsetEntry *)(*aOffsetTable)[entryIndex];
+  OffsetEntry *entry = (*aOffsetTable)[entryIndex];
   PRUint32 strOffset = entry->mStrOffset + aNodeOffset - entry->mNodeOffset;
 
   // Now we use the word breaker to find the beginning and end
@@ -4687,11 +4016,11 @@ nsTextServicesDocument::FindWordBounds(nsVoidArray *aOffsetTable,
   // and end of the word, run through the offset table and
   // convert them back into dom points.
 
-  PRInt32 i, lastIndex = aOffsetTable->Count() - 1;
+  PRInt32 i, lastIndex = aOffsetTable->Length() - 1;
 
   for (i=0; i <= lastIndex; i++)
   {
-    entry = (OffsetEntry *)(*aOffsetTable)[i];
+    entry = (*aOffsetTable)[i];
 
     PRInt32 strEndOffset = entry->mStrOffset + entry->mLength;
 
@@ -4756,11 +4085,11 @@ void
 nsTextServicesDocument::PrintOffsetTable()
 {
   OffsetEntry *entry;
-  PRInt32 i;
+  PRUint32 i;
 
-  for (i = 0; i < mOffsetTable.Count(); i++)
+  for (i = 0; i < mOffsetTable.Length(); i++)
   {
-    entry = (OffsetEntry *)mOffsetTable[i];
+    entry = mOffsetTable[i];
     printf("ENTRY %4d: %p  %c  %c  %4d  %4d  %4d\n",
            i, entry->mNode,  entry->mIsValid ? 'V' : 'N',
            entry->mIsInsertedText ? 'I' : 'B',

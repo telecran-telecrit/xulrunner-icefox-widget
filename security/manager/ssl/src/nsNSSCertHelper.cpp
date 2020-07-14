@@ -379,6 +379,12 @@ GetOIDText(SECItem *oid, nsINSSComponent *nssComponent, nsAString &text)
   case SEC_OID_AVA_STATE_OR_PROVINCE:
     bundlekey = "CertDumpAVAState";
     break;
+  case SEC_OID_AVA_SURNAME:
+    bundlekey = "CertDumpSurname";
+    break;
+  case SEC_OID_AVA_GIVEN_NAME:
+    bundlekey = "CertDumpGivenName";
+    break;
   case SEC_OID_X509_SUBJECT_DIRECTORY_ATTR:
     bundlekey = "CertDumpSubjectDirectoryAttr";
     break;
@@ -1264,9 +1270,13 @@ ProcessAuthKeyId(SECItem  *extData,
 
   arena = PORT_NewArena(DER_DEFAULT_CHUNKSIZE);
   if (!arena)
-    return NS_ERROR_FAILURE;
+    return NS_ERROR_OUT_OF_MEMORY;
 
   ret = CERT_DecodeAuthKeyID (arena, extData);
+  if (!ret) {
+    rv = NS_ERROR_FAILURE;
+    goto finish;
+  }
 
   if (ret->keyID.len > 0) {
     nssComponent->GetPIPNSSBundleString("CertDumpKeyID", local);

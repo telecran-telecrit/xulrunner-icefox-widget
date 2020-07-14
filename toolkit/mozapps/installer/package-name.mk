@@ -160,7 +160,7 @@ endif # MOZ_PKG_PRETTYNAMES
 SYMBOL_ARCHIVE_BASENAME = $(PKG_BASENAME).crashreporter-symbols
 
 # Test package naming
-TEST_PACKAGE = $(PKG_BASENAME).tests.tar.bz2
+TEST_PACKAGE = $(PKG_BASENAME).tests.zip
 
 ifneq (,$(wildcard $(DIST)/bin/application.ini))
 BUILDID = $(shell $(PYTHON) $(MOZILLA_DIR)/config/printconfigsetting.py $(DIST)/bin/application.ini App BuildID)
@@ -168,4 +168,12 @@ else
 BUILDID = $(shell $(PYTHON) $(MOZILLA_DIR)/config/printconfigsetting.py $(DIST)/bin/platform.ini Build BuildID)
 endif
 
-MOZ_SOURCE_STAMP = $(shell hg -R $(topsrcdir) parent --template="{node|short}\n" 2>/dev/null)
+MOZ_SOURCE_STAMP = $(shell hg -R $(MOZILLA_DIR) parent --template="{node|short}\n" 2>/dev/null)
+
+# strip a trailing slash from the repo URL because it's not always present,
+# and we want to construct a working URL in the sourcestamp file.
+# make+shell+sed = awful
+_dollar=$$
+MOZ_SOURCE_REPO = $(shell cd $(MOZILLA_DIR) && hg showconfig paths.default 2>/dev/null | head -n1 | sed -e "s/^ssh:/http:/" -e "s/\/$(_dollar)//" )
+
+MOZ_SOURCESTAMP_FILE = $(DIST)/$(PKG_PATH)/$(PKG_BASENAME).txt

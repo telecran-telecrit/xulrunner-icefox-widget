@@ -428,7 +428,9 @@ GetCertFingerprintByOidTag(CERTCertificate* nsscert,
   fpItem.data = (unsigned char*)fingerprint->Data();
   fpItem.len = hash_len;
 
-  fp.Adopt(CERT_Hexify(&fpItem, 1));
+  char *tmpstr = CERT_Hexify(&fpItem, 1);
+  fp.Assign(tmpstr);
+  PORT_Free(tmpstr);
   fingerprint->Release();
   return NS_OK;
 }
@@ -694,6 +696,11 @@ nsCertOverrideService::AddEntryToList(const nsACString &aHostName, PRInt32 aPort
 NS_IMETHODIMP
 nsCertOverrideService::ClearValidityOverride(const nsACString & aHostName, PRInt32 aPort)
 {
+  if (aPort == 0 &&
+      aHostName.EqualsLiteral("all:temporary-certificates")) {
+    RemoveAllTemporaryOverrides();
+    return NS_OK;
+  }
   nsCAutoString hostPort;
   GetHostWithPort(aHostName, aPort, hostPort);
   {

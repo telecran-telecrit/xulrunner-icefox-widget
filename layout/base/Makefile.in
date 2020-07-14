@@ -89,6 +89,8 @@ XPIDLSRCS	= \
 		nsIStyleSheetService.idl	\
 		$(NULL)
 
+EXPORTS_NAMESPACES = mozilla
+
 EXPORTS		= \
 		nsBidi.h \
 		nsBidiPresUtils.h \
@@ -110,12 +112,15 @@ EXPORTS		= \
 		nsIReflowCallback.h \
 		nsLayoutErrors.h \
 		nsLayoutUtils.h \
-		nsIFocusEventSuppressor.h \
 		nsPresContext.h \
 		nsPresState.h \
 		nsStyleChangeList.h \
 		nsStyleConsts.h \
 		$(NULL)
+
+EXPORTS_mozilla =\
+  PaintTracker.h \
+  $(NULL)
 
 CPPSRCS		= \
 		nsCSSColorUtils.cpp \
@@ -134,13 +139,14 @@ CPPSRCS		= \
 		nsLayoutDebugger.cpp \
 		nsLayoutHistoryState.cpp \
 		nsLayoutUtils.cpp \
+		nsPresArena.cpp \
 		nsPresContext.cpp \
 		nsPresShell.cpp \
 		nsPresState.cpp \
 		nsQuoteList.cpp \
 		nsStyleChangeList.cpp \
 		nsStyleSheetService.cpp \
-		nsFocusEventSuppressor.cpp \
+		PaintTracker.cpp \
 		$(NULL)
 
 ifndef MOZ_XUL
@@ -179,14 +185,13 @@ LOCAL_INCLUDES += \
 		-I$(srcdir)/../../content/events/src \
 		-I$(srcdir)/../../content/xbl/src \
 		-I$(srcdir)/../../view/src \
-		-I$(srcdir)/../../dom/src/base \
+		-I$(srcdir)/../../dom/base \
 		-I$(srcdir)/../../content/svg/content/src \
 		$(NULL)
 
 ifdef MOZ_MATHML
 LOCAL_INCLUDES += \
-        -I$(srcdir)/../mathml/content/src \
-        -I$(srcdir)/../mathml/base/src
+        -I$(srcdir)/../mathml
 endif
 
 ifdef MOZ_SVG

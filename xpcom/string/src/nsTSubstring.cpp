@@ -59,7 +59,7 @@ nsTSubstring_CharT::nsTSubstring_CharT(const substring_tuple_type& tuple)
 }
 
 nsTSubstring_CharT::nsTSubstring_CharT()
-: mData(const_cast<char_type*>(char_traits::sEmptyBuffer)),
+: mData(char_traits::sEmptyBuffer),
   mLength(0),
   mFlags(F_TERMINATED) {}
 
@@ -97,36 +97,37 @@ nsTSubstring_CharT::MutatePrep( size_type capacity, char_type** oldData, PRUint3
 
     size_type curCapacity = Capacity();
 
-    // If |capacity > size_type(-1)/2|, then our doubling algorithm may not be
+    // If |capacity > kMaxCapacity|, then our doubling algorithm may not be
     // able to allocate it.  Just bail out in cases like that.  We don't want
     // to be allocating 2GB+ strings anyway.
-    if (capacity > size_type(-1)/2) {
-      // Also assert for |capacity| equal to |size_type(-1)|, since we use that value to
-      // flag immutability.
+    PR_STATIC_ASSERT((sizeof(nsStringBuffer) & 0x1) == 0);
+    const size_type kMaxCapacity =
+      (size_type(-1)/2 - sizeof(nsStringBuffer)) / sizeof(char_type) - 2;
+    if (capacity > kMaxCapacity) {
+      // Also assert for |capacity| equal to |size_type(-1)|, since we used to
+      // use that value to flag immutability.
       NS_ASSERTION(capacity != size_type(-1), "Bogus capacity");
       return PR_FALSE;
     }
 
-    // |curCapacity == size_type(-1)| means that the buffer is immutable, so we
-    // need to allocate a new buffer.  we cannot use the existing buffer even
+    // |curCapacity == 0| means that the buffer is immutable or 0-sized, so we
+    // need to allocate a new buffer. We cannot use the existing buffer even
     // though it might be large enough.
 
-    if (curCapacity != size_type(-1))
+    if (curCapacity != 0)
       {
         if (capacity <= curCapacity) {
           mFlags &= ~F_VOIDED;  // mutation clears voided flag
           return PR_TRUE;
         }
 
-        if (curCapacity > 0)
-          {
-            // use doubling algorithm when forced to increase available
-            // capacity.
-            PRUint32 temp = curCapacity;
-            while (temp < capacity)
-              temp <<= 1;
-            capacity = temp;
-          }
+        // Use doubling algorithm when forced to increase available capacity.
+        size_type temp = curCapacity;
+        while (temp < capacity)
+          temp <<= 1;
+        NS_ASSERTION(NS_MIN(temp, kMaxCapacity) >= capacity,
+                     "should have hit the early return at the top");
+        capacity = NS_MIN(temp, kMaxCapacity);
       }
 
     //
@@ -272,7 +273,7 @@ nsTSubstring_CharT::ReplacePrep( index_type cutStart, size_type cutLen, size_typ
 nsTSubstring_CharT::size_type
 nsTSubstring_CharT::Capacity() const
   {
-    // return size_type(-1) to indicate an immutable buffer
+    // return 0 to indicate an immutable or 0-sized buffer
 
     size_type capacity;
     if (mFlags & F_SHARED)
@@ -280,9 +281,10 @@ nsTSubstring_CharT::Capacity() const
         // if the string is readonly, then we pretend that it has no capacity.
         nsStringBuffer* hdr = nsStringBuffer::FromData(mData);
         if (hdr->IsReadonly())
-          capacity = size_type(-1);
-        else
+          capacity = 0;
+        else {
           capacity = (hdr->StorageSize() / sizeof(char_type)) - 1;
+        }
       }
     else if (mFlags & F_FIXED)
       {
@@ -298,7 +300,7 @@ nsTSubstring_CharT::Capacity() const
       }
     else
       {
-        capacity = size_type(-1);
+        capacity = 0;
       }
 
     return capacity;
@@ -316,7 +318,7 @@ nsTSubstring_CharT::EnsureMutable( size_type newLen )
 
         // promote to a shared string buffer
         char_type* prevData = mData;
-        Assign(string_type(mData, mLength));
+        Assign(mData, mLength);
         return mData != prevData;
       }
     else
@@ -394,7 +396,12 @@ nsTSubstring_CharT::Assign( const self_type& str )
     if (&str == this)
       return;
 
-    if (str.mFlags & F_SHARED)
+    if (!str.mLength)
+      {
+        Truncate();
+        mFlags |= str.mFlags & F_VOIDED;
+      }
+    else if (str.mFlags & F_SHARED)
       {
         // nice! we can avoid a string copy :-)
 
@@ -409,11 +416,6 @@ nsTSubstring_CharT::Assign( const self_type& str )
 
         // get an owning reference to the mData
         nsStringBuffer::FromData(mData)->AddRef();
-      }
-    else if (str.mFlags & F_VOIDED)
-      {
-        // inherit the F_VOIDED attribute
-        SetIsVoid(PR_TRUE);
       }
     else
       {
@@ -554,7 +556,7 @@ nsTSubstring_CharT::Replace( index_type cutStart, size_type cutLength, const sub
       tuple.WriteTo(mData + cutStart, length);
   }
 
-void
+PRBool
 nsTSubstring_CharT::SetCapacity( size_type capacity )
   {
     // capacity does not include room for the terminating null char
@@ -563,7 +565,7 @@ nsTSubstring_CharT::SetCapacity( size_type capacity )
     if (capacity == 0)
       {
         ::ReleaseData(mData, mFlags);
-        mData = const_cast<char_type*>(char_traits::sEmptyBuffer);
+        mData = char_traits::sEmptyBuffer;
         mLength = 0;
         SetDataFlags(F_TERMINATED);
       }
@@ -572,7 +574,7 @@ nsTSubstring_CharT::SetCapacity( size_type capacity )
         char_type* oldData;
         PRUint32 oldFlags;
         if (!MutatePrep(capacity, &oldData, &oldFlags))
-          return; // out-of-memory
+          return PR_FALSE; // out-of-memory
 
         // compute new string length
         size_type newLen = NS_MIN(mLength, capacity);
@@ -594,19 +596,14 @@ nsTSubstring_CharT::SetCapacity( size_type capacity )
         // for backwards compat with the old string implementation.
         mData[capacity] = char_type(0);
       }
+
+    return PR_TRUE;
   }
 
 void
 nsTSubstring_CharT::SetLength( size_type length )
   {
-    SetCapacity(length);
-
-    // XXX(darin): SetCapacity may fail, but it doesn't give us a way to find
-    // out.  We should improve that.  For now we just verify that the capacity
-    // changed as expected as a means of error checking.
- 
-    size_type capacity = Capacity();
-    if (capacity != size_type(-1) && capacity >= length)
+    if (SetCapacity(length))
       mLength = length;
   }
 

@@ -64,6 +64,7 @@ public:
   /* nsIContentIterator */
   virtual nsresult Init(nsINode* aRoot);
   virtual nsresult Init(nsIDOMRange* aRange);
+  virtual nsresult Init(nsIRange* aRange);
   virtual void First();
   virtual void Last();
   virtual void Next();

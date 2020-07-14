@@ -1684,7 +1684,9 @@ nsNSSComponent::InitializeNSS(PRBool showWarningBox)
 
       // Now only set SSL/TLS ciphers we knew about at compile time
       for (CipherPref* cp = CipherPrefs; cp->pref; ++cp) {
-        mPrefBranch->GetBoolPref(cp->pref, &enabled);
+        rv = mPrefBranch->GetBoolPref(cp->pref, &enabled);
+        if (NS_FAILED(rv))
+          enabled = PR_FALSE;
 
         SSL_CipherPrefSetDefault(cp->id, enabled);
       }
@@ -2276,12 +2278,10 @@ nsresult nsNSSComponent::LogoutAuthenticatedPK11()
 {
   nsCOMPtr<nsICertOverrideService> icos = 
     do_GetService("@mozilla.org/security/certoverride;1");
-    
-  nsCertOverrideService *cos = 
-    reinterpret_cast<nsCertOverrideService*>(icos.get());
-
-  if (cos) {
-    cos->RemoveAllTemporaryOverrides();
+  if (icos) {
+    icos->ClearValidityOverride(
+            NS_LITERAL_CSTRING("all:temporary-certificates"),
+            0);
   }
 
   if (mClientAuthRememberService) {
@@ -2595,6 +2595,7 @@ nsNSSComponent::IsNSSInitialized(PRBool *initialized)
 
 nsCryptoHash::nsCryptoHash()
   : mHashContext(nsnull)
+  , mInitialized(PR_FALSE)
 {
 }
 
@@ -2631,14 +2632,28 @@ nsCryptoHash::Init(PRUint32 algorithm)
 {
   nsNSSShutDownPreventionLock locker;
 
+  HASH_HashType hashType = (HASH_HashType)algorithm;
   if (mHashContext)
-    HASH_Destroy(mHashContext);
+  {
+    if ((!mInitialized) && (HASH_GetType(mHashContext) == hashType))
+    {
+      mInitialized = PR_TRUE;
+      HASH_Begin(mHashContext);
+      return NS_OK;
+    }
 
-  mHashContext = HASH_Create((HASH_HashType) algorithm);
+    // Destroy current hash context if the type was different
+    // or Finish method wasn't called.
+    HASH_Destroy(mHashContext);
+    mInitialized = PR_FALSE;
+  }
+
+  mHashContext = HASH_Create(hashType);
   if (!mHashContext)
     return NS_ERROR_INVALID_ARG;
 
   HASH_Begin(mHashContext);
+  mInitialized = PR_TRUE;
   return NS_OK; 
 }
 
@@ -2671,7 +2686,7 @@ nsCryptoHash::Update(const PRUint8 *data, PRUint32 len)
 {
   nsNSSShutDownPreventionLock locker;
   
-  if (!mHashContext)
+  if (!mInitialized)
     return NS_ERROR_NOT_INITIALIZED;
 
   HASH_Update(mHashContext, data, len);
@@ -2681,7 +2696,7 @@ nsCryptoHash::Update(const PRUint8 *data, PRUint32 len)
 NS_IMETHODIMP
 nsCryptoHash::UpdateFromStream(nsIInputStream *data, PRUint32 len)
 {
-  if (!mHashContext)
+  if (!mInitialized)
     return NS_ERROR_NOT_INITIALIZED;
 
   if (!data)
@@ -2731,7 +2746,7 @@ nsCryptoHash::Finish(PRBool ascii, nsACString & _retval)
 {
   nsNSSShutDownPreventionLock locker;
   
-  if (!mHashContext)
+  if (!mInitialized)
     return NS_ERROR_NOT_INITIALIZED;
   
   PRUint32 hashLen = 0;
@@ -2739,9 +2754,8 @@ nsCryptoHash::Finish(PRBool ascii, nsACString & _retval)
   unsigned char* pbuffer = buffer;
 
   HASH_End(mHashContext, pbuffer, &hashLen, HASH_LENGTH_MAX);
-  HASH_Destroy(mHashContext);
 
-  mHashContext = nsnull;
+  mInitialized = PR_FALSE;
 
   if (ascii)
   {

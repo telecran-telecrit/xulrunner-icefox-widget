@@ -44,10 +44,7 @@
 #include "nsXULAppAPI.h"
 #include "nsAppRunner.h"
 #include "nsILocalFile.h"
-#include "nsISimpleEnumerator.h"
-#include "nsIDirectoryEnumerator.h"
 #include "nsCOMPtr.h"
-#include "nsCOMArray.h"
 #include "nsString.h"
 #include "nsPrintfCString.h"
 #include "prproces.h"
@@ -125,12 +122,11 @@ GetCurrentWorkingDir(char *buf, size_t size)
   if (DosQueryPathInfo( ".", FIL_QUERYFULLNAME, buf, size))
     return NS_ERROR_FAILURE;
 #elif defined(XP_WIN)
-  wchar_t *wpath = _wgetcwd(NULL, size);
-  if (!wpath)
+  wchar_t wpath[MAX_PATH];
+  if (!_wgetcwd(wpath, size))
     return NS_ERROR_FAILURE;
   NS_ConvertUTF16toUTF8 path(wpath);
   strncpy(buf, path.get(), size);
-  free(wpath);
 #else
   if(!getcwd(buf, size))
     return NS_ERROR_FAILURE;
@@ -179,48 +175,6 @@ GetXULRunnerStubPath(const char* argv0, nsILocalFile* *aResult)
   return NS_OK;
 }
 #endif /* XP_MACOSX */
-
-static int
-ScanDirComparator(nsIFile *a, nsIFile *b, void *unused)
-{
-  // lexically compare the leaf names of these two files
-  nsCAutoString a_name, b_name;
-  a->GetNativeLeafName(a_name);
-  b->GetNativeLeafName(b_name);
-  return Compare(a_name, b_name);
-}
-
-static nsresult
-ScanDir(nsIFile *dir, nsCOMArray<nsIFile> *result)
-{
-  nsresult rv;
-
-  nsCOMPtr<nsISimpleEnumerator> simpEnum;
-  rv = dir->GetDirectoryEntries(getter_AddRefs(simpEnum));
-  if (NS_FAILED(rv))
-    return rv;
-
-  nsCOMPtr<nsIDirectoryEnumerator> dirEnum = do_QueryInterface(simpEnum, &rv);
-  if (NS_FAILED(rv))
-    return rv;
-
-  nsCOMPtr<nsIFile> file;
-  for (;;) {
-    rv = dirEnum->GetNextFile(getter_AddRefs(file));
-    if (NS_FAILED(rv))
-      return rv;
-
-    // enumeration complete when null file is returned
-    if (!file)
-      break;
-
-    if (!result->AppendObject(file))
-      return NS_ERROR_OUT_OF_MEMORY;
-  }
-
-  result->Sort(ScanDirComparator, nsnull);
-  return NS_OK;
-}
 
 static PRBool
 GetFile(nsIFile *dir, const nsCSubstring &name, nsCOMPtr<nsILocalFile> &result)
@@ -527,7 +481,7 @@ ApplyUpdate(nsIFile *greDir, nsIFile *updateDir, nsILocalFile *statusFile,
 #elif defined(XP_WIN)
   _wchdir(applyToDir.get());
 
-  if (!WinLaunchChild(updaterPathW.get(), appArgc + 4, argv, 0))
+  if (!WinLaunchChild(updaterPathW.get(), appArgc + 4, argv))
     return;
   _exit(0);
 #else
@@ -569,34 +523,26 @@ ProcessUpdates(nsIFile *greDir, nsIFile *appDir, nsIFile *updRootDir,
   if (NS_FAILED(rv))
     return rv;
 
+  rv = updatesDir->AppendNative(NS_LITERAL_CSTRING("0"));
+  if (NS_FAILED(rv))
+    return rv;
+
   PRBool exists;
   rv = updatesDir->Exists(&exists);
   if (NS_FAILED(rv) || !exists)
     return rv;
 
-  nsCOMArray<nsIFile> dirEntries;
-  rv = ScanDir(updatesDir, &dirEntries);
-  if (NS_FAILED(rv))
-    return rv;
-  if (dirEntries.Count() == 0)
-    return NS_OK;
-
-  // look for the first update subdirectory with a status of pending
-  for (int i = 0; i < dirEntries.Count(); ++i) {
-    nsCOMPtr<nsILocalFile> statusFile;
-    if (GetStatusFile(dirEntries[i], statusFile) && IsPending(statusFile)) {
-      nsCOMPtr<nsILocalFile> versionFile;
-      // Remove the update if the update application version file doesn't exist
-      // or if the update's application version is less than the current
-      // application version.
-      if (!GetVersionFile(dirEntries[i], versionFile) ||
-          IsOlderVersion(versionFile, appVersion)) {
-        dirEntries[i]->Remove(PR_TRUE);
-        continue;
-      }
-
-      ApplyUpdate(greDir, dirEntries[i], statusFile, appDir, argc, argv);
-      break;
+  nsCOMPtr<nsILocalFile> statusFile;
+  if (GetStatusFile(updatesDir, statusFile) && IsPending(statusFile)) {
+    nsCOMPtr<nsILocalFile> versionFile;
+    // Remove the update if the update application version file doesn't exist
+    // or if the update's application version is less than the current
+    // application version.
+    if (!GetVersionFile(updatesDir, versionFile) ||
+        IsOlderVersion(versionFile, appVersion)) {
+      updatesDir->Remove(PR_TRUE);
+    } else {
+      ApplyUpdate(greDir, updatesDir, statusFile, appDir, argc, argv);
     }
   }
 

@@ -7,6 +7,8 @@
 </head>
 <body>
     <script class="testbody" type="text/javascript;version=1.7">
+    ok(window instanceof Object, "window is instanceof Object");
+
     var answer = [];
     for (let i in location)
         answer.push(i);
@@ -111,6 +113,15 @@
     is(XPCSafeJSObjectWrapper.prototype + '',
        "[object XPCSafeJSObjectWrapper]",
        "able to convert XPCSafeJSObjectWrapper.prototype to string");
+
+    try {
+        is((function(x) { return x+1; }).apply(this,
+                                               XPCSafeJSObjectWrapper([1])),
+           2);
+    } catch (e) {
+        ok(false,
+           "Unable to call apply() with a XPCSafeJSObjectWrapped array");
+    }
     </script>
 </body>
 </html>

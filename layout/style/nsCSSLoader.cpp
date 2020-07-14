@@ -1621,8 +1621,8 @@ CSSLoaderImpl::ParseSheet(nsIUnicharInputStream* aStream,
   aLoadData->mSheet->GetSheetURI(getter_AddRefs(sheetURI));
   aLoadData->mSheet->GetBaseURI(getter_AddRefs(baseURI));
   if (aLoadData->mCheckInitialSyntax) {
-    nsCOMPtr<nsICSSParser_1_9_1> pext(do_QueryInterface(parser));
-    NS_ABORT_IF_FALSE(pext, "nsICSSParser_1_9_1 missing from parser impl");
+    nsCOMPtr<nsICSSParser_1_9_2> pext(do_QueryInterface(parser));
+    NS_ABORT_IF_FALSE(pext, "nsICSSParser_1_9_2 missing from parser impl");
     rv = pext->ParseWithInitialSyntaxCheck(aStream, sheetURI, baseURI,
                                            aLoadData->mSheet->Principal(),
                                            aLoadData->mLineNumber,
@@ -1633,7 +1633,7 @@ CSSLoaderImpl::ParseSheet(nsIUnicharInputStream* aStream,
                        aLoadData->mLineNumber,
                        aLoadData->mAllowUnsafeRules);
   }
-  mParsingDatas.RemoveElementAt(mParsingDatas.Count() - 1);
+  mParsingDatas.RemoveElementAt(mParsingDatas.Length() - 1);
   RecycleParser(parser);
 
   if (rv == NS_ERROR_DOM_SYNTAX_ERR) {
@@ -1763,7 +1763,7 @@ CSSLoaderImpl::DoSheetComplete(SheetLoadData* aLoadData, nsresult aStatus,
     // or some such).
     if (data->mParentData &&
         --(data->mParentData->mPendingChildren) == 0 &&
-        mParsingDatas.IndexOf(data->mParentData) == -1) {
+        !mParsingDatas.Contains(data->mParentData)) {
       DoSheetComplete(data->mParentData, aStatus, aDatasToNotify);
     }
     
@@ -1808,7 +1808,7 @@ CSSLoaderImpl::LoadInlineStyle(nsIContent* aElement,
 {
   LOG(("CSSLoaderImpl::LoadInlineStyle"));
   NS_PRECONDITION(aStream, "Must have a stream to parse!");
-  NS_ASSERTION(mParsingDatas.Count() == 0, "We're in the middle of a parse?");
+  NS_ASSERTION(mParsingDatas.Length() == 0, "We're in the middle of a parse?");
 
   *aCompleted = PR_TRUE;
 
@@ -1878,7 +1878,7 @@ CSSLoaderImpl::LoadStyleLink(nsIContent* aElement,
 {
   LOG(("CSSLoaderImpl::LoadStyleLink"));
   NS_PRECONDITION(aURL, "Must have URL to load");
-  NS_ASSERTION(mParsingDatas.Count() == 0, "We're in the middle of a parse?");
+  NS_ASSERTION(mParsingDatas.Length() == 0, "We're in the middle of a parse?");
 
   LOG_URI("  Link uri: '%s'", aURL);
   LOG(("  Link title: '%s'", NS_ConvertUTF16toUTF8(aTitle).get()));
@@ -2015,11 +2015,10 @@ CSSLoaderImpl::LoadChildSheet(nsICSSStyleSheet* aParentSheet,
   SheetLoadData* parentData = nsnull;
   nsCOMPtr<nsICSSLoaderObserver> observer;
 
-  PRInt32 count = mParsingDatas.Count();
+  PRInt32 count = mParsingDatas.Length();
   if (count > 0) {
     LOG(("  Have a parent load"));
-    parentData = static_cast<SheetLoadData*>
-                            (mParsingDatas.ElementAt(count - 1));
+    parentData = mParsingDatas.ElementAt(count - 1);
     // Check for cycles
     SheetLoadData* data = parentData;
     while (data && data->mURI) {
@@ -2139,7 +2138,7 @@ CSSLoaderImpl::InternalLoadNonDocumentSheet(nsIURI* aURL,
   NS_PRECONDITION(aSheet || aObserver, "Sheet and observer can't both be null");
   NS_PRECONDITION(!aUseSystemPrincipal || !aObserver,
                   "Shouldn't load system-principal sheets async");
-  NS_ASSERTION(mParsingDatas.Count() == 0, "We're in the middle of a parse?");
+  NS_ASSERTION(mParsingDatas.Length() == 0, "We're in the middle of a parse?");
 
   LOG_URI("  Non-document sheet uri: '%s'", aURL);
   

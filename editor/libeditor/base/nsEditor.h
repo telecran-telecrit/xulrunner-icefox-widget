@@ -79,13 +79,13 @@ class DeleteTextTxn;
 class SplitElementTxn;
 class JoinElementTxn;
 class EditAggregateTxn;
-class nsILocale;
 class IMETextTxn;
 class AddStyleSheetTxn;
 class RemoveStyleSheetTxn;
 class nsIFile;
 class nsISelectionController;
 class nsIDOMEventTarget;
+class nsIDOMNSEvent;
 
 #define kMOZEditorBogusNodeAttr NS_LITERAL_STRING("_moz_editor_bogus_node")
 #define kMOZEditorBogusNodeValue NS_LITERAL_STRING("TRUE")
@@ -99,7 +99,8 @@ class nsEditor : public nsIEditor,
                  public nsIEditorIMESupport,
                  public nsSupportsWeakReference,
                  public nsIPhonetic,
-                 public nsStubMutationObserver
+                 public nsStubMutationObserver,
+                 public nsIEditor_MOZILLA_1_9_2_BRANCH
 {
 public:
 
@@ -159,6 +160,9 @@ public:
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
 
+  // nsIEditor_MOZILLA_1_9_2_BRANCH
+  NS_DECL_NSIEDITOR_MOZILLA_1_9_2_BRANCH
+
 public:
 
   
@@ -196,6 +200,29 @@ public:
       nsIContent** aContent   - returned Content that was created with above namespace.
   */
   nsresult CreateHTMLContent(const nsAString& aTag, nsIContent** aContent);
+
+  void BeginKeypressHandling() { mLastKeypressEventWasTrusted = eTriTrue; }
+  void BeginKeypressHandling(nsIDOMNSEvent* aEvent);
+  void EndKeypressHandling() { mLastKeypressEventWasTrusted = eTriUnset; }
+
+  class FireTrustedInputEvent {
+  public:
+    explicit FireTrustedInputEvent(nsEditor* aSelf, PRBool aActive = PR_TRUE)
+      : mEditor(aSelf)
+      , mShouldAct(aActive && mEditor->mLastKeypressEventWasTrusted == eTriUnset) {
+      if (mShouldAct) {
+        mEditor->BeginKeypressHandling();
+      }
+    }
+    ~FireTrustedInputEvent() {
+      if (mShouldAct) {
+        mEditor->EndKeypressHandling();
+      }
+    }
+  private:
+    nsEditor* mEditor;
+    PRBool mShouldAct;
+  };
 
 protected:
   nsCString mContentMIMEType;       // MIME type of the doc we are editing.
@@ -643,6 +670,8 @@ protected:
   nsCOMPtr<nsIDOMEventListener> mCompositionListenerP;
   nsCOMPtr<nsIDOMEventListener> mDragListenerP;
   nsCOMPtr<nsIDOMEventListener> mFocusListenerP;
+
+  Tristate mLastKeypressEventWasTrusted;
 
   friend PRBool NSCanUnload(nsISupports* serviceMgr);
   friend class nsAutoTxnsConserveSelection;

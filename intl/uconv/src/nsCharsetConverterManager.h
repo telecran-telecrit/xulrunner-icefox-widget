@@ -46,17 +46,16 @@
 #include "nsINativeUConvService.h"
 #endif
 
-class nsCharsetConverterManager : public nsICharsetConverterManager
+class nsCharsetConverterManager : public nsICharsetConverterManager_1_9_BRANCH
 {
   NS_DECL_ISUPPORTS
   NS_DECL_NSICHARSETCONVERTERMANAGER
+  NS_DECL_NSICHARSETCONVERTERMANAGER_1_9_BRANCH
 
 public:
 
   nsCharsetConverterManager();
   virtual ~nsCharsetConverterManager();
-
-  nsresult Init();
 
 private:
 
@@ -66,8 +65,6 @@ private:
 #ifdef MOZ_USE_NATIVE_UCONV
   nsCOMPtr<nsINativeUConvService> mNativeUC;
 #endif
-
-  nsInterfaceHashtable<nsCharPtrHashKey, nsIUnicodeDecoder> mDecoderHash;
 
   nsresult LoadExtensibleBundle(const char * aRegistryKey, 
       nsIStringBundle ** aResult);

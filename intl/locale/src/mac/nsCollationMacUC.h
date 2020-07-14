@@ -36,20 +36,19 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
-#ifndef nsCollationMacUC_h__
-#define nsCollationMacUC_h__
+#ifndef nsCollationMacUC_h_
+#define nsCollationMacUC_h_
 
 #include "nsICollation.h"
-#include "nsCollation.h"  // static library
-#include <MacLocales.h>
-#include <UnicodeUtilities.h>
+#include "nsCollation.h"
+#include <Carbon/Carbon.h>
 
 // Maximum number of characters for a buffer to remember 
 // the generated collation key.
 const PRUint32 kCacheSize = 128;
 // According to the documentation, the length of the key should typically be
-// at least 5 * textLength
-const PRUint32 kCollationValueSizeFactor = 5;
+// at least 5 * textLength, but 6* would be safer.
+const PRUint32 kCollationValueSizeFactor = 6;
 
 class nsCollationMacUC : public nsICollation {
 
@@ -79,4 +78,4 @@ private:
   PRUint32 mBufferLen; // byte length of buffer
 };
 
-#endif  /* nsCollationMacUC_h__ */
+#endif  /* nsCollationMacUC_h_ */

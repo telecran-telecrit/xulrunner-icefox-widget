@@ -1,3 +1,4 @@
+
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /* ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
@@ -125,7 +126,7 @@ nsHttpPipeline::AddTransaction(nsAHttpTransaction *trans)
     if (mConnection) {
         trans->SetConnection(this);
 
-        if (mRequestQ.Count() == 1)
+        if (mRequestQ.Length() == 1)
             mConnection->ResumeSend();
     }
 
@@ -277,7 +278,7 @@ nsHttpPipeline::PushBack(const char *data, PRUint32 length)
     }
     else if (length > mPushBackMax) {
         // grow push back buffer as necessary.
-        NS_ASSERTION(length <= NS_HTTP_SEGMENT_SIZE, "too big");
+        NS_ASSERTION(length <= nsIOService::gDefaultSegmentSize, "too big");
         mPushBackMax = length;
         mPushBackBuf = (char *) realloc(mPushBackBuf, mPushBackMax);
         if (!mPushBackBuf)
@@ -304,7 +305,7 @@ nsHttpPipeline::SetConnection(nsAHttpConnection *conn)
 
     NS_IF_ADDREF(mConnection = conn);
 
-    PRInt32 i, count = mRequestQ.Count();
+    PRInt32 i, count = mRequestQ.Length();
     for (i=0; i<count; ++i)
         Request(i)->SetConnection(this);
 }
@@ -340,7 +341,7 @@ nsHttpPipeline::OnTransportStatus(nsresult status, PRUint64 progress)
         break;
     default:
         // forward other notifications to all transactions
-        PRInt32 i, count = mRequestQ.Count();
+        PRInt32 i, count = mRequestQ.Length();
         for (i=0; i<count; ++i) {
             trans = Request(i);
             if (trans)
@@ -353,7 +354,7 @@ nsHttpPipeline::OnTransportStatus(nsresult status, PRUint64 progress)
 PRBool
 nsHttpPipeline::IsDone()
 {
-    return (mRequestQ.Count() == 0) && (mResponseQ.Count() == 0);
+    return (mRequestQ.Length() == 0) && (mResponseQ.Length() == 0);
 }
 
 nsresult
@@ -367,7 +368,7 @@ nsHttpPipeline::Available()
 {
     PRUint32 result = 0;
 
-    PRInt32 i, count = mRequestQ.Count();
+    PRInt32 i, count = mRequestQ.Length();
     for (i=0; i<count; ++i)
         result += Request(i)->Available();
     return result;
@@ -449,7 +450,7 @@ nsHttpPipeline::WriteSegments(nsAHttpSegmentWriter *writer,
 
     trans = Response(0);
     if (!trans) {
-        if (mRequestQ.Count() > 0)
+        if (mRequestQ.Length() > 0)
             rv = NS_BASE_STREAM_WOULD_BLOCK;
         else
             rv = NS_BASE_STREAM_CLOSED;
@@ -509,7 +510,7 @@ nsHttpPipeline::Close(nsresult reason)
     nsAHttpTransaction *trans;
 
     // any pending requests can ignore this error and be restarted
-    count = mRequestQ.Count();
+    count = mRequestQ.Length();
     for (i=0; i<count; ++i) {
         trans = Request(i);
         trans->Close(NS_ERROR_NET_RESET);
@@ -528,7 +529,7 @@ nsHttpPipeline::Close(nsresult reason)
         NS_RELEASE(trans);
         
         // any remaining pending responses can be restarted
-        count = mResponseQ.Count();
+        count = mResponseQ.Length();
         for (i=1; i<count; ++i) {
             trans = Response(i);
             trans->Close(NS_ERROR_NET_RESET);
@@ -558,8 +559,8 @@ nsHttpPipeline::FillSendBuf()
         // allocate a single-segment pipe
         rv = NS_NewPipe(getter_AddRefs(mSendBufIn),
                         getter_AddRefs(mSendBufOut),
-                        NS_HTTP_SEGMENT_SIZE,
-                        NS_HTTP_SEGMENT_SIZE,
+                        nsIOService::gDefaultSegmentSize,
+                        nsIOService::gDefaultSegmentSize,
                         PR_TRUE, PR_TRUE,
                         nsIOService::gBufferCache);
         if (NS_FAILED(rv)) return rv;

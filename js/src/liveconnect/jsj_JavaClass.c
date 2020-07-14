@@ -321,6 +321,7 @@ JavaClass_lookupProperty(JSContext *cx, JSObject *obj, jsid id,
     if (lookup_static_member_by_id(cx, jEnv, obj, NULL, id, NULL)) {
         *objp = obj;
         *propp = (JSProperty*)1;
+        js_SetObjectWeakRoot(cx, obj);
     } else {
         *objp = NULL;
         *propp = NULL;
@@ -334,7 +335,7 @@ JavaClass_lookupProperty(JSContext *cx, JSObject *obj, jsid id,
 static JSBool
 JavaClass_defineProperty(JSContext *cx, JSObject *obj, jsid id, jsval value,
                          JSPropertyOp getter, JSPropertyOp setter,
-                         uintN attrs, JSProperty **propp)
+                         uintN attrs)
 {
     JavaClassDescriptor *class_descriptor;
     
@@ -554,10 +555,8 @@ JSObjectOps JavaClass_ops = {
     jsj_JavaConstructorWrapper,     /* call */
     jsj_JavaConstructorWrapper,     /* construct */
     JavaClass_hasInstance,          /* hasInstance */
-    NULL,                           /* trace */
-    NULL,                           /* clear */
-    jsj_wrapper_getRequiredSlot,    /* getRequiredSlot */
-    jsj_wrapper_setRequiredSlot     /* setRequiredSlot */
+    jsj_TraceObject,                /* trace */
+    NULL                            /* clear */
 };
 
 static JSObjectOps *

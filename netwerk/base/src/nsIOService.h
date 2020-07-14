@@ -42,7 +42,7 @@
 
 #include "nsString.h"
 #include "nsIIOService2.h"
-#include "nsVoidArray.h"
+#include "nsTArray.h"
 #include "nsPISocketTransportService.h" 
 #include "nsPIDNSService.h" 
 #include "nsIProtocolProxyService2.h"
@@ -50,7 +50,6 @@
 #include "nsURLHelper.h"
 #include "nsWeakPtr.h"
 #include "nsIURLParser.h"
-#include "nsSupportsArray.h"
 #include "nsIObserver.h"
 #include "nsWeakReference.h"
 #include "nsINetUtil.h"
@@ -60,13 +59,6 @@
 #include "nsINetworkLinkService.h"
 
 #define NS_N(x) (sizeof(x)/sizeof(*x))
-
-#ifdef NECKO_SMALL_BUFFERS
-#define NS_NECKO_BUFFER_CACHE_COUNT (10)  // Max holdings: 10 * 2k = 20k
-#else
-#define NS_NECKO_BUFFER_CACHE_COUNT (24)  // Max holdings: 24 * 4k = 96k
-#endif
-#define NS_NECKO_15_MINS (15 * 60)
 
 static const char gScheme[][sizeof("resource")] =
     {"chrome", "file", "http", "jar", "resource"};
@@ -154,12 +146,14 @@ private:
     nsCategoryCache<nsIChannelEventSink> mChannelEventSinks;
     nsCategoryCache<nsIContentSniffer>   mContentSniffers;
 
-    nsVoidArray                          mRestrictedPortList;
+    nsTArray<PRInt32>                    mRestrictedPortList;
 
 public:
     // Necko buffer cache. Used for all default buffer sizes that necko
     // allocates.
     static nsIMemory *gBufferCache;
+    static PRUint32   gDefaultSegmentSize;
+    static PRUint32   gDefaultSegmentCount;
 };
 
 /**

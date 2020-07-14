@@ -39,24 +39,28 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+#include "nsUXThemeData.h"
 #include "nsDebug.h"
 // For GetWindowsVersion
 #include "nsWindow.h"
 #include "nsUXThemeConstants.h"
-#include "nsUXThemeData.h"
 
 const PRUnichar
 nsUXThemeData::kThemeLibraryName[] = L"uxtheme.dll";
+#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_LONGHORN
 const PRUnichar
 nsUXThemeData::kDwmLibraryName[] = L"dwmapi.dll";
+#endif
 
 HANDLE
 nsUXThemeData::sThemes[eUXNumClasses];
 
 HMODULE
 nsUXThemeData::sThemeDLL = NULL;
+#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_LONGHORN
 HMODULE
 nsUXThemeData::sDwmDLL = NULL;
+#endif
 
 BOOL
 nsUXThemeData::sFlatMenus = FALSE;
@@ -72,6 +76,7 @@ nsUXThemeData::CloseThemeDataPtr nsUXThemeData::closeTheme = NULL;
 nsUXThemeData::DrawThemeBackgroundPtr nsUXThemeData::drawThemeBG = NULL;
 nsUXThemeData::DrawThemeEdgePtr nsUXThemeData::drawThemeEdge = NULL;
 nsUXThemeData::GetThemeContentRectPtr nsUXThemeData::getThemeContentRect = NULL;
+nsUXThemeData::GetThemeBackgroundRegionPtr nsUXThemeData::getThemeBackgroundRegion = NULL;
 nsUXThemeData::GetThemePartSizePtr nsUXThemeData::getThemePartSize = NULL;
 nsUXThemeData::GetThemeSysFontPtr nsUXThemeData::getThemeSysFont = NULL;
 nsUXThemeData::GetThemeColorPtr nsUXThemeData::getThemeColor = NULL;
@@ -80,16 +85,24 @@ nsUXThemeData::IsAppThemedPtr nsUXThemeData::isAppThemed = NULL;
 nsUXThemeData::GetCurrentThemeNamePtr nsUXThemeData::getCurrentThemeName = NULL;
 nsUXThemeData::GetThemeSysColorPtr nsUXThemeData::getThemeSysColor = NULL;
 
+#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_LONGHORN
 nsUXThemeData::DwmExtendFrameIntoClientAreaProc nsUXThemeData::dwmExtendFrameIntoClientAreaPtr = NULL;
 nsUXThemeData::DwmIsCompositionEnabledProc nsUXThemeData::dwmIsCompositionEnabledPtr = NULL;
+nsUXThemeData::DwmSetIconicThumbnailProc nsUXThemeData::dwmSetIconicThumbnailPtr = NULL;
+nsUXThemeData::DwmSetIconicLivePreviewBitmapProc nsUXThemeData::dwmSetIconicLivePreviewBitmapPtr = NULL;
+nsUXThemeData::DwmSetWindowAttributeProc nsUXThemeData::dwmSetWindowAttributePtr = NULL;
+nsUXThemeData::DwmInvalidateIconicBitmapsProc nsUXThemeData::dwmInvalidateIconicBitmapsPtr = NULL;
+#endif
 
 void
 nsUXThemeData::Teardown() {
   Invalidate();
   if(sThemeDLL)
     FreeLibrary(sThemeDLL);
+#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_LONGHORN
   if(sDwmDLL)
     FreeLibrary(sDwmDLL);
+#endif
 }
 
 void
@@ -98,7 +111,7 @@ nsUXThemeData::Initialize()
   ::ZeroMemory(sThemes, sizeof(sThemes));
   NS_ASSERTION(!sThemeDLL, "nsUXThemeData being initialized twice!");
 
-  PRInt32 version = ::GetWindowsVersion();
+  PRInt32 version = nsWindow::GetWindowsVersion();
   sIsXPOrLater = version >= WINXP_VERSION;
   sIsVistaOrLater = version >= VISTA_VERSION;
 
@@ -108,6 +121,7 @@ nsUXThemeData::Initialize()
     drawThemeBG = (DrawThemeBackgroundPtr)GetProcAddress(sThemeDLL, "DrawThemeBackground");
     drawThemeEdge = (DrawThemeEdgePtr)GetProcAddress(sThemeDLL, "DrawThemeEdge");
     getThemeContentRect = (GetThemeContentRectPtr)GetProcAddress(sThemeDLL, "GetThemeBackgroundContentRect");
+    getThemeBackgroundRegion = (GetThemeBackgroundRegionPtr)GetProcAddress(sThemeDLL, "GetThemeBackgroundRegion");
     getThemePartSize = (GetThemePartSizePtr)GetProcAddress(sThemeDLL, "GetThemePartSize");
     getThemeSysFont = (GetThemeSysFontPtr)GetProcAddress(sThemeDLL, "GetThemeSysFont");
     getThemeColor = (GetThemeColorPtr)GetProcAddress(sThemeDLL, "GetThemeColor");
@@ -116,11 +130,17 @@ nsUXThemeData::Initialize()
     getCurrentThemeName = (GetCurrentThemeNamePtr)GetProcAddress(sThemeDLL, "GetCurrentThemeName");
     getThemeSysColor = (GetThemeSysColorPtr)GetProcAddress(sThemeDLL, "GetThemeSysColor");
   }
+#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_LONGHORN
   if (GetDwmDLL()) {
     dwmExtendFrameIntoClientAreaPtr = (DwmExtendFrameIntoClientAreaProc)::GetProcAddress(sDwmDLL, "DwmExtendFrameIntoClientArea");
     dwmIsCompositionEnabledPtr = (DwmIsCompositionEnabledProc)::GetProcAddress(sDwmDLL, "DwmIsCompositionEnabled");
+    dwmSetIconicThumbnailPtr = (DwmSetIconicThumbnailProc)::GetProcAddress(sDwmDLL, "DwmSetIconicThumbnail");
+    dwmSetIconicLivePreviewBitmapPtr = (DwmSetIconicLivePreviewBitmapProc)::GetProcAddress(sDwmDLL, "DwmSetIconicLivePreviewBitmap");
+    dwmSetWindowAttributePtr = (DwmSetWindowAttributeProc)::GetProcAddress(sDwmDLL, "DwmSetWindowAttribute");
+    dwmInvalidateIconicBitmapsPtr = (DwmInvalidateIconicBitmapsProc)::GetProcAddress(sDwmDLL, "DwmInvalidateIconicBitmaps");
     CheckForCompositor();
   }
+#endif
 
   Invalidate();
 }
@@ -165,12 +185,14 @@ nsUXThemeData::GetThemeDLL() {
   return sThemeDLL;
 }
 
+#if MOZ_WINSDK_TARGETVER >= MOZ_NTDDI_LONGHORN
 HMODULE
 nsUXThemeData::GetDwmDLL() {
   if (!sDwmDLL && sIsVistaOrLater)
     sDwmDLL = ::LoadLibraryW(kDwmLibraryName);
   return sDwmDLL;
 }
+#endif
 
 const wchar_t *nsUXThemeData::GetClassName(nsUXThemeClass cls) {
   switch(cls) {

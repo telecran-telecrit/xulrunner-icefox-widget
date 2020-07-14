@@ -75,7 +75,6 @@
 #include "nsIDOMRange.h"
 #include "nsIDOMNSRange.h"
 #include "nsCOMArray.h"
-#include "nsVoidArray.h"
 #include "nsIFile.h"
 #include "nsIURL.h"
 #include "nsIComponentManager.h"
@@ -86,9 +85,6 @@
 #include "nsPresContext.h"
 #include "nsIParser.h"
 #include "nsParserCIID.h"
-#include "nsIImage.h"
-#include "nsAOLCiter.h"
-#include "nsInternetCiter.h"
 #include "nsXPCOM.h"
 #include "nsISupportsPrimitives.h"
 #include "nsLinebreakConverter.h"
@@ -519,7 +515,6 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
     }
 
     // Loop over the node list and paste the nodes:
-    PRBool bDidInsert = PR_FALSE;
     nsCOMPtr<nsIDOMNode> parentBlock, lastInsertNode, insertedContextParent;
     PRInt32 listCount = nodeList.Count();
     PRInt32 j;
@@ -530,6 +525,7 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
       
     for (j=0; j<listCount; j++)
     {
+      PRBool bDidInsert = PR_FALSE;
       nsCOMPtr<nsIDOMNode> curNode = nodeList[j];
 
       NS_ENSURE_TRUE(curNode, NS_ERROR_FAILURE);
@@ -555,12 +551,13 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
         while (child)
         {
           res = InsertNodeAtPoint(child, address_of(parentNode), &offsetOfNewNode, PR_TRUE);
-          if (NS_SUCCEEDED(res)) 
-          {
-            bDidInsert = PR_TRUE;
-            lastInsertNode = child;
-            offsetOfNewNode++;
-          }
+          if (NS_FAILED(res))
+            break;
+
+          bDidInsert = PR_TRUE;
+          lastInsertNode = child;
+          offsetOfNewNode++;
+
           curNode->GetFirstChild(getter_AddRefs(child));
         }
       }
@@ -597,12 +594,12 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
               }
             } 
             res = InsertNodeAtPoint(child, address_of(parentNode), &offsetOfNewNode, PR_TRUE);
-            if (NS_SUCCEEDED(res)) 
-            {
-              bDidInsert = PR_TRUE;
-              lastInsertNode = child;
-              offsetOfNewNode++;
-            }
+            if (NS_FAILED(res))
+              break;
+
+            bDidInsert = PR_TRUE;
+            lastInsertNode = child;
+            offsetOfNewNode++;
           }
           else
           {
@@ -620,18 +617,19 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
         while (child)
         {
           res = InsertNodeAtPoint(child, address_of(parentNode), &offsetOfNewNode, PR_TRUE);
-          if (NS_SUCCEEDED(res)) 
-          {
-            bDidInsert = PR_TRUE;
-            lastInsertNode = child;
-            offsetOfNewNode++;
-          }
+          if (NS_FAILED(res))
+            break;
+
+          bDidInsert = PR_TRUE;
+          lastInsertNode = child;
+          offsetOfNewNode++;
+
           curNode->GetFirstChild(getter_AddRefs(child));
         }
       }
-      else
+
+      if (!bDidInsert || NS_FAILED(res))
       {
-        
         // try to insert
         res = InsertNodeAtPoint(curNode, address_of(parentNode), &offsetOfNewNode, PR_TRUE);
         if (NS_SUCCEEDED(res)) 
@@ -639,9 +637,9 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
           bDidInsert = PR_TRUE;
           lastInsertNode = curNode;
         }
-          
-        // assume failure means no legal parent in the document heirarchy.
-        // try again with the parent of curNode in the paste heirarchy.
+
+        // Assume failure means no legal parent in the document hierarchy,
+        // try again with the parent of curNode in the paste hierarchy.
         nsCOMPtr<nsIDOMNode> parent;
         while (NS_FAILED(res) && curNode)
         {
@@ -659,7 +657,7 @@ nsHTMLEditor::DoInsertHTMLWithContext(const nsAString & aInputString,
           curNode = parent;
         }
       }
-      if (bDidInsert)
+      if (lastInsertNode)
       {
         res = GetNodeLocation(lastInsertNode, address_of(parentNode), &offsetOfNewNode);
         NS_ENSURE_SUCCESS(res, res);

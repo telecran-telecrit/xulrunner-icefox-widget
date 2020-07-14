@@ -38,13 +38,13 @@
  *
  * ***** END LICENSE BLOCK ***** */
 
+#include "nsIOService.h"
 #include "nsHttpHandler.h"
 #include "nsHttpTransaction.h"
 #include "nsHttpConnection.h"
 #include "nsHttpRequestHead.h"
 #include "nsHttpResponseHead.h"
 #include "nsHttpChunkedDecoder.h"
-#include "nsNetSegmentUtils.h"
 #include "nsTransportUtils.h"
 #include "nsNetUtil.h"
 #include "nsProxyRelease.h"
@@ -185,25 +185,21 @@ nsHttpTransaction::Init(PRUint8 caps,
                                         eventsink, target, PR_TRUE);
     if (NS_FAILED(rv)) return rv;
 
-    // try to get the nsIHttpActivityObserver distributor
     mActivityDistributor = do_GetService(NS_HTTPACTIVITYDISTRIBUTOR_CONTRACTID, &rv);
+    if (NS_FAILED(rv)) return rv;
 
-    // mActivityDistributor may not be valid
-    if (NS_SUCCEEDED(rv) && mActivityDistributor) {
-        // the service is valid, now check if it is active
-        PRBool active;
-        rv = mActivityDistributor->GetIsActive(&active);
-        if (NS_SUCCEEDED(rv) && active) {
-            // the service is valid and active, gather nsISupports
-            // for the channel that called Init()
-            mChannel = do_QueryInterface(eventsink);
-            LOG(("nsHttpTransaction::Init() " \
-                 "mActivityDistributor is active " \
-                 "this=%x", this));
-        } else
-            // the interface in valid but not active, so don't use it
-            mActivityDistributor = nsnull;
-    }
+    PRBool active;
+    rv = mActivityDistributor->GetIsActive(&active);
+    if (NS_SUCCEEDED(rv) && active) {
+        // there are some observers registered at activity distributor, gather
+        // nsISupports for the channel that called Init()
+        mChannel = do_QueryInterface(eventsink);
+        LOG(("nsHttpTransaction::Init() " \
+             "mActivityDistributor is active " \
+             "this=%x", this));
+    } else
+        // there is no observer, so don't use it
+        mActivityDistributor = nsnull;
 
     NS_ADDREF(mConnInfo = cinfo);
     mCallbacks = callbacks;
@@ -259,7 +255,7 @@ nsHttpTransaction::Init(PRUint8 caps,
             mChannel,
             NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
             NS_HTTP_ACTIVITY_SUBTYPE_REQUEST_HEADER,
-            LL_ZERO, LL_ZERO,
+            PR_Now(), LL_ZERO,
             mReqHeaderBuf);
 
     // Create a string stream for the request header buf (the stream holds
@@ -289,7 +285,7 @@ nsHttpTransaction::Init(PRUint8 caps,
         // that we write data in the largest chunks possible.  this is actually
         // necessary to workaround some common server bugs (see bug 137155).
         rv = NS_NewBufferedInputStream(getter_AddRefs(mRequestStream), multi,
-                                       NET_DEFAULT_SEGMENT_SIZE);
+                                       nsIOService::gDefaultSegmentSize);
         if (NS_FAILED(rv)) return rv;
     }
     else
@@ -302,8 +298,8 @@ nsHttpTransaction::Init(PRUint8 caps,
     rv = NS_NewPipe2(getter_AddRefs(mPipeIn),
                      getter_AddRefs(mPipeOut),
                      PR_TRUE, PR_TRUE,
-                     NS_HTTP_SEGMENT_SIZE,
-                     NS_HTTP_SEGMENT_COUNT,
+                     nsIOService::gDefaultSegmentSize,
+                     nsIOService::gDefaultSegmentCount,
                      nsIOService::gBufferCache);
     if (NS_FAILED(rv)) return rv;
 
@@ -362,14 +358,14 @@ nsHttpTransaction::OnTransportStatus(nsresult status, PRUint64 progress)
                 mChannel,
                 NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
                 NS_HTTP_ACTIVITY_SUBTYPE_REQUEST_BODY_SENT,
-                LL_ZERO, LL_ZERO, EmptyCString());
+                PR_Now(), LL_ZERO, EmptyCString());
 
         // report the status and progress
         mActivityDistributor->ObserveActivity(
             mChannel,
             NS_HTTP_ACTIVITY_TYPE_SOCKET_TRANSPORT,
             static_cast<PRUint32>(status),
-            LL_ZERO,
+            PR_Now(),
             progress,
             EmptyCString());
     }
@@ -378,7 +374,7 @@ nsHttpTransaction::OnTransportStatus(nsresult status, PRUint64 progress)
     if (status == nsISocketTransport::STATUS_RECEIVING_FROM)
         return;
 
-    nsUint64 progressMax;
+    PRUint64 progressMax;
 
     if (status == nsISocketTransport::STATUS_SENDING_TO) {
         // suppress progress when only writing request headers
@@ -565,7 +561,7 @@ nsHttpTransaction::Close(nsresult reason)
                 mChannel,
                 NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
                 NS_HTTP_ACTIVITY_SUBTYPE_RESPONSE_COMPLETE,
-                LL_ZERO,
+                PR_Now(),
                 static_cast<PRUint64>(mContentRead.mValue),
                 EmptyCString());
 
@@ -574,7 +570,7 @@ nsHttpTransaction::Close(nsresult reason)
             mChannel,
             NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
             NS_HTTP_ACTIVITY_SUBTYPE_TRANSACTION_CLOSE,
-            LL_ZERO, LL_ZERO, EmptyCString());
+            PR_Now(), LL_ZERO, EmptyCString());
     }
 
     // we must no longer reference the connection!  find out if the 
@@ -764,7 +760,7 @@ nsHttpTransaction::ParseHead(char *buf,
                 mChannel,
                 NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
                 NS_HTTP_ACTIVITY_SUBTYPE_RESPONSE_START,
-                LL_ZERO, LL_ZERO, EmptyCString());
+                PR_Now(), LL_ZERO, EmptyCString());
     }
 
     // if we don't have a status line and the line buf is empty, then
@@ -982,7 +978,7 @@ nsHttpTransaction::HandleContent(char *buf,
                 mChannel,
                 NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
                 NS_HTTP_ACTIVITY_SUBTYPE_RESPONSE_COMPLETE,
-                LL_ZERO,
+                PR_Now(),
                 static_cast<PRUint64>(mContentRead.mValue),
                 EmptyCString());
     }
@@ -1021,7 +1017,7 @@ nsHttpTransaction::ProcessData(char *buf, PRUint32 count, PRUint32 *countRead)
                 mChannel,
                 NS_HTTP_ACTIVITY_TYPE_HTTP_TRANSACTION,
                 NS_HTTP_ACTIVITY_SUBTYPE_RESPONSE_HEADER,
-                LL_ZERO, LL_ZERO,
+                PR_Now(), LL_ZERO,
                 completeResponseHeaders);
         }
     }

@@ -61,7 +61,7 @@ struct nsCSSSelectorList;
 { 0xad4a3778, 0xdae0, 0x4640, \
  { 0xb2, 0x5a, 0x24, 0xff, 0x09, 0xc3, 0x70, 0xef } }
 
-#define NS_ICSS_PARSER_1_9_1_IID \
+#define NS_ICSS_PARSER_1_9_2_IID \
 { 0x65e6b4ec, 0x986b, 0x4ce7,   \
   { 0xa8, 0xdd, 0xa5, 0x9f, 0x44, 0x33, 0x27, 0xcd } }
 
@@ -186,9 +186,9 @@ public:
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsICSSParser, NS_ICSS_PARSER_IID)
 
-class nsICSSParser_1_9_1 : public nsICSSParser {
+class nsICSSParser_1_9_2 : public nsICSSParser {
 public:
-  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICSS_PARSER_1_9_1_IID)
+  NS_DECLARE_STATIC_IID_ACCESSOR(NS_ICSS_PARSER_1_9_2_IID)
 
   /**
    * Identical to nsICSSParser::Parse(), except that if there is a
@@ -204,7 +204,7 @@ public:
                                          PRBool        aAllowUnsafeRules) = 0;
 };
 
-NS_DEFINE_STATIC_IID_ACCESSOR(nsICSSParser_1_9_1, NS_ICSS_PARSER_1_9_1_IID)
+NS_DEFINE_STATIC_IID_ACCESSOR(nsICSSParser_1_9_2, NS_ICSS_PARSER_1_9_2_IID)
 
 nsresult
 NS_NewCSSParser(nsICSSParser** aInstancePtrResult);

@@ -40,20 +40,15 @@
 #ifndef nsCommandLineServiceMac_h_
 #define nsCommandLineServiceMac_h_
 
-#include <Files.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 #include "nscore.h"
 #include "nsError.h"
 #include "nsString.h"
 
-#include "nsAEDefs.h"
-
-#ifdef __cplusplus
-
 class nsMacCommandLine
 {
 public:
-
 
   enum
   {
@@ -67,19 +62,22 @@ public:
   void            SetupCommandLine(int& argc, char**& argv);
   
   nsresult        AddToCommandLine(const char* inArgText);
-  nsresult        AddToCommandLine(const char* inOptionString, const FSSpec& inFileSpec);
+  nsresult        AddToCommandLine(const char* inOptionString, const CFURLRef file);
   nsresult        AddToEnvironmentVars(const char* inArgText);
 
-  OSErr           HandleOpenOneDoc(const FSSpec& inFileSpec, OSType inFileType);
-  OSErr           HandlePrintOneDoc(const FSSpec& inFileSpec, OSType fileType);
+  nsresult        HandleOpenOneDoc(const CFURLRef file, OSType inFileType);
+  nsresult        HandlePrintOneDoc(const CFURLRef file, OSType fileType);
 
-	OSErr						DispatchURLToNewBrowser(const char* url);
-	  
-  OSErr						Quit(TAskSave askSave);
-  
+  nsresult        DispatchURLToNewBrowser(const char* url);
+
+  // Add a URL to the command line currently being set up via
+  // SetupMacCommandLine. Returns false if no command line is
+  // being set up or the addition fails for any other reason.
+  PRBool AddURLToCurrentCommandLine(const char* aURL);
+
 protected:
 
-  OSErr           OpenURL(const char* aURL);
+  nsresult        OpenURL(const char* aURL);
 
   nsresult        OpenWindow(const char *chrome, const PRUnichar *url);
     
@@ -92,25 +90,12 @@ protected:
 public:
 
   static nsMacCommandLine& GetMacCommandLine() { return sMacCommandLine; }
-  
+
 private:
 
   static nsMacCommandLine sMacCommandLine;
-  
 };
 
-#endif    //__cplusplus
-
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 void SetupMacCommandLine(int& argc, char**& argv);
-
-#ifdef __cplusplus
-}
-#endif
-
 
 #endif // nsCommandLineServiceMac_h_

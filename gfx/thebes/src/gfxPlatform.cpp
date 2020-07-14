@@ -41,7 +41,6 @@
 #include "gfxWindowsPlatform.h"
 #elif defined(XP_MACOSX)
 #include "gfxPlatformMac.h"
-#include "gfxQuartzFontCache.h"
 #elif defined(MOZ_WIDGET_GTK2)
 #include "gfxPlatformGtk.h"
 #elif defined(MOZ_WIDGET_QT)
@@ -52,14 +51,15 @@
 #include "gfxOS2Platform.h"
 #endif
 
+#include "gfxPlatformFontList.h"
 #include "gfxContext.h"
 #include "gfxImageSurface.h"
 #include "gfxTextRunCache.h"
 #include "gfxTextRunWordCache.h"
 #include "gfxUserFontSet.h"
 
-#include "nsIPref.h"
 #include "nsServiceManagerUtils.h"
+#include "nsTArray.h"
 
 #include "nsWeakReference.h"
 
@@ -72,6 +72,8 @@
 #include "nsIPrefBranch2.h"
 
 gfxPlatform *gPlatform = nsnull;
+
+PRInt32 gfxPlatform::sDPI = -1;
 
 // These two may point to the same profile
 static qcms_profile *gCMSOutputProfile = nsnull;
@@ -184,10 +186,10 @@ gfxPlatform::Init()
 
     nsresult rv;
 
-#if defined(XP_MACOSX)
-    rv = gfxQuartzFontCache::Init();
+#if defined(XP_MACOSX) // temporary, until this is implemented on others
+    rv = gfxPlatformFontList::Init();
     if (NS_FAILED(rv)) {
-        NS_ERROR("Could not initialize gfxQuartzFontCache");
+        NS_ERROR("Could not initialize gfxPlatformFontList");
         Shutdown();
         return rv;
     }
@@ -234,8 +236,8 @@ gfxPlatform::Shutdown()
     gfxTextRunCache::Shutdown();
     gfxTextRunWordCache::Shutdown();
     gfxFontCache::Shutdown();
-#if defined(XP_MACOSX)
-    gfxQuartzFontCache::Shutdown();
+#if defined(XP_MACOSX) // temporary, until this is implemented on others
+    gfxPlatformFontList::Shutdown();
 #endif
 
     // Free the various non-null transforms and loaded profiles
@@ -294,7 +296,7 @@ gfxPlatform::OptimizeImage(gfxImageSurface *aSurface,
 nsresult
 gfxPlatform::GetFontList(const nsACString& aLangGroup,
                          const nsACString& aGenericFamily,
-                         nsStringArray& aListOfFonts)
+                         nsTArray<nsString>& aListOfFonts)
 {
     return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -306,6 +308,26 @@ gfxPlatform::UpdateFontList()
 }
 
 #define GFX_DOWNLOADABLE_FONTS_ENABLED "gfx.downloadable_fonts.enabled"
+#if defined(XP_MACOSX)
+#define GFX_DOWNLOADABLE_FONTS_ENABLED_LION "gfx.downloadable_fonts.enabled.lion"
+#endif
+#define GFX_DOWNLOADABLE_FONTS_SANITIZE "gfx.downloadable_fonts.sanitize"
+#define GFX_DOWNLOADABLE_FONTS_SANITIZE_PRESERVE_OTL \
+            "gfx.downloadable_fonts.sanitize.preserve_otl_tables"
+
+static PRBool
+GetBoolPref(const char* aPref, PRBool aDefaultValue = PR_FALSE)
+{
+    nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
+    if (prefs) {
+        PRBool value;
+        nsresult rv = prefs->GetBoolPref(aPref, &value);
+        if (NS_SUCCEEDED(rv)) {
+            return value;
+        }
+    }
+    return aDefaultValue;
+}
 
 PRBool
 gfxPlatform::DownloadableFontsEnabled()
@@ -315,63 +337,113 @@ gfxPlatform::DownloadableFontsEnabled()
 
     if (initialized == PR_FALSE) {
         initialized = PR_TRUE;
-        nsCOMPtr<nsIPrefBranch> prefs = do_GetService(NS_PREFSERVICE_CONTRACTID);
-        if (prefs) {
-            PRBool allow;
-            nsresult rv = prefs->GetBoolPref(GFX_DOWNLOADABLE_FONTS_ENABLED, &allow);
-            if (NS_SUCCEEDED(rv))
-                allowDownloadableFonts = allow;
+#if defined(XP_MACOSX)
+        // Work around a serious bug in how Apple handles downloaded fonts
+        // on the most recent developer previews of OS X 10.7 (Lion, builds
+        // 11A480b and 11A494a).  See bug 663688.
+        if (gfxPlatformMac::GetPlatform()->OSXVersion() >= 0x1070) {
+            allowDownloadableFonts =
+                GetBoolPref(GFX_DOWNLOADABLE_FONTS_ENABLED_LION);
+        } else {
+            allowDownloadableFonts =
+                GetBoolPref(GFX_DOWNLOADABLE_FONTS_ENABLED);
         }
+#else
+        allowDownloadableFonts = GetBoolPref(GFX_DOWNLOADABLE_FONTS_ENABLED);
+#endif
     }
 
     return allowDownloadableFonts;
 }
 
+PRBool
+gfxPlatform::SanitizeDownloadedFonts()
+{
+    static PRBool initialized = PR_FALSE;
+    static PRBool sanitizeDownloadableFonts = PR_TRUE;
+
+    if (initialized == PR_FALSE) {
+        initialized = PR_TRUE;
+        sanitizeDownloadableFonts =
+            GetBoolPref(GFX_DOWNLOADABLE_FONTS_SANITIZE, PR_TRUE);
+    }
+
+    return sanitizeDownloadableFonts;
+}
+
+PRBool
+gfxPlatform::PreserveOTLTablesWhenSanitizing()
+{
+    static PRBool initialized = PR_FALSE;
+    static PRBool preserveOTLTables = PR_FALSE;
+
+    if (initialized == PR_FALSE) {
+        initialized = PR_TRUE;
+        preserveOTLTables =
+            GetBoolPref(GFX_DOWNLOADABLE_FONTS_SANITIZE_PRESERVE_OTL);
+    }
+
+    return preserveOTLTables;
+}
+
+gfxFontEntry*
+gfxPlatform::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
+                              const PRUint8 *aFontData,
+                              PRUint32 aLength)
+{
+    // Default implementation does not handle activating downloaded fonts;
+    // just free the data and return.
+    // Platforms that support @font-face must override this,
+    // using the data to instantiate the font, and taking responsibility
+    // for freeing it when no longer required.
+    if (aFontData) {
+        NS_Free((void*)aFontData);
+    }
+    return nsnull;
+}
 
 static void
 AppendGenericFontFromPref(nsString& aFonts, const char *aLangGroup, const char *aGenericName)
 {
     nsresult rv;
 
-    nsCOMPtr<nsIPref> prefs(do_GetService(NS_PREF_CONTRACTID));
+    nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
     if (!prefs)
         return;
 
     nsCAutoString prefName;
-    nsXPIDLString nameValue, nameListValue;
+    nsXPIDLCString nameValue, nameListValue;
 
-    nsXPIDLString genericName;
+    nsCAutoString genericDotLang;
     if (aGenericName) {
-        genericName = NS_ConvertASCIItoUTF16(aGenericName);
+        genericDotLang.Assign(aGenericName);
     } else {
         prefName.AssignLiteral("font.default.");
         prefName.Append(aLangGroup);
-        prefs->CopyUnicharPref(prefName.get(), getter_Copies(genericName));
+        prefs->GetCharPref(prefName.get(), getter_Copies(genericDotLang));
     }
 
-    nsCAutoString genericDotLang;
-    genericDotLang.Assign(NS_ConvertUTF16toUTF8(genericName));
     genericDotLang.AppendLiteral(".");
     genericDotLang.Append(aLangGroup);
 
     // fetch font.name.xxx value                   
     prefName.AssignLiteral("font.name.");
     prefName.Append(genericDotLang);
-    rv = prefs->CopyUnicharPref(prefName.get(), getter_Copies(nameValue));
+    rv = prefs->GetCharPref(prefName.get(), getter_Copies(nameValue));
     if (NS_SUCCEEDED(rv)) {
         if (!aFonts.IsEmpty())
             aFonts.AppendLiteral(", ");
-        aFonts.Append(nameValue);
+        aFonts.Append(NS_ConvertUTF8toUTF16(nameValue));
     }
 
     // fetch font.name-list.xxx value                   
     prefName.AssignLiteral("font.name-list.");
     prefName.Append(genericDotLang);
-    rv = prefs->CopyUnicharPref(prefName.get(), getter_Copies(nameListValue));
+    rv = prefs->GetCharPref(prefName.get(), getter_Copies(nameListValue));
     if (NS_SUCCEEDED(rv) && !nameListValue.Equals(nameValue)) {
         if (!aFonts.IsEmpty())
             aFonts.AppendLiteral(", ");
-        aFonts.Append(nameListValue);
+        aFonts.Append(NS_ConvertUTF8toUTF16(nameListValue));
     }
 }
 
@@ -390,7 +462,7 @@ PRBool gfxPlatform::ForEachPrefFont(eFontPrefLang aLangArray[], PRUint32 aLangAr
 {
     nsresult rv;
 
-    nsCOMPtr<nsIPref> prefs(do_GetService(NS_PREF_CONTRACTID));
+    nsCOMPtr<nsIPrefBranch> prefs(do_GetService(NS_PREFSERVICE_CONTRACTID));
     if (!prefs)
         return PR_FALSE;
 
@@ -401,33 +473,31 @@ PRBool gfxPlatform::ForEachPrefFont(eFontPrefLang aLangArray[], PRUint32 aLangAr
         const char *langGroup = GetPrefLangName(prefLang);
         
         nsCAutoString prefName;
-        nsXPIDLString nameValue, nameListValue;
-    
-        nsXPIDLString genericName;
-        prefName.AssignLiteral("font.default.");
-        prefName.Append(langGroup);
-        prefs->CopyUnicharPref(prefName.get(), getter_Copies(genericName));
+        nsXPIDLCString nameValue, nameListValue;
     
         nsCAutoString genericDotLang;
-        genericDotLang.Assign(NS_ConvertUTF16toUTF8(genericName));
+        prefName.AssignLiteral("font.default.");
+        prefName.Append(langGroup);
+        prefs->GetCharPref(prefName.get(), getter_Copies(genericDotLang));
+    
         genericDotLang.AppendLiteral(".");
         genericDotLang.Append(langGroup);
     
         // fetch font.name.xxx value                   
         prefName.AssignLiteral("font.name.");
         prefName.Append(genericDotLang);
-        rv = prefs->CopyUnicharPref(prefName.get(), getter_Copies(nameValue));
+        rv = prefs->GetCharPref(prefName.get(), getter_Copies(nameValue));
         if (NS_SUCCEEDED(rv)) {
-            if (!aCallback(prefLang, nameValue, aClosure))
+            if (!aCallback(prefLang, NS_ConvertUTF8toUTF16(nameValue), aClosure))
                 return PR_FALSE;
         }
     
         // fetch font.name-list.xxx value                   
         prefName.AssignLiteral("font.name-list.");
         prefName.Append(genericDotLang);
-        rv = prefs->CopyUnicharPref(prefName.get(), getter_Copies(nameListValue));
+        rv = prefs->GetCharPref(prefName.get(), getter_Copies(nameListValue));
         if (NS_SUCCEEDED(rv) && !nameListValue.Equals(nameValue)) {
-            if (!aCallback(prefLang, nameListValue, aClosure))
+            if (!aCallback(prefLang, NS_ConvertUTF8toUTF16(nameListValue), aClosure))
                 return PR_FALSE;
         }
     }
@@ -619,7 +689,6 @@ gfxPlatform::GetCMSOutputProfile()
         if (!gCMSOutputProfile) {
             gCMSOutputProfile = GetCMSsRGBProfile();
         }
-
         /* Precache the LUT16 Interpolations for the output profile. See 
            bug 444661 for details. */
         qcms_profile_precache_output_transform(gCMSOutputProfile);
@@ -651,8 +720,8 @@ gfxPlatform::GetCMSRGBTransform()
             return nsnull;
 
         gCMSRGBTransform = qcms_transform_create(inProfile, QCMS_DATA_RGB_8,
-                                                 outProfile, QCMS_DATA_RGB_8,
-                                                 QCMS_INTENT_PERCEPTUAL);
+                                              outProfile, QCMS_DATA_RGB_8,
+                                             QCMS_INTENT_PERCEPTUAL);
     }
 
     return gCMSRGBTransform;
@@ -670,8 +739,8 @@ gfxPlatform::GetCMSInverseRGBTransform()
             return nsnull;
 
         gCMSInverseRGBTransform = qcms_transform_create(inProfile, QCMS_DATA_RGB_8,
-                                                        outProfile, QCMS_DATA_RGB_8,
-                                                        QCMS_INTENT_PERCEPTUAL);
+                                                     outProfile, QCMS_DATA_RGB_8,
+                                                     QCMS_INTENT_PERCEPTUAL);
     }
 
     return gCMSInverseRGBTransform;
@@ -689,8 +758,8 @@ gfxPlatform::GetCMSRGBATransform()
             return nsnull;
 
         gCMSRGBATransform = qcms_transform_create(inProfile, QCMS_DATA_RGBA_8,
-                                                  outProfile, QCMS_DATA_RGBA_8,
-                                                  QCMS_INTENT_PERCEPTUAL);
+                                               outProfile, QCMS_DATA_RGBA_8,
+                                               QCMS_INTENT_PERCEPTUAL);
     }
 
     return gCMSRGBATransform;
@@ -753,4 +822,11 @@ static void MigratePrefs()
         prefs->ClearUserPref(CMPrefNameOld);
     }
 
+}
+
+void
+gfxPlatform::InitDisplayCaps()
+{
+    // Fall back to something sane
+    gfxPlatform::sDPI = 96;
 }

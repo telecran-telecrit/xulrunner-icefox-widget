@@ -414,7 +414,13 @@ nsHttpResponseHead::IsResumable()
 PRBool
 nsHttpResponseHead::ExpiresInPast()
 {
-    PRUint32 expiresVal, dateVal;
+    PRUint32 maxAgeVal, expiresVal, dateVal;
+    
+    // Bug #203271. Ensure max-age directive takes precedence over Expires
+    if (NS_SUCCEEDED(GetMaxAgeValue(&maxAgeVal))) {
+        return PR_FALSE;
+    }
+    
     return NS_SUCCEEDED(GetExpiresValue(&expiresVal)) &&
            NS_SUCCEEDED(GetDateValue(&dateVal)) &&
            expiresVal < dateVal;
@@ -529,7 +535,10 @@ nsHttpResponseHead::GetMaxAgeValue(PRUint32 *result)
     if (!p)
         return NS_ERROR_NOT_AVAILABLE;
 
-    *result = (PRUint32) atoi(p + 8);
+    int maxAgeValue = atoi(p + 8);
+    if (maxAgeValue < 0)
+        maxAgeValue = 0;
+    *result = PRUint32(maxAgeValue);
     return NS_OK;
 }
 

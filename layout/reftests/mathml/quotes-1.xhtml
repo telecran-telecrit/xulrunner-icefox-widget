@@ -1,5 +1,5 @@
 <html xmlns="http://www.w3.org/1999/xhtml" class="reftest-wait">
-<body onload="setTimeout(doTest, 0)">
+<body>
 <p>:<ms xmlns="http://www.w3.org/1998/Math/MathML" lquote="L" rquote="R">_</ms></p>
 <p>:<ms id="m1" xmlns="http://www.w3.org/1998/Math/MathML">_</ms></p>
 <p>:<ms id="m2" xmlns="http://www.w3.org/1998/Math/MathML">_</ms></p>
@@ -17,6 +17,7 @@ function doTest() {
   m4.setAttribute("rquote", "R");
   document.documentElement.removeAttribute('class');
 }
+window.addEventListener("MozReftestInvalidate", doTest, false);
 </script>
 </body>
 </html>

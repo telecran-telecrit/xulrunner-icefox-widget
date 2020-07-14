@@ -7,11 +7,13 @@
 !define WindowClass           "FirefoxMessageWindow"
 !define DDEApplication        "Firefox"
 !define AppRegName            "Firefox"
-!define MinUnsupportedVer     "Microsoft Windows 2000"
+!define MinSupportedVer       "Microsoft Windows 2000"
 
 !define BrandShortName        "@MOZ_APP_DISPLAYNAME@"
 !define PreReleaseSuffix      "@PRE_RELEASE_SUFFIX@"
 !define BrandFullName         "${BrandFullNameInternal}${PreReleaseSuffix}"
+
+!define NO_UNINSTALL_SURVEY
 
 # NO_INSTDIR_FROM_REG is defined for pre-releases which have a PreReleaseSuffix
 # (e.g. Alpha X, Beta X, etc.) to prevent finding a non-default installation

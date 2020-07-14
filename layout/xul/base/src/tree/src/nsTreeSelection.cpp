@@ -214,18 +214,40 @@ struct nsTreeRange
     return total;
   }
 
+  static void CollectRanges(nsTreeRange* aRange, nsTArray<PRInt32>& aRanges)
+  {
+    nsTreeRange* cur = aRange;
+    while (cur) {
+      aRanges.AppendElement(cur->mMin);
+      aRanges.AppendElement(cur->mMax);
+      cur = cur->mNext;
+    }
+  }
+  
+  static void InvalidateRanges(nsITreeBoxObject* aTree,
+                               nsTArray<PRInt32>& aRanges)
+  {
+    if (aTree) {
+      nsCOMPtr<nsITreeBoxObject> tree = aTree;
+      for (PRUint32 i = 0; i < aRanges.Length(); i += 2) {
+        aTree->InvalidateRange(aRanges[i], aRanges[i + 1]);
+      }
+    }
+  }
+
   void Invalidate() {
-    if (mSelection->mTree)
-      mSelection->mTree->InvalidateRange(mMin, mMax);
-    if (mNext)
-      mNext->Invalidate();
+    nsTArray<PRInt32> ranges;
+    CollectRanges(this, ranges);
+    InvalidateRanges(mSelection->mTree, ranges);
+    
   }
 
   void RemoveAllBut(PRInt32 aIndex) {
     if (aIndex >= mMin && aIndex <= mMax) {
 
       // Invalidate everything in this list.
-      mSelection->mFirstRange->Invalidate();
+      nsTArray<PRInt32> ranges;
+      CollectRanges(mSelection->mFirstRange, ranges);
 
       mMin = aIndex;
       mMax = aIndex;
@@ -241,6 +263,7 @@ struct nsTreeRange
         delete mSelection->mFirstRange;
         mSelection->mFirstRange = this;
       }
+      InvalidateRanges(mSelection->mTree, ranges);
     }
     else if (mNext)
       mNext->RemoveAllBut(aIndex);
@@ -277,7 +300,7 @@ NS_INTERFACE_MAP_BEGIN(nsTreeSelection)
   NS_INTERFACE_MAP_ENTRY(nsITreeSelection)
   NS_INTERFACE_MAP_ENTRY(nsINativeTreeSelection)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
-  NS_INTERFACE_MAP_ENTRY_DOM_CLASSINFO(TreeSelection)
+  NS_DOM_INTERFACE_MAP_ENTRY_CLASSINFO(TreeSelection)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_ADDREF(nsTreeSelection)
@@ -451,6 +474,7 @@ NS_IMETHODIMP nsTreeSelection::RangedSelect(PRInt32 aStartIndex, PRInt32 aEndInd
     if (mFirstRange) {
         mFirstRange->Invalidate();
         delete mFirstRange;
+        mFirstRange = nsnull;
     }
   }
 
@@ -654,11 +678,12 @@ NS_IMETHODIMP nsTreeSelection::SetCurrentIndex(PRInt32 aIndex)
   nsCOMPtr<nsIDOMElement> treeElt;
   boxObject->GetElement(getter_AddRefs(treeElt));
 
-  nsCOMPtr<nsIDOMNode> treeDOMNode(do_QueryInterface(treeElt));
-  NS_ENSURE_TRUE(treeDOMNode, NS_ERROR_UNEXPECTED);
+  nsCOMPtr<nsINode> treeDOMNode(do_QueryInterface(treeElt));
+  NS_ENSURE_STATE(treeDOMNode);
 
-  nsRefPtr<nsPLDOMEvent> event = new nsPLDOMEvent(treeDOMNode,
-                                         NS_LITERAL_STRING("DOMMenuItemActive"));
+  nsRefPtr<nsPLDOMEvent> event =
+    new nsPLDOMEvent(treeDOMNode, NS_LITERAL_STRING("DOMMenuItemActive"),
+                     PR_FALSE);
   if (!event)
     return NS_ERROR_OUT_OF_MEMORY;
 
@@ -843,8 +868,11 @@ nsTreeSelection::FireOnSelectHandler()
   boxObject->GetElement(getter_AddRefs(elt));
   NS_ENSURE_STATE(elt);
 
+  nsCOMPtr<nsINode> node(do_QueryInterface(elt));
+  NS_ENSURE_STATE(node);
+
   nsRefPtr<nsPLDOMEvent> event =
-    new nsPLDOMEvent(elt, NS_LITERAL_STRING("select"));
+    new nsPLDOMEvent(node, NS_LITERAL_STRING("select"), PR_FALSE);
   event->RunDOMEventWhenSafe();
   return NS_OK;
 }

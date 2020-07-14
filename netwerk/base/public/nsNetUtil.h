@@ -50,6 +50,9 @@
 
 #include "nsCRT.h"
 #include "nsIURI.h"
+#include "nsIStandardURL.h"
+#include "nsIURLParser.h"
+#include "nsIUUIDGenerator.h"
 #include "nsIInputStream.h"
 #include "nsIOutputStream.h"
 #include "nsISafeOutputStream.h"
@@ -177,8 +180,8 @@ NS_NewChannel(nsIChannel           **result,
     nsCOMPtr<nsIIOService> grip;
     rv = net_EnsureIOService(&ioService, grip);
     if (ioService) {
-        nsIChannel *chan;
-        rv = ioService->NewChannelFromURI(uri, &chan);
+        nsCOMPtr<nsIChannel> chan;
+        rv = ioService->NewChannelFromURI(uri, getter_AddRefs(chan));
         if (NS_SUCCEEDED(rv)) {
             if (loadGroup)
                 rv |= chan->SetLoadGroup(loadGroup);
@@ -187,9 +190,7 @@ NS_NewChannel(nsIChannel           **result,
             if (loadFlags != nsIRequest::LOAD_NORMAL)
                 rv |= chan->SetLoadFlags(loadFlags);
             if (NS_SUCCEEDED(rv))
-                *result = chan;
-            else
-                NS_RELEASE(chan);
+                chan.forget(result);
         }
     }
     return rv;
@@ -468,13 +469,16 @@ NS_NewAsyncStreamCopier(nsIAsyncStreamCopier **result,
                         nsIEventTarget        *target,
                         PRBool                 sourceBuffered = PR_TRUE,
                         PRBool                 sinkBuffered = PR_TRUE,
-                        PRUint32               chunkSize = 0)
+                        PRUint32               chunkSize = 0,
+                        PRBool                 closeSource = PR_TRUE,
+                        PRBool                 closeSink = PR_TRUE)
 {
     nsresult rv;
     nsCOMPtr<nsIAsyncStreamCopier> copier =
         do_CreateInstance(NS_ASYNCSTREAMCOPIER_CONTRACTID, &rv);
     if (NS_SUCCEEDED(rv)) {
-        rv = copier->Init(source, sink, target, sourceBuffered, sinkBuffered, chunkSize);
+        rv = copier->Init(source, sink, target, sourceBuffered, sinkBuffered,
+                          chunkSize, closeSource, closeSink);
         if (NS_SUCCEEDED(rv)) {
             *result = nsnull;
             copier.swap(*result);
@@ -743,6 +747,46 @@ NS_GetURLSpecFromFile(nsIFile      *file,
     rv = NS_GetFileProtocolHandler(getter_AddRefs(fileHandler), ioService);
     if (NS_SUCCEEDED(rv))
         rv = fileHandler->GetURLSpecFromFile(file, url);
+    return rv;
+}
+
+/**
+ * Converts the nsIFile to the corresponding URL string.
+ * Should only be called on files which are not directories,
+ * is otherwise identical to NS_GetURLSpecFromFile, but is
+ * usually more efficient.
+ * Warning: this restriction may not be enforced at runtime!
+ */
+inline nsresult
+NS_GetURLSpecFromActualFile(nsIFile      *file,
+                            nsACString   &url,
+                            nsIIOService *ioService = nsnull)
+{
+    nsresult rv;
+    nsCOMPtr<nsIFileProtocolHandler> fileHandler;
+    rv = NS_GetFileProtocolHandler(getter_AddRefs(fileHandler), ioService);
+    if (NS_SUCCEEDED(rv))
+        rv = fileHandler->GetURLSpecFromActualFile(file, url);
+    return rv;
+}
+
+/**
+ * Converts the nsIFile to the corresponding URL string.
+ * Should only be called on files which are directories,
+ * is otherwise identical to NS_GetURLSpecFromFile, but is
+ * usually more efficient.
+ * Warning: this restriction may not be enforced at runtime!
+ */
+inline nsresult
+NS_GetURLSpecFromDir(nsIFile      *file,
+                     nsACString   &url,
+                     nsIIOService *ioService = nsnull)
+{
+    nsresult rv;
+    nsCOMPtr<nsIFileProtocolHandler> fileHandler;
+    rv = NS_GetFileProtocolHandler(getter_AddRefs(fileHandler), ioService);
+    if (NS_SUCCEEDED(rv))
+        rv = fileHandler->GetURLSpecFromDir(file, url);
     return rv;
 }
 
@@ -1489,7 +1533,7 @@ NS_SecurityHashURI(nsIURI* aURI)
 
     nsCAutoString host;
     PRUint32 hostHash = 0;
-    if (NS_SUCCEEDED(baseURI->GetHost(host)))
+    if (NS_SUCCEEDED(baseURI->GetAsciiHost(host)))
         hostHash = nsCRT::HashCode(host.get());
 
     // XOR to combine hash values
@@ -1584,6 +1628,13 @@ NS_SecurityCompareURIs(nsIURI* aSourceURI,
         return PR_FALSE;
     }
 
+    nsCOMPtr<nsIStandardURL> targetURL(do_QueryInterface(targetBaseURI));
+    nsCOMPtr<nsIStandardURL> sourceURL(do_QueryInterface(sourceBaseURI));
+    if (!targetURL || !sourceURL)
+    {
+        return PR_FALSE;
+    }
+
 #ifdef MOZILLA_INTERNAL_API
     if (!targetHost.Equals(sourceHost, nsCaseInsensitiveCStringComparator() ))
 #else
@@ -1615,6 +1666,83 @@ NS_IsInternalSameURIRedirect(nsIChannel *aOldChannel,
 
   PRBool res;
   return NS_SUCCEEDED(oldURI->Equals(newURI, &res)) && res;
+}
+
+/**
+ * Helper function to create a random URL string that's properly formed
+ * but guaranteed to be invalid.
+ */  
+#define NS_FAKE_SCHEME "http://"
+#define NS_FAKE_TLD ".invalid"
+inline nsresult
+NS_MakeRandomInvalidURLString(nsCString& result)
+{
+  nsresult rv;
+  nsCOMPtr<nsIUUIDGenerator> uuidgen =
+    do_GetService("@mozilla.org/uuid-generator;1", &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsID idee;
+  rv = uuidgen->GenerateUUIDInPlace(&idee);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  char chars[NSID_LENGTH];
+  idee.ToProvidedString(chars);
+
+  result.AssignLiteral(NS_FAKE_SCHEME);
+  // Strip off the '{' and '}' at the beginning and end of the UUID
+  result.Append(chars + 1, NSID_LENGTH - 3);
+  result.AppendLiteral(NS_FAKE_TLD);
+
+  return NS_OK;
+}
+#undef NS_FAKE_SCHEME
+#undef NS_FAKE_TLD
+
+/**
+ * Helper function to determine whether urlString is Java-compatible --
+ * whether it can be passed to the Java URL(String) constructor without the
+ * latter throwing a MalformedURLException, or without Java otherwise
+ * mishandling it.
+ */  
+inline nsresult
+NS_CheckIsJavaCompatibleURLString(nsCString& urlString, PRBool *result)
+{
+  *result = PR_FALSE; // Default to "no"
+
+  nsresult rv = NS_OK;
+  nsCOMPtr<nsIURLParser> urlParser =
+    do_GetService(NS_STDURLPARSER_CONTRACTID, &rv);
+  if (NS_FAILED(rv) || !urlParser)
+    return NS_ERROR_FAILURE;
+
+  PRBool compatible = PR_TRUE;
+  PRUint32 schemePos = 0;
+  PRInt32 schemeLen = 0;
+  urlParser->ParseURL(urlString.get(), -1, &schemePos, &schemeLen,
+                      nsnull, nsnull, nsnull, nsnull);
+  if (schemeLen != -1) {
+    nsCString scheme;
+    scheme.Assign(urlString.get() + schemePos, schemeLen);
+    // By default Java only understands a small number of URL schemes, and of
+    // these only some are likely to represent user input (for example from a
+    // link or the location bar) that Java can legitimately be expected to
+    // handle.  (Besides those listed below, Java also understands the "jar",
+    // "mailto" and "netdoc" schemes.  But it probably doesn't expect these
+    // from a browser, and is therefore likely to mishandle them.)
+    if (PL_strcasecmp(scheme.get(), "http") &&
+        PL_strcasecmp(scheme.get(), "https") &&
+        PL_strcasecmp(scheme.get(), "file") &&
+        PL_strcasecmp(scheme.get(), "ftp") &&
+        PL_strcasecmp(scheme.get(), "gopher"))
+      compatible = PR_FALSE;
+  } else {
+    compatible = PR_FALSE;
+  }
+
+  *result = compatible;
+
+  return NS_OK;
 }
 
 #endif // !nsNetUtil_h__

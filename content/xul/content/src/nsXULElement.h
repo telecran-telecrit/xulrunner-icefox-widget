@@ -70,7 +70,6 @@
 #include "nsIXULTemplateBuilder.h"
 #include "nsIBoxObject.h"
 #include "nsIXBLService.h"
-#include "nsICSSOMFactory.h"
 #include "nsLayoutCID.h"
 #include "nsAttrAndChildArray.h"
 #include "nsGkAtoms.h"
@@ -374,6 +373,12 @@ public:
     {
         NS_ASSERTION(!mScriptObject.mObject, "Leaking script object.");
 
+        if (!aObject) {
+            mScriptObject.mObject = nsnull;
+
+            return;
+        }
+
         nsresult rv = nsContentUtils::HoldScriptObject(mScriptObject.mLangID,
                                                        this,
                                                        &NS_CYCLE_COLLECTION_NAME(nsXULPrototypeNode),
@@ -490,13 +495,11 @@ public:
     }
     static void ReleaseGlobals() {
         NS_IF_RELEASE(gXBLService);
-        NS_IF_RELEASE(gCSSOMFactory);
     }
 
 protected:
     // pseudo-constants
     static nsIXBLService*       gXBLService;
-    static nsICSSOMFactory*     gCSSOMFactory;
 
 public:
     static nsresult
@@ -516,7 +519,7 @@ public:
                                 nsIContent* aBindingParent,
                                 PRBool aCompileEventHandlers);
     virtual void UnbindFromTree(PRBool aDeep, PRBool aNullParent);
-    virtual nsresult RemoveChildAt(PRUint32 aIndex, PRBool aNotify);
+    virtual nsresult RemoveChildAt(PRUint32 aIndex, PRBool aNotify, PRBool aMutationEvent = PR_TRUE);
     virtual nsIAtom *GetIDAttributeName() const;
     virtual nsIAtom *GetClassAttributeName() const;
     virtual PRBool GetAttr(PRInt32 aNameSpaceID, nsIAtom* aName,
@@ -545,8 +548,6 @@ public:
     }
 #endif
 
-    virtual void SetFocus(nsPresContext* aPresContext);
-    virtual void RemoveFocus(nsPresContext* aPresContext);
     virtual void PerformAccesskey(PRBool aKeyCausesActivation,
                                   PRBool aIsTrustedEvent);
 

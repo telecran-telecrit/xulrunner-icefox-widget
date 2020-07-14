@@ -40,9 +40,8 @@
 #define nsPSPrinters_h___
 
 #include "nsString.h"
-#include "nsVoidArray.h"
+#include "nsTArray.h"
 #include "prtypes.h"
-#include "nsCUPSShim.h"
 #include "psSharedCore.h"
 
 class nsIPrefService;
@@ -77,7 +76,7 @@ class NS_PSSHARED nsPSPrinterList {
          *              There should always be at least one entry. The
          *              first entry is the default print destination.
          */
-        void GetPrinterList(nsCStringArray& aList);
+        void GetPrinterList(nsTArray<nsCString>& aList);
 
         enum PrinterType {
             kTypeUnknown,         // Not actually handled by the PS module
@@ -96,7 +95,6 @@ class NS_PSSHARED nsPSPrinterList {
     private:
         nsCOMPtr<nsIPrefService> mPrefSvc;
         nsCOMPtr<nsIPrefBranch> mPref;
-        nsCUPSShim mCups;
 };
 
 #endif /* nsPSPrinters_h___ */

@@ -11,15 +11,15 @@
  * for the specific language governing rights and limitations under the
  * License.
  *
- * The Original Code is the Application Update Service.
+ * The Original Code is mozilla.org code.
  *
  * The Initial Developer of the Original Code is
- * Robert Strong <robert.bugzilla@gmail.com>.
- *
+ * the Mozilla Foundation.
  * Portions created by the Initial Developer are Copyright (C) 2008
- * the Mozilla Foundation <http://www.mozilla.org/>. All Rights Reserved.
+ * the Initial Developer. All Rights Reserved.
  *
  * Contributor(s):
+ *   Robert Strong <robert.bugzilla@gmail.com> (Original Author)
  *
  * Alternatively, the contents of this file may be used under the terms of
  * either the GNU General Public License Version 2 or later (the "GPL"), or
@@ -36,145 +36,121 @@
  * ***** END LICENSE BLOCK *****
  */
 
-/* General Complete MAR File Patch Apply Tests */
+/* General Complete MAR File Patch Apply Test */
+
+const TEST_ID = "0110";
+// All we care about is that the last modified time has changed so that Mac OS
+// X Launch Services invalidates its cache so the test allows up to one minute
+// difference in the last modified time.
+const MAX_TIME_DIFFERENCE = 60000;
+
+// The files are in the same order as they are applied from the mar
+const TEST_FILES = [
+{
+  fileName         : "1_1_image1.png",
+  destinationDir   : TEST_ID + APPLY_TO_DIR_SUFFIX + "/mar_test/1/1_1/",
+  originalContents : null,
+  compareContents  : null,
+  originalFile     : null,
+  compareFile      : "data/complete.png",
+  originalPerms    : 0776,
+  comparePerms     : 0644
+}, {
+  fileName         : "1_1_text1",
+  destinationDir   : TEST_ID + APPLY_TO_DIR_SUFFIX + "/mar_test/1/1_1/",
+  originalContents : "ToBeReplacedWithToBeModified\n",
+  compareContents  : "ToBeModified\n",
+  originalFile     : null,
+  compareFile      : null,
+  originalPerms    : 0775,
+  comparePerms     : 0644
+}, {
+  fileName         : "1_1_text2",
+  destinationDir   : TEST_ID + APPLY_TO_DIR_SUFFIX + "/mar_test/1/1_1/",
+  originalContents : "ToBeReplacedWithToBeDeleted\n",
+  compareContents  : "ToBeDeleted\n",
+  originalFile     : null,
+  compareFile      : null,
+  originalPerms    : 0677,
+  comparePerms     : 0644
+}, {
+  fileName         : "1_exe1.exe",
+  destinationDir   : TEST_ID + APPLY_TO_DIR_SUFFIX + "/mar_test/1/",
+  originalContents : null,
+  compareContents  : null,
+  originalFile     : "data/partial.png",
+  compareFile      : "data/complete.png",
+  originalPerms    : 0777,
+  comparePerms     : 0755
+}, {
+  fileName         : "2_1_text1",
+  destinationDir   : TEST_ID + APPLY_TO_DIR_SUFFIX + "/mar_test/2/2_1/",
+  originalContents : "ToBeReplacedWithToBeDeleted\n",
+  compareContents  : "ToBeDeleted\n",
+  originalFile     : null,
+  compareFile      : null,
+  originalPerms    : 0767,
+  comparePerms     : 0644
+}];
 
 function run_test() {
-  // The directory the updates will be applied to is the current working
-  // directory and not dist/bin.
-  var testDir = do_get_cwd();
-  // The mar files were created with all files in a subdirectory named
-  // mar_test... clear it out of the way if it exists and then create it.
-  testDir.append("mar_test");
-  try {
-    if (testDir.exists())
-      testDir.remove(true);
-  }
-  catch (e) {
-    dump("Unable to remove directory\npath: " + testDir.path +
-         "\nException: " + e + "\n");
-  }
-  dump("Testing: successful removal of the directory used to apply the mar file\n");
-  do_check_false(testDir.exists());
-  testDir.create(AUS_Ci.nsIFile.DIRECTORY_TYPE, PERMS_DIRECTORY);
-
-  // Create an empty test file to test the complete mar's ability to replace an
-  // existing file.
-  var testFile = testDir.clone();
-  testFile.append("text1");
-  testFile.create(AUS_Ci.nsIFile.NORMAL_FILE_TYPE, PERMS_FILE);
-
-  var binDir = getGREDir();
-
-  // The updater binary file
-  var updater = binDir.clone();
-  updater.append("updater.app");
-  if (!updater.exists()) {
-    updater = binDir.clone();
-    updater.append("updater.exe");
-    if (!updater.exists()) {
-      updater = binDir.clone();
-      updater.append("updater");
-      if (!updater.exists()) {
-        do_throw("Unable to find updater binary!");
-      }
-    }
+  if (IS_ANDROID) {
+    logTestInfo("this test is not applicable to Android... returning early");
+    return;
   }
 
-  // Use a directory outside of dist/bin to lessen the garbage in dist/bin
-  var updatesSubDir = do_get_cwd();
-  updatesSubDir.append("0110_complete_mar");
+  do_test_pending();
+  do_register_cleanup(end_test);
 
-  try {
-    // Mac OS X intermittently fails when removing the dir where the updater
-    // binary was launched.
-    if (updatesSubDir.exists())
-      updatesSubDir.remove(true);
+  setupUpdaterTest(TEST_ID, MAR_COMPLETE_FILE, TEST_FILES);
+
+  // The testUpdate function is used for consistency with the tests that require
+  // a timeout before continuing the test.
+  testUpdate();
+}
+
+function end_test() {
+  cleanupUpdaterTest(TEST_ID);
+}
+
+function testUpdate() {
+  let updatesDir = do_get_file(TEST_ID + UPDATES_DIR_SUFFIX);
+  let applyToDir = do_get_file(TEST_ID + APPLY_TO_DIR_SUFFIX);
+
+  // For Mac OS X set the last modified time for the root directory to a date in
+  // the past to test that the last modified time is updated on a successful
+  // update (bug 600098).
+  if (IS_MACOSX) {
+    let now = Date.now();
+    let yesterday = now - (1000 * 60 * 60 * 24);
+    applyToDir.lastModifiedTime = yesterday;
   }
-  catch (e) {
-    dump("Unable to remove directory\npath: " + updatesSubDir.path +
-         "\nException: " + e + "\n");
-  }
 
-  var mar = do_get_file("data/aus-0110_general.mar");
-  mar.copyTo(updatesSubDir, "update.mar");
-
-  // apply the complete mar and check the innards of the files
-  var exitValue = runUpdate(updatesSubDir, updater);
-  dump("Testing: updater binary process exitValue for success when applying " +
-       "a complete mar\n");
+  // apply the complete mar
+  let exitValue = runUpdate(TEST_ID);
+  logTestInfo("testing updater binary process exitValue for success when " +
+              "applying a complete mar");
   do_check_eq(exitValue, 0);
 
-  dump("Testing: contents of files added by a complete mar\n");
-  do_check_eq(getFileBytes(getTestFile(testDir, "text1")), "ToBeModified\n");
-  do_check_eq(getFileBytes(getTestFile(testDir, "text2")), "ToBeDeleted\n");
+  logTestInfo("testing update.status should be " + STATE_SUCCEEDED);
+  do_check_eq(readStatusFile(updatesDir), STATE_SUCCEEDED);
 
-  var refImage = do_get_file("data/aus-0110_general_ref_image.png");
-  var srcImage = getTestFile(testDir, "image1.png");
-  do_check_eq(getFileBytes(srcImage), getFileBytes(refImage));
-
-  try {
-    // Mac OS X intermittently fails when removing the dir where the updater
-    // binary was launched.
-    if (updatesSubDir.exists())
-      updatesSubDir.remove(true);
-  }
-  catch (e) {
-    dump("Unable to remove directory\npath: " + updatesSubDir.path +
-         "\nException: " + e + "\n");
+  // For Mac OS X check that the last modified time for a directory has been
+  // updated after a successful update (bug 600098).
+  if (IS_MACOSX) {
+    logTestInfo("testing last modified time on the apply to directory has " +
+                "changed after a successful update (bug 600098)");
+    let now = Date.now();
+    let timeDiff = Math.abs(applyToDir.lastModifiedTime - now);
+    do_check_true(timeDiff < MAX_TIME_DIFFERENCE);
   }
 
-  cleanUp();
-}
+  checkFilesAfterUpdateSuccess(TEST_ID, TEST_FILES);
 
-// Launches the updater binary to apply a mar file
-function runUpdate(aUpdatesSubDir, aUpdater) {
-  // Copy the updater binary to the update directory so the updater.ini is not
-  // in the same directory as it is. This prevents ui from displaying and the
-  // PostUpdate executable which is defined in the updater.ini from launching.
-  aUpdater.copyTo(aUpdatesSubDir, aUpdater.leafName);
-  var updateBin = aUpdatesSubDir.clone();
-  updateBin.append(aUpdater.leafName);
-  if (updateBin.leafName == "updater.app") {
-    updateBin.append("Contents");
-    updateBin.append("MacOS");
-    updateBin.append("updater");
-    if (!updateBin.exists())
-      do_throw("Unable to find the updater executable!");
-  }
+  logTestInfo("testing tobedeleted directory doesn't exist");
+  let toBeDeletedDir = applyToDir.clone();
+  toBeDeletedDir.append("tobedeleted");
+  do_check_false(toBeDeletedDir.exists());
 
-  var updatesSubDirPath = aUpdatesSubDir.path;
-  if (/ /.test(updatesSubDirPath))
-    updatesSubDirPath = '"' + updatesSubDirPath + '"';
-
-  var process = AUS_Cc["@mozilla.org/process/util;1"].
-                createInstance(AUS_Ci.nsIProcess);
-  process.init(updateBin);
-  var args = [updatesSubDirPath];
-  process.run(true, args, args.length);
-  return process.exitValue;
-}
-
-// Gets a file in the mar_test subdirectory of the current working directory
-// which is where the mar will be applied.
-function getTestFile(aDir, aLeafName) {
-  var file = aDir.clone();
-  file.append(aLeafName);
-  if (!(file instanceof AUS_Ci.nsILocalFile))
-    do_throw("File must be a nsILocalFile for this test! File: " + aLeafName);
-
-  return file;
-}
-
-// Returns the binary contents of a file
-function getFileBytes(aFile) {
-  var fis = AUS_Cc["@mozilla.org/network/file-input-stream;1"].
-            createInstance(AUS_Ci.nsIFileInputStream);
-  fis.init(aFile, -1, -1, false);
-  var bis = AUS_Cc["@mozilla.org/binaryinputstream;1"].
-            createInstance(AUS_Ci.nsIBinaryInputStream);
-  bis.setInputStream(fis);
-  var data = bis.readBytes(bis.available());
-  bis.close();
-  fis.close();
-  return data;
+  checkCallbackAppLog(TEST_ID);
 }

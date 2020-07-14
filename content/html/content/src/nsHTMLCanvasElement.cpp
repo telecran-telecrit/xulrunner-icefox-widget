@@ -59,6 +59,8 @@
 
 #include "nsICanvasRenderingContextInternal.h"
 
+#include "nsLayoutUtils.h"
+
 #define DEFAULT_CANVAS_WIDTH 300
 #define DEFAULT_CANVAS_HEIGHT 150
 
@@ -85,14 +87,18 @@ public:
   // nsIDOMHTMLCanvasElement
   NS_DECL_NSIDOMHTMLCANVASELEMENT
 
+  // CC
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED_NO_UNLINK(nsHTMLCanvasElement,
+                                                     nsGenericHTMLElement)
+
   // nsICanvasElement
   NS_IMETHOD GetPrimaryCanvasFrame(nsIFrame **aFrame);
   NS_IMETHOD GetSize(PRUint32 *width, PRUint32 *height);
-  NS_IMETHOD RenderContexts(gfxContext *ctx);
+  NS_IMETHOD RenderContexts(gfxContext *ctx, gfxPattern::GraphicsFilter aFilter);
   virtual PRBool IsWriteOnly();
   virtual void SetWriteOnly();
   NS_IMETHOD InvalidateFrame ();
-  NS_IMETHOD InvalidateFrameSubrect (const nsRect& damageRect);
+  NS_IMETHOD InvalidateFrameSubrect (const gfxRect& damageRect);
   virtual PRInt32 CountContexts();
   virtual nsICanvasRenderingContextInternal *GetContextAtIndex (PRInt32 index);
   virtual PRBool GetIsOpaque();
@@ -149,17 +155,18 @@ nsHTMLCanvasElement::nsHTMLCanvasElement(nsINodeInfo *aNodeInfo)
 
 nsHTMLCanvasElement::~nsHTMLCanvasElement()
 {
-  if (mCurrentContext) {
-    nsCOMPtr<nsICanvasRenderingContextInternal> internalctx(do_QueryInterface(mCurrentContext));
-    internalctx->SetCanvasElement(nsnull);
-    mCurrentContext = nsnull;
-  }
 }
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(nsHTMLCanvasElement)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(nsHTMLCanvasElement,
+                                                  nsGenericHTMLElement)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE_NSCOMPTR(mCurrentContext)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_ADDREF_INHERITED(nsHTMLCanvasElement, nsGenericElement)
 NS_IMPL_RELEASE_INHERITED(nsHTMLCanvasElement, nsGenericElement)
 
-NS_INTERFACE_TABLE_HEAD(nsHTMLCanvasElement)
+NS_INTERFACE_TABLE_HEAD_CYCLE_COLLECTION_INHERITED(nsHTMLCanvasElement)
   NS_HTML_CONTENT_INTERFACE_TABLE2(nsHTMLCanvasElement,
                                    nsIDOMHTMLCanvasElement,
                                    nsICanvasElement)
@@ -468,6 +475,15 @@ nsHTMLCanvasElement::GetContext(const nsAString& aContextId,
       // XXX ERRMSG we need to report an error to developers here! (bug 329026)
       return NS_ERROR_INVALID_ARG;
 
+    // Ensure that the context participates in CC.  Note that returning a
+    // CC participant from QI doesn't addref.
+    nsXPCOMCycleCollectionParticipant *cp = nsnull;
+    CallQueryInterface(mCurrentContext, &cp);
+    if (!cp) {
+      mCurrentContext = nsnull;
+      return NS_ERROR_FAILURE;
+    }
+
     rv = mCurrentContext->SetCanvasElement(this);
     if (NS_FAILED(rv)) {
       mCurrentContext = nsnull;
@@ -521,12 +537,12 @@ nsHTMLCanvasElement::GetSize(PRUint32 *width, PRUint32 *height)
 }
 
 NS_IMETHODIMP
-nsHTMLCanvasElement::RenderContexts(gfxContext *ctx)
+nsHTMLCanvasElement::RenderContexts(gfxContext *ctx, gfxPattern::GraphicsFilter aFilter)
 {
   if (!mCurrentContext)
     return NS_OK;
 
-  return mCurrentContext->Render(ctx);
+  return mCurrentContext->Render(ctx, aFilter);
 }
 
 PRBool
@@ -544,7 +560,14 @@ nsHTMLCanvasElement::SetWriteOnly()
 NS_IMETHODIMP
 nsHTMLCanvasElement::InvalidateFrame()
 {
-  nsIFrame *frame = GetPrimaryFrame(Flush_Frames);
+  nsIDocument* doc = GetCurrentDoc();
+  if (!doc) {
+    return NS_OK;
+  }
+
+  // We don't need to flush anything here; if there's no frame or if
+  // we plan to reframe we don't need to invalidate it anyway.
+  nsIFrame *frame = GetPrimaryFrameFor(this, doc);
   if (frame) {
     nsRect r = frame->GetRect();
     r.x = r.y = 0;
@@ -555,11 +578,41 @@ nsHTMLCanvasElement::InvalidateFrame()
 }
 
 NS_IMETHODIMP
-nsHTMLCanvasElement::InvalidateFrameSubrect(const nsRect& damageRect)
+nsHTMLCanvasElement::InvalidateFrameSubrect(const gfxRect& damageRect)
 {
-  nsIFrame *frame = GetPrimaryFrame(Flush_Frames);
+  nsIDocument* doc = GetCurrentDoc();
+  if (!doc) {
+    return NS_OK;
+  }
+
+  // We don't need to flush anything here; if there's no frame or if
+  // we plan to reframe we don't need to invalidate it anyway.
+  nsIFrame *frame = GetPrimaryFrameFor(this, doc);
   if (frame) {
-    frame->Invalidate(damageRect);
+    // Frame might be dirty, but we don't care about that; if the geometry
+    // changes the right invalidates will happen anyway.  Don't assert on our
+    // geometry getters.
+    nsAutoDisableGetUsedXAssertions noAssert;
+    
+    nsRect contentArea(frame->GetContentRect());
+    nsIntSize size = GetWidthHeight();
+
+    // damageRect and size are in CSS pixels; contentArea is in appunits
+    // We want a rect in appunits; so avoid doing pixels-to-appunits and
+    // vice versa conversion here.
+    gfxRect realRect(damageRect);
+    realRect.Scale(contentArea.width / gfxFloat(size.width),
+                   contentArea.height / gfxFloat(size.height));
+    realRect.RoundOut();
+
+    // then make it a nsRect
+    nsRect invalRect(realRect.X(), realRect.Y(),
+                     realRect.Width(), realRect.Height());
+
+    // account for border/padding
+    invalRect.MoveBy(contentArea.TopLeft() - frame->GetPosition());
+
+    frame->Invalidate(invalRect);
   }
 
   return NS_OK;

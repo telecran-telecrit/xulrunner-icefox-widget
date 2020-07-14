@@ -3,7 +3,7 @@
 <head>
   <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=utf-8">
   <title>Test for Cross Site XMLHttpRequest</title>
-  <script type="text/javascript" src="/MochiKit/MochiKit.js"></script>
+  <script type="text/javascript" src="/MochiKit/packed.js"></script>
   <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>        
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 </head>
@@ -119,9 +119,8 @@ function runTest() {
     ];
 
     if (isNullOrigin) {
-      passTests = ["*", "\t \t* \t "];
+      passTests = ["*", "\t \t* \t ", "null"];
       failTests = failTests.filter(function(v) { return v != origin });
-      failTests.push("null");
     }
     
     for each(allowOrigin in passTests) {
@@ -672,6 +671,11 @@ function runTest() {
     }
   }
 
+  // Make sure to clear cookies to avoid affecting other tests
+  document.cookie = "a=; path=/; expires=Thu, 01-Jan-1970 00:00:01 GMT"
+  is(document.cookie, "", "No cookies should be left over");
+
+
   // Test redirects
   is(loader.src, "http://example.org/tests/content/base/test/file_CrossSiteXHR_inner.html");
   is(origin, "http://example.org");
@@ -815,7 +819,7 @@ function runTest() {
                     ],
            },
            { pass: 0,
-             method: "XXDELETE",
+             method: "DELETE",
              hops: [{ server: "http://example.org",
                     },
                     { server: "http://example.com",
@@ -838,7 +842,7 @@ function runTest() {
                     ],
            },
            { pass: 0,
-             method: "XXDELETE",
+             method: "DELETE",
              hops: [{ server: "http://example.com",
                       allowOrigin: origin,
                     },

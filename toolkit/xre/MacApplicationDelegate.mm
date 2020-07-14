@@ -44,6 +44,7 @@
 // See http://developer.apple.com/documentation/Cocoa/Conceptual/ScriptableCocoaApplications/SApps_handle_AEs/chapter_11_section_3.html for details.
 
 #import <Cocoa/Cocoa.h>
+#import <Carbon/Carbon.h>
 
 #include "nsCOMPtr.h"
 #include "nsIBaseWindow.h"
@@ -53,11 +54,29 @@
 #include "nsAppRunner.h"
 #include "nsComponentManagerUtils.h"
 #include "nsCommandLineServiceMac.h"
+#include "nsIServiceManager.h"
 #include "nsServiceManagerUtils.h"
 #include "nsIAppStartup.h"
 #include "nsIObserverService.h"
 #include "nsISupportsPrimitives.h"
 #include "nsObjCExceptions.h"
+#include "nsIFile.h"
+#include "nsDirectoryServiceDefs.h"
+#include "nsICommandLineRunner.h"
+
+class AutoAutoreleasePool {
+public:
+  AutoAutoreleasePool()
+  {
+    mLocalPool = [[NSAutoreleasePool alloc] init];
+  }
+  ~AutoAutoreleasePool()
+  {
+    [mLocalPool release];
+  }
+private:
+  NSAutoreleasePool *mLocalPool;
+};
 
 @interface MacApplicationDelegate : NSObject
 {
@@ -84,6 +103,10 @@ SetupMacApplicationDelegate()
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
+  // this is called during startup, outside an event loop, and therefore
+  // needs an autorelease pool to avoid cocoa object leakage (bug 559075)
+  AutoAutoreleasePool pool;
+
   // This call makes it so that application:openFile: doesn't get bogus calls
   // from Cocoa doing its own parsing of the argument string. And yes, we need
   // to use a string with a boolean value in it. That's just how it works.
@@ -98,6 +121,46 @@ SetupMacApplicationDelegate()
 }
 
 @implementation MacApplicationDelegate
+
+- (id)init
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
+
+  if ((self = [super init])) {
+    NSAppleEventManager *aeMgr = [NSAppleEventManager sharedAppleEventManager];
+
+    [aeMgr setEventHandler:self
+               andSelector:@selector(handleAppleEvent:withReplyEvent:)
+             forEventClass:kInternetEventClass
+                andEventID:kAEGetURL];
+
+    [aeMgr setEventHandler:self
+               andSelector:@selector(handleAppleEvent:withReplyEvent:)
+             forEventClass:'WWW!'
+                andEventID:'OURL'];
+
+    [aeMgr setEventHandler:self
+               andSelector:@selector(handleAppleEvent:withReplyEvent:)
+             forEventClass:kCoreEventClass
+                andEventID:kAEOpenDocuments];
+  }
+  return self;
+
+  NS_OBJC_END_TRY_ABORT_BLOCK_RETURN(nil);
+}
+
+- (void)dealloc
+{
+  NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
+
+  NSAppleEventManager *aeMgr = [NSAppleEventManager sharedAppleEventManager];
+  [aeMgr removeEventHandlerForEventClass:kInternetEventClass andEventID:kAEGetURL];
+  [aeMgr removeEventHandlerForEventClass:'WWW!' andEventID:'OURL'];
+  [aeMgr removeEventHandlerForEventClass:kCoreEventClass andEventID:kAEOpenDocuments];
+  [super dealloc];
+
+  NS_OBJC_END_TRY_ABORT_BLOCK;
+}
 
 // Opening the application is handled specially elsewhere,
 // don't define applicationOpenUntitledFile: .
@@ -127,24 +190,23 @@ SetupMacApplicationDelegate()
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
 
-  FSRef ref;
-  FSSpec spec;
-  // The cast is kind of freaky, but apparently it's what all the beautiful people do.
-  OSStatus status = FSPathMakeRef((UInt8 *)[filename fileSystemRepresentation], &ref, NULL);
-  if (status != noErr) {
-    NS_WARNING("FSPathMakeRef in openFile failed, skipping file open");
+  NSURL *url = [NSURL fileURLWithPath:filename];
+  if (!url)
     return NO;
-  }
-  status = FSGetCatalogInfo(&ref, kFSCatInfoNone, NULL, NULL, &spec, NULL);
-  if (status != noErr) {
-    NS_WARNING("FSGetCatalogInfo in openFile failed, skipping file open");
-    return NO;
-  }
 
-  // Take advantage of the existing "command line" code for Macs.
+  NSString *urlString = [url absoluteString];
+  if (!urlString)
+    return NO;
+
   nsMacCommandLine& cmdLine = nsMacCommandLine::GetMacCommandLine();
+
+  // Add the URL to any command line we're currently setting up.
+  if (cmdLine.AddURLToCurrentCommandLine([urlString UTF8String]))
+    return YES;
+
   // We don't actually care about Mac filetypes in this context, just pass a placeholder.
-  cmdLine.HandleOpenOneDoc(spec, 'abcd');
+  
+  cmdLine.HandleOpenOneDoc((CFURLRef)url, 'abcd');
 
   return YES;
 
@@ -159,24 +221,10 @@ SetupMacApplicationDelegate()
 {
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK_RETURN;
 
-  FSRef ref;
-  FSSpec spec;
-  // The cast is kind of freaky, but apparently it's what all the beautiful people do.
-  OSStatus status = FSPathMakeRef((UInt8 *)[filename fileSystemRepresentation], &ref, NULL);
-  if (status != noErr) {
-    NS_WARNING("FSPathMakeRef in printFile failed, skipping printing");
-    return NO;
-  }
-  status = FSGetCatalogInfo(&ref, kFSCatInfoNone, NULL, NULL, &spec, NULL);
-  if (status != noErr) {
-    NS_WARNING("FSGetCatalogInfo in printFile failed, skipping printing");
-    return NO;
-  }
-
   // Take advantage of the existing "command line" code for Macs.
   nsMacCommandLine& cmdLine = nsMacCommandLine::GetMacCommandLine();
   // We don't actually care about Mac filetypes in this context, just pass a placeholder.
-  cmdLine.HandlePrintOneDoc(spec, 'abcd');
+  cmdLine.HandlePrintOneDoc((CFURLRef)[NSURL URLWithString:filename], 'abcd');
 
   return YES;
 
@@ -280,9 +328,6 @@ static NSWindow* GetCocoaWindowForXULWindow(nsISupports *aXULWindow)
   NS_OBJC_END_TRY_ABORT_BLOCK;
 }
 
-// The open contents Apple Event 'ocon' (new in 10.4) does not have a delegate method
-// associated with it; it would need Carbon event code to handle.
-
 // If we don't handle applicationShouldTerminate:, a call to [NSApp terminate:]
 // (from the browser or from the OS) can result in an unclean shutdown.
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
@@ -313,5 +358,66 @@ static NSWindow* GetCocoaWindowForXULWindow(nsISupports *aXULWindow)
   return NSTerminateNow;
 }
 
-@end
+- (void)handleAppleEvent:(NSAppleEventDescriptor*)event withReplyEvent:(NSAppleEventDescriptor*)replyEvent
+{
+  if (!event)
+    return;
 
+  AutoAutoreleasePool pool;
+
+  if (([event eventClass] == kInternetEventClass && [event eventID] == kAEGetURL) ||
+      ([event eventClass] == 'WWW!' && [event eventID] == 'OURL')) {
+    NSString* urlString = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
+
+    // don't open chrome URLs
+    NSString* schemeString = [[NSURL URLWithString:urlString] scheme];
+    if (!schemeString ||
+        [schemeString compare:@"chrome"
+                      options:NSCaseInsensitiveSearch
+                        range:NSMakeRange(0, [schemeString length])] == NSOrderedSame) {
+      return;
+    }
+
+    // Add the URL to any command line we're currently setting up.
+    nsMacCommandLine& macCmdLine = nsMacCommandLine::GetMacCommandLine();
+    if (macCmdLine.AddURLToCurrentCommandLine([urlString UTF8String]))
+      return;
+
+    nsCOMPtr<nsICommandLineRunner> cmdLine(do_CreateInstance("@mozilla.org/toolkit/command-line;1"));
+    if (!cmdLine) {
+      NS_ERROR("Couldn't create command line!");
+      return;
+    }
+    nsCOMPtr<nsIFile> workingDir;
+    nsresult rv = NS_GetSpecialDirectory(NS_OS_CURRENT_WORKING_DIR, getter_AddRefs(workingDir));
+    if (NS_FAILED(rv))
+      return;
+    const char *argv[3] = {nsnull, "-url", [urlString UTF8String]};
+    rv = cmdLine->Init(3, const_cast<char**>(argv), workingDir, nsICommandLine::STATE_REMOTE_EXPLICIT);
+    if (NS_FAILED(rv))
+      return;
+    rv = cmdLine->Run();
+  }
+  else if ([event eventClass] == kCoreEventClass && [event eventID] == kAEOpenDocuments) {
+    NSAppleEventDescriptor* fileListDescriptor = [event paramDescriptorForKeyword:keyDirectObject];
+    if (!fileListDescriptor)
+      return;
+
+    // Descriptor list indexing is one-based...
+    int numberOfFiles = [fileListDescriptor numberOfItems];
+    for (int i = 1; i <= numberOfFiles; i++) {
+      NSString* urlString = [[fileListDescriptor descriptorAtIndex:i] stringValue];
+      if (!urlString)
+        continue;
+
+      // We need a path, not a URL
+      NSURL* url = [NSURL URLWithString:urlString];
+      if (!url)
+        continue;
+
+      [self application:NSApp openFile:[url path]];
+    }
+  }
+}
+
+@end

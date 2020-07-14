@@ -70,13 +70,13 @@ NSSCleanupAutoPtrClass_WithParam(SECItem, SECITEM_FreeItem, TrueParam, PR_TRUE)
 
 struct nsMyTrustedEVInfo
 {
-  char *dotted_oid;
-  char *oid_name; // Set this to null to signal an invalid structure,
+  const char *dotted_oid;
+  const char *oid_name; // Set this to null to signal an invalid structure,
                   // (We can't have an empty list, so we'll use a dummy entry)
   SECOidTag oid_tag;
-  char *ev_root_sha1_fingerprint;
-  char *issuer_base64;
-  char *serial_base64;
+  const char *ev_root_sha1_fingerprint;
+  const char *issuer_base64;
+  const char *serial_base64;
   CERTCertificate *cert;
 };
 
@@ -406,6 +406,17 @@ static struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     nsnull
   },
   {
+    // CN=GlobalSign,O=GlobalSign,OU=GlobalSign Root CA - R3
+    "1.3.6.1.4.1.4146.1.1",
+    "GlobalSign EV OID",
+    SEC_OID_UNKNOWN,
+    "D6:9B:56:11:48:F0:1C:77:C5:45:78:C1:09:26:DF:5B:85:69:76:AD",
+    "MEwxIDAeBgNVBAsTF0dsb2JhbFNpZ24gUm9vdCBDQSAtIFIzMRMwEQYDVQQKEwpH"
+    "bG9iYWxTaWduMRMwEQYDVQQDEwpHbG9iYWxTaWdu",
+    "BAAAAAABIVhTCKI=",
+    nsnull
+  },
+  {
     // CN=Buypass Class 3 CA 1,O=Buypass AS-983163327,C=NO
     "2.16.578.1.26.1.3.3",
     "Buypass Class 3 CA 1",
@@ -425,6 +436,44 @@ static struct nsMyTrustedEVInfo myTrustedEVInfos[] = {
     "MD0xCzAJBgNVBAYTAkZSMREwDwYDVQQKEwhDZXJ0cGx1czEbMBkGA1UEAxMSQ2xh"
     "c3MgMiBQcmltYXJ5IENB",
     "AIW9S/PY2uNp9pTXX8OlRCM=",
+    nsnull
+  },
+  {
+    // CN=Chambers of Commerce Root - 2008,O=AC Camerfirma S.A.,serialNumber=A82743287,L=Madrid (see current address at www.camerfirma.com/address),C=EU
+    "1.3.6.1.4.1.17326.10.14.2.1.2",
+    "Camerfirma EV OID a",
+    SEC_OID_UNKNOWN,
+    "78:6A:74:AC:76:AB:14:7F:9C:6A:30:50:BA:9E:A8:7E:FE:9A:CE:3C",
+    "MIGuMQswCQYDVQQGEwJFVTFDMEEGA1UEBxM6TWFkcmlkIChzZWUgY3VycmVudCBh"
+    "ZGRyZXNzIGF0IHd3dy5jYW1lcmZpcm1hLmNvbS9hZGRyZXNzKTESMBAGA1UEBRMJ"
+    "QTgyNzQzMjg3MRswGQYDVQQKExJBQyBDYW1lcmZpcm1hIFMuQS4xKTAnBgNVBAMT"
+    "IENoYW1iZXJzIG9mIENvbW1lcmNlIFJvb3QgLSAyMDA4",
+    "AKPaQn6ksa7a",
+    nsnull
+  },
+  {
+    // CN=Global Chambersign Root - 2008,O=AC Camerfirma S.A.,serialNumber=A82743287,L=Madrid (see current address at www.camerfirma.com/address),C=EU
+    "1.3.6.1.4.1.17326.10.8.12.1.2",
+    "Camerfirma EV OID b",
+    SEC_OID_UNKNOWN,
+    "4A:BD:EE:EC:95:0D:35:9C:89:AE:C7:52:A1:2C:5B:29:F6:D6:AA:0C",
+    "MIGsMQswCQYDVQQGEwJFVTFDMEEGA1UEBxM6TWFkcmlkIChzZWUgY3VycmVudCBh"
+    "ZGRyZXNzIGF0IHd3dy5jYW1lcmZpcm1hLmNvbS9hZGRyZXNzKTESMBAGA1UEBRMJ"
+    "QTgyNzQzMjg3MRswGQYDVQQKExJBQyBDYW1lcmZpcm1hIFMuQS4xJzAlBgNVBAMT"
+    "Hkdsb2JhbCBDaGFtYmVyc2lnbiBSb290IC0gMjAwOA==",
+    "AMnN0+nVfSPO",
+    nsnull
+  },
+  {
+    // CN=TC TrustCenter Universal CA III,OU=TC TrustCenter Universal CA,O=TC TrustCenter GmbH,C=DE
+    "1.2.276.0.44.1.1.1.4",
+    "TC TrustCenter EV OID",
+    SEC_OID_UNKNOWN,
+    "96:56:CD:7B:57:96:98:95:D0:E1:41:46:68:06:FB:B8:C6:11:06:87",
+    "MHsxCzAJBgNVBAYTAkRFMRwwGgYDVQQKExNUQyBUcnVzdENlbnRlciBHbWJIMSQw"
+    "IgYDVQQLExtUQyBUcnVzdENlbnRlciBVbml2ZXJzYWwgQ0ExKDAmBgNVBAMTH1RD"
+    "IFRydXN0Q2VudGVyIFVuaXZlcnNhbCBDQSBJSUk=",
+    "YyUAAQACFI0zFQLkbPQ=",
     nsnull
   },
   {
@@ -476,11 +525,12 @@ nsMyTrustedEVInfoClass::nsMyTrustedEVInfoClass()
 
 nsMyTrustedEVInfoClass::~nsMyTrustedEVInfoClass()
 {
-  free(dotted_oid);
-  free(oid_name);
-  free(ev_root_sha1_fingerprint);
-  free(issuer_base64);
-  free(serial_base64);
+  // Cast away const-ness in order to free these strings
+  free(const_cast<char*>(dotted_oid));
+  free(const_cast<char*>(oid_name));
+  free(const_cast<char*>(ev_root_sha1_fingerprint));
+  free(const_cast<char*>(issuer_base64));
+  free(const_cast<char*>(serial_base64));
   if (cert)
     CERT_DestroyCertificate(cert);
 }

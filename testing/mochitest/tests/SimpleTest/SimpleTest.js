@@ -49,12 +49,12 @@ SimpleTest.ok = function (condition, name, diag) {
 **/
 SimpleTest.is = function (a, b, name) {
     var repr = MochiKit.Base.repr;
-    SimpleTest.ok(a == b, name, "got " + repr(a) + ", expected " + repr(b));
+    SimpleTest.ok(a == b, name, repr(a) + " should equal " + repr(b));
 };
 
 SimpleTest.isnot = function (a, b, name) {
     var repr = MochiKit.Base.repr;
-    SimpleTest.ok(a != b, name, "Didn't expect " + repr(a) + ", but got it.");
+    SimpleTest.ok(a != b, name, repr(a) + " should not equal " + repr(b));
 };
 
 //  --------------- Test.Builder/Test.More todo() -----------------
@@ -72,17 +72,18 @@ SimpleTest._logResult = function(test, passString, failString) {
   if (parentRunner.currentTestURL)
     msg += parentRunner.currentTestURL;
   msg += " | " + test.name;
-  var diag = test.diag ? " - " + test.diag : "";
+  if (test.diag)
+    msg += " - " + test.diag;
   if (test.result) {
       if (test.todo)
-          parentRunner.logger.error(msg + diag);
+          parentRunner.logger.error(msg);
       else
           parentRunner.logger.log(msg);
   } else {
       if (test.todo)
           parentRunner.logger.log(msg);
       else
-          parentRunner.logger.error(msg + diag);
+          parentRunner.logger.error(msg);
   }
 };
 
@@ -92,12 +93,12 @@ SimpleTest._logResult = function(test, passString, failString) {
 
 SimpleTest.todo_is = function (a, b, name) {
     var repr = MochiKit.Base.repr;
-    SimpleTest.todo(a == b, name, "got " + repr(a) + ", expected " + repr(b));
+    SimpleTest.todo(a == b, name, repr(a) + " should equal " + repr(b));
 };
 
 SimpleTest.todo_isnot = function (a, b, name) {
     var repr = MochiKit.Base.repr;
-    SimpleTest.todo(a != b, name, "Didn't expect " + repr(a) + ", but got it.");
+    SimpleTest.todo(a != b, name, repr(a) + " should not equal " + repr(b));
 };
 
 
@@ -126,7 +127,7 @@ SimpleTest.report = function () {
             } else if (test.result && !test.todo) {
                 passed++;
                 cls = "test_ok";
-                msg = "passed | " + test.name;
+                msg = "passed | " + test.name + diag;
             } else {
                 failed++;
                 cls = "test_not_ok";
@@ -204,6 +205,8 @@ SimpleTest.showReport = function() {
     addNode(SPAN(null, " "));
     addNode(toggleTodo);
     addNode(SimpleTest.report());
+    // Add a separator from the test content.
+    addNode(HR());
 };
 
 /**
@@ -215,6 +218,95 @@ SimpleTest.showReport = function() {
 **/
 SimpleTest.waitForExplicitFinish = function () {
     SimpleTest._stopOnLoad = false;
+};
+
+SimpleTest.waitForFocus_started = false;
+SimpleTest.waitForFocus_loaded = false;
+SimpleTest.waitForFocus_focused = false;
+
+/**
+ * If the page is not yet loaded, waits for the load event. If the page is
+ * not yet focused, focuses and waits for the window to be focused. Calls
+ * the callback when completed.
+ *
+ * targetWindow should be specified if it is different than 'window'.
+ */
+SimpleTest.waitForFocus = function (callback, targetWindow) {
+    if (!targetWindow)
+      targetWindow = window;
+
+    SimpleTest.waitForFocus_started = false;
+
+    netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
+    var fm = Components.classes["@mozilla.org/focus-manager;1"].
+                        getService(Components.interfaces.nsIFocusManager);
+
+    var usedTargetWindow = {};
+    fm.getFocusedElementForWindow(targetWindow, true, usedTargetWindow);
+    targetWindow = usedTargetWindow.value;
+
+    function debugFocusLog(prefix) {
+        netscape.security.PrivilegeManager.enablePrivilege("UniversalXPConnect");
+
+        var baseWindow = targetWindow.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+                                     .getInterface(Components.interfaces.nsIWebNavigation)
+                                     .QueryInterface(Components.interfaces.nsIBaseWindow);
+        ok(true, prefix + " -- loaded: " + targetWindow.document.readyState +
+           " active window: " +
+               (fm.activeWindow ? "(" + fm.activeWindow + ") " + fm.activeWindow.location : "<no window active>") +
+           " focused window: " +
+               (fm.focusedWindow ? "(" + fm.focusedWindow + ") " + fm.focusedWindow.location : "<no window focused>") +
+           " desired window: (" + targetWindow + ") " + targetWindow.location +
+           " docshell visible: " + baseWindow.visibility);
+    }
+
+    debugFocusLog("before wait for focus");
+
+    function maybeRunTests() {
+        debugFocusLog("maybe run tests <load:" +
+                      SimpleTest.waitForFocus_loaded + ", focus:" + SimpleTest.waitForFocus_focused + ">");
+        if (SimpleTest.waitForFocus_loaded &&
+            SimpleTest.waitForFocus_focused &&
+            !SimpleTest.waitForFocus_started) {
+            SimpleTest.waitForFocus_started = true;
+            setTimeout(callback, 0, targetWindow);
+        }
+    }
+
+    function waitForEvent(event) {
+        SimpleTest["waitForFocus_" + event.type + "ed"] = true;
+        targetWindow.removeEventListener(event.type, waitForEvent, false);
+        if (event.type == "MozAfterPaint")
+          ok(true, "MozAfterPaint event received");
+        maybeRunTests();
+    }
+
+    // wait for the page to load if it hasn't already
+    SimpleTest.waitForFocus_loaded = (targetWindow.document.readyState == "complete");
+    if (!SimpleTest.waitForFocus_loaded) {
+        ok(true, "must wait for load");
+        targetWindow.addEventListener("load", waitForEvent, false);
+    }
+
+    // check if the window is focused, and focus it if it is not
+    var focusedWindow = { };
+    if (fm.activeWindow)
+      fm.getFocusedElementForWindow(fm.activeWindow, true, focusedWindow);
+
+    // if this is a child frame, ensure that the frame is focused
+    SimpleTest.waitForFocus_focused = (focusedWindow.value == targetWindow);
+    if (SimpleTest.waitForFocus_focused) {
+        ok(true, "already focused");
+        // if the frame is already focused and loaded, call the callback directly
+        maybeRunTests();
+    }
+    else {
+        ok(true, "must wait for focus");
+        targetWindow.addEventListener("focus", waitForEvent, false);
+        targetWindow.focus();
+    }
+
+    targetWindow.addEventListener("MozAfterPaint", waitForEvent, false);
 };
 
 /**
