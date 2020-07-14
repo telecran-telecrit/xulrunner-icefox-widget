@@ -1,0 +1,14 @@
+/.cvsignore///////
+/Makefile.in///////
+/nsAccessNodeWrap.cpp///////
+/nsAccessNodeWrap.h///////
+/nsAccessibleWrap.cpp///////
+/nsAccessibleWrap.h///////
+/nsDocAccessibleWrap.cpp///////
+/nsDocAccessibleWrap.h///////
+/nsHTMLFormControlAccessibleWrap.h///////
+/nsRootAccessibleWrap.cpp///////
+/nsRootAccessibleWrap.h///////
+/nsXULMenuAccessibleWrap.h///////
+/nsXULTreeAccessibleWrap.h///////
+/nsTextAccessibleWrap.h///////

@@ -1,0 +1,10 @@
+/Makefile.in/1.13.2.1/Thu Oct 19 00:39:28 2006//TNSPR_4_6_5_RTM
+/macgc.c/3.5/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/os2gc.c/3.6/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/prgcapi.c/3.6/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/prmsgc.c/3.9/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/unixgc.c/3.6/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/win16gc.c/3.5/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/win32gc.c/3.5/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/.cvsignore/1.2/Sat May 12 06:22:04 2001//TNSPR_4_6_5_RTM
+D

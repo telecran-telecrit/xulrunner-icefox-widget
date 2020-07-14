@@ -1,0 +1,10 @@
+/.cvsignore/1.2/Sat May 12 01:14:38 2001//TNSPR_4_6_5_RTM
+/MANIFEST/1.1/Thu Jun  4 22:50:18 1998//TNSPR_4_6_5_RTM
+/Makefile.in/1.10/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/README/3.1/Sat Mar 28 03:36:48 1998//TNSPR_4_6_5_RTM
+/plbase64.h/3.5/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/plerror.h/3.5/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/plgetopt.h/3.5/Sun Apr 25 15:00:36 2004//TNSPR_4_6_5_RTM
+/plresolv.h/3.6/Tue Nov 23 00:54:04 2004//TNSPR_4_6_5_RTM
+/plstr.h/3.8/Thu Mar 17 02:24:02 2005//TNSPR_4_6_5_RTM
+D

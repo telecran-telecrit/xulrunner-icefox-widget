@@ -1,0 +1,19 @@
+/Makefile.in/1.13/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prdir.c/3.7/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prfdcach.c/3.12.2.1/Fri Sep  8 00:00:00 2006//TNSPR_4_6_5_RTM
+/prio.c/3.18/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/priometh.c/3.19/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prlayer.c/3.19/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prlog.c/3.34.2.2/Fri Jan  5 22:40:54 2007//TNSPR_4_6_5_RTM
+/prmapopt.c/3.18/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prmmap.c/3.7/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prpolevt.c/3.15/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prprf.c/3.18/Fri Jul  1 21:01:40 2005//TNSPR_4_6_5_RTM
+/prscanf.c/3.11/Fri Aug  5 22:44:06 2005//TNSPR_4_6_5_RTM
+/prsocket.c/3.57/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/prstdio.c/3.6/Sun Apr 25 15:00:58 2004//TNSPR_4_6_5_RTM
+/.cvsignore/1.2/Sat May 12 04:14:50 2001//TNSPR_4_6_5_RTM
+/prfile.c/3.42.2.2/Sun Jun 11 03:01:12 2006//TNSPR_4_6_5_RTM
+/pripv6.c/3.12/Tue Jan 25 19:44:08 2005//TNSPR_4_6_5_RTM
+/prmwait.c/3.18/Tue Mar  8 22:40:16 2005//TNSPR_4_6_5_RTM
+D

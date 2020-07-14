@@ -1,0 +1,47 @@
+D/md////
+D/obsolete////
+D/private////
+/MANIFEST/1.10/Wed Feb 23 23:37:52 2000//TNSPR_4_6_5_RTM
+/prlong.h/3.13/Wed Jan 12 02:47:56 2005//TNSPR_4_6_5_RTM
+/prnetdb.h/3.10/Mon Aug 30 23:31:36 2004//TNSPR_4_6_5_RTM
+/prolock.h/3.9/Tue Nov 23 00:54:04 2004//TNSPR_4_6_5_RTM
+/prsystem.h/3.10.2.1/Fri Jul 14 22:33:46 2006//TNSPR_4_6_5_RTM
+/.cvsignore/1.2/Sat May 12 01:41:58 2001//TNSPR_4_6_5_RTM
+/Makefile.in/1.9/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/gencfg.c/3.9/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/nspr.h/3.12/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/pratom.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prbit.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prclist.h/3.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prcmon.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prcountr.h/3.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prcvar.h/3.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prdtoa.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prenv.h/3.11/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prerr.h/3.9/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prerror.h/3.12/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prinet.h/3.12.2.1/Tue Feb  7 19:12:34 2006//TNSPR_4_6_5_RTM
+/prinit.h/3.29.2.10/Tue Jan 16 22:40:22 2007//TNSPR_4_6_5_RTM
+/prinrval.h/3.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prio.h/3.40/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/pripcsem.h/3.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prlink.h/3.12.2.1/Wed Apr  5 21:51:22 2006//TNSPR_4_6_5_RTM
+/prlock.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prlog.h/3.14/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prmem.h/3.12/Fri Feb  4 00:20:34 2005//TNSPR_4_6_5_RTM
+/prmon.h/3.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prmwait.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prpdce.h/3.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prprf.h/3.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prproces.h/3.9/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prrng.h/1.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prrwlock.h/1.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prshm.h/3.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prshma.h/3.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prthread.h/3.12/Fri Jul  1 20:56:50 2005//TNSPR_4_6_5_RTM
+/prtime.h/3.10/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prtpool.h/1.6/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prtrace.h/3.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prtypes.h/3.30.2.2/Wed Apr  5 21:51:22 2006//TNSPR_4_6_5_RTM
+/prvrsion.h/3.7/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
+/prwin16.h/3.8/Sun Apr 25 15:00:48 2004//TNSPR_4_6_5_RTM
