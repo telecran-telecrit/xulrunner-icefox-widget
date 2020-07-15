@@ -45,6 +45,8 @@ Nobody from regular end-users. They should prefer Chrome (HTML5+PPAPI+V8+WebExte
 WHERE TO BUILD
 
 Use old ubuntu or debian distro.
+gcc/g++ 4.2.3+
+
 
 HOW TO INSTALL DEPS
 
@@ -56,7 +58,7 @@ sudo apt-get install  libasound2 libasound2-dev libcurl3 libcurl4-openssl-dev li
 
 HOW TO BUILD
 
-./configure --enable-application=browser --enable-default-toolkit=cairo-gtk2 --enable-optimize="-O1" --disable-jemalloc  --disable-xpcom-obsolete --disable-libnotify --disable-dbus --disable-necko-wifi --with-curl --disable-javaxpcom  --disable-jsd --disable-jsloader --disable-gamepad  --disable-crashreporter --disable-updater --disable-debug --disable-tests --enable-oficial-branding --with-pthreads --without-system-nspr --enable-old-abi-compat-wrappers
+./configure --enable-application=browser --enable-default-toolkit=cairo-gtk2 --enable-optimize="-O1" --disable-jemalloc  --disable-xpcom-obsolete --disable-libnotify --disable-dbus --disable-necko-wifi --with-curl --disable-javaxpcom  --disable-jsd --disable-jsloader --disable-gamepad  --disable-crashreporter --disable-updater --disable-debug --disable-tests --enable-oficial-branding --with-pthreads --without-system-nspr --enable-old-abi-compat-wrappers # Note: LESS IS MORE!
 
 make
 chmod a+rx ./build/unix/run-mozilla.sh
@@ -70,3 +72,25 @@ sudo make install
 HOW TO CHECK
 
 ls -lsahF /usr/local/bin/*fox
+
+-------------------------------------------------------------
+
+<h2>
+	Prerequisites</h2>
+<ul>
+	<li>
+		Python 2.7.x recommended</li>
+	<li>
+		Exactly Autoconf 2.13</li>
+	<li>
+		yasm 1.2.0 or higher</li>
+	<li>
+		XZ is optional</li>
+	<li>
+		Plenty of free disk space</li>
+	<li>
+		Various distribution specific development packages</li>
+	<li>
+		General system requirements for running the application itself</li>
+</ul>
+
